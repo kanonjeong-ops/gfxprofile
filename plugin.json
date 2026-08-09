@@ -1,0 +1,14 @@
+{
+  "name": "eGPU Game Config Swap",
+  "author": "kanonjeong",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": [
+      "utility",
+      "graphics"
+    ],
+    "description": "Swap per-game graphics settings between an eGPU dock and the internal GPU. Developed and verified on SteamOS; Bazzite is untested.",
+    "image": "https://raw.githubusercontent.com/__STORE_REPO_OWNER__/gfxprofile/refs/heads/main/assets/store-image.png"
+  }
+}

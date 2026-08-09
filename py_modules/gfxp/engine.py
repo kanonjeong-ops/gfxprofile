@@ -1,0 +1,720 @@
+"""엔진 — 정책과 가드가 전부 여기 있다.
+
+설계 원칙:
+  P1  설정 파일을 통째로 교체한다. 내용을 파싱하지 않는다 (형식이 게임마다 다르므로).
+  P4  .sav는 절대 열지 않는다 (클라우드 동기화 + 진행 데이터 포함).
+  가드는 전부 "거부·무동작" 방향이다 (fail-closed).
+"""
+
+import os
+import re
+import time
+
+from . import codes, detect, discover, store
+
+
+class Refused(Exception):
+    """가드에 걸려 거부됨. 사용자에게 그대로 보여줄 수 있는 메시지를 담는다.
+
+    v2 추가: `code`(codes.py의 상수)와 `params`. 메시지는 M1 그대로 한국어를 들고 있고,
+    프론트는 **메시지를 파싱하지 않고** code로 번역문을 고른다.
+    """
+
+    def __init__(self, message, code=None, **params):
+        super().__init__(message)
+        self.code = code
+        self.params = params
+
+
+# ---------------------------------------------------------------- Steam 조회
+
+def steam_root():
+    # store.home_path를 쓴다 — 이 백엔드는 `deck` 사용자로 돌지만(Decky는 root가 opt-in이고
+    # 우리 plugin.json의 flags는 비어 있다), 사용자명이 `deck`이 아닌 배포판(Bazzite 등)이
+    # 있으므로 홈은 언제나 store.user_home()이 정한다.
+    for candidate in ((".steam", "steam"),
+                      (".local", "share", "Steam"),
+                      # flatpak Steam. 이 기기엔 없지만 배포 대상엔 있을 수 있다.
+                      (".var", "app", "com.valvesoftware.Steam", ".steam", "steam"),
+                      (".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam")):
+        path = store.home_path(*candidate)
+        if os.path.isdir(path):
+            return path
+    return store.home_path(".steam", "steam")
+
+
+def steam_libraries():
+    """libraryfolders.vdf에 등재된 라이브러리 경로 전부 (SD카드 등 포함)."""
+    roots = [steam_root()]
+    vdf = os.path.join(steam_root(), "steamapps", "libraryfolders.vdf")
+    try:
+        with open(vdf, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                match = re.search(r'"path"\s+"([^"]+)"', line)
+                if match:
+                    roots.append(match.group(1))
+    except OSError:
+        pass
+    # realpath로 중복을 제거한다 — ~/.steam/steam은 ~/.local/share/Steam의 심볼릭 링크라
+    # 그냥 두면 같은 라이브러리를 두 번 훑고 게임이 두 번씩 나온다.
+    seen = []
+    real_seen = set()
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        real = os.path.realpath(root)
+        if real in real_seen:
+            continue
+        real_seen.add(real)
+        seen.append(root)
+    return seen
+
+
+def compat_prefix(appid):
+    """해당 appid의 Proton prefix 경로. 없으면 None.
+
+    ★ **매니페스트 우선 2패스**다 (v2). 첫 매치를 그대로 돌려주면 안 된다 —
+      게임을 SD로 옮기면 내장 라이브러리에 **빈 pfx 껍데기**가 남고, 라이브러리 순서상
+      껍데기가 항상 먼저 잡힌다. 그러면 SD에 있는 진짜 설정 파일이 prefix 밖으로 판정돼
+      `check_path`(G11)가 정상 파일을 거부한다(TEKKEN 7 389730 실재 사례).
+      게임이 **지금 어디에 설치돼 있는가**는 `appmanifest_<appid>.acf`가 정한다.
+      2차 패스는 M1과 같은 동작이라, 매니페스트를 못 찾는 경우의 결과는 바뀌지 않는다.
+    """
+    roots = steam_libraries()
+    for want_manifest in (True, False):
+        for root in roots:
+            if want_manifest and not os.path.exists(
+                    os.path.join(root, "steamapps", "appmanifest_%s.acf" % appid)):
+                continue
+            path = os.path.join(root, "steamapps", "compatdata", str(appid), "pfx")
+            if os.path.isdir(path):
+                return path
+    return None
+
+
+def remotecache_entries(appid):
+    """Steam 클라우드가 추적하는 상대 경로 목록. 파일이 없으면 None (미동기화와 구분)."""
+    base = os.path.join(steam_root(), "userdata")
+    if not os.path.isdir(base):
+        return None
+    for user in os.listdir(base):
+        path = os.path.join(base, user, str(appid), "remotecache.vdf")
+        if os.path.exists(path):
+            entries = []
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    stripped = line.strip()
+                    match = re.match(r'^"([^"]+)"$', stripped)
+                    if match and "." in match.group(1):
+                        entries.append(match.group(1))
+            return entries
+    return None
+
+
+# ---------------------------------------------------------------- 가드
+
+def running_game(appid):
+    """G5 — 해당 게임이 실행 중인가.
+
+    게임은 종료 시점에 설정 파일을 다시 쓴다. 실행 중에 교체하면 종료 시 덮어써져
+    '아무 일도 안 일어난 것처럼' 보인다. 가장 나쁜 실패 모드라 막는다.
+    """
+    needle = ("SteamAppId=%s" % appid).encode()
+    try:
+        pids = [name for name in os.listdir("/proc") if name.isdigit()]
+    except OSError:
+        return False
+    for pid in pids:
+        try:
+            with open("/proc/%s/environ" % pid, "rb") as fh:
+                blob = fh.read()
+        except (OSError, PermissionError):
+            continue
+        for item in blob.split(b"\0"):
+            if item == needle:
+                return True
+    return False
+
+
+def check_path(appid, path):
+    """G11 — 심볼릭 링크 금지, prefix(없으면 홈) 밖 금지."""
+    if os.path.islink(path):
+        raise Refused("거부: 대상 경로가 심볼릭 링크입니다 — %s" % path, code=codes.PATH_IS_SYMLINK)
+    real = os.path.realpath(path)
+    prefix = compat_prefix(appid)
+    if prefix:
+        if not real.startswith(os.path.realpath(prefix) + os.sep):
+            raise Refused(
+                "거부: 경로가 이 게임의 Proton prefix 밖입니다.\n"
+                "  경로: %s\n  prefix: %s" % (real, prefix),
+                code=codes.PATH_OUTSIDE_PREFIX
+            )
+    else:
+        home = os.path.realpath(store.user_home())
+        if not real.startswith(home + os.sep):
+            raise Refused("거부: appid %s의 prefix를 찾을 수 없고 경로가 홈 밖입니다 — %s" % (appid, real), code=codes.PATH_OUTSIDE_HOME)
+    return real
+
+
+def check_sanity(data, ref_size=None, ref_lines=None, what="파일"):
+    """G4 — 통째 교체 전에 형식 무관하게 온전성만 본다 (파싱 아님).
+
+    크기 25~400%, 텍스트면 줄 수 ±20%. 기준이 없으면 비어있지 않은지만 본다.
+
+    **줄 수 검사는 "거의 같아야 마땅한" 두 대상에만 건다.**
+    프로필 간 차이는 크더라도 비정상이 아니다 — 서로 다른 것이 이 툴의 존재 이유다.
+    (QA 반려 ①: 이 구분이 없어 정상적인 프로필 전환이 영구히 거부됐다.)
+    """
+    if not data:
+        raise Refused("거부: %s가 비어 있습니다 (0바이트)." % what, code=codes.FILE_EMPTY)
+    if ref_size:
+        ratio = len(data) / float(ref_size)
+        if ratio < 0.25 or ratio > 4.0:
+            raise Refused(
+                "거부: %s 크기가 기준의 %.0f%%입니다 (허용 25~400%%). "
+                "다른 파일을 가리키고 있을 수 있습니다." % (what, ratio * 100),
+                code=codes.SIZE_OUT_OF_RANGE
+            )
+    if ref_lines:
+        lines = store.count_lines(data)
+        if lines is not None:
+            ratio = lines / float(ref_lines)
+            if ratio < 0.8 or ratio > 1.2:
+                raise Refused(
+                    "거부: %s 줄 수가 기준의 %.0f%%입니다 (허용 80~120%%)." % (what, ratio * 100),
+                    code=codes.LINE_COUNT_OUT_OF_RANGE
+                )
+
+
+_SAV_DENY_SUFFIX = (".sav",)
+_SAV_DENY_SEGMENT = ("savegames",)      # 정확 일치. "Saved Games"(공백)는 여기 안 걸린다
+
+
+def assert_config_candidate(appid, path):
+    """G14 — 통째 교체 대상이 될 수 없는 파일을 거부한다 (fail-closed). **v2 신설.**
+
+    P4('.sav는 절대 열지 않는다')의 **유일한 강제 지점**이다. M1에서 P4는 선언뿐이고
+    강제 코드가 0줄이었다 — discover가 후보로 안 내놓았을 뿐이고, v2는 파일 선택기를 붙여
+    임의 경로가 도달한다.
+
+    거부 사유는 넷이고 **전부 '그 파일이 무엇인가'가 아니라 '무엇이 아닌가'로만 판정한다.**
+    '설정 파일처럼 보이는가'는 거부가 아니라 경고 사유다(config_candidate_warnings).
+    그 구분이 없으면 이 기기 밖의 정상 게임이 막힌다.
+
+    가드는 **이 문 하나에서만** 건다. 여러 곳에 흩으면 한 곳이 빠져 조용히 뚫린다.
+    """
+    base = os.path.basename(path)
+    low = base.lower()
+    if low.endswith(_SAV_DENY_SUFFIX):                       # ① 세이브 파일 — P4
+        raise Refused("거부: 세이브 파일(.sav)은 다루지 않습니다 — %s" % path,
+                      code=codes.SAV_REFUSED, path=path)
+    segs = [s.lower() for s in os.path.normpath(path).split(os.sep)[:-1]]   # 디렉터리만
+    if any(s in _SAV_DENY_SEGMENT for s in segs):            # ② 세이브 폴더 — P4
+        raise Refused("거부: 세이브 폴더 안의 파일은 다루지 않습니다 — %s" % path,
+                      code=codes.SAV_REFUSED, path=path)
+    # ③ 낡은 사본 — discover가 순회에서 프루닝하던 규칙을 여기서 상속한다.
+    #   이걸 등록하면 툴은 죽은 파일을 관리하고 게임이 실제로 읽는 파일은 영영 안 바뀐다.
+    # ★ `".bak" in s`는 너무 넓다 — `com.bakery.game` 같은 정상 폴더까지 막는다(리뷰 3-1).
+    #   막으려는 것은 **백업 폴더**이므로 `.bak`으로 끝나거나 경로 성분이 backup으로 끝나는 것만 본다.
+    if any(s.endswith(".bak") or ".bak." in s or s.endswith("backup") for s in segs):
+        raise Refused("거부: 백업·구버전 폴더 안의 파일입니다. 이것을 등록하면 게임이 실제로 읽는 "
+                      "파일은 영영 바뀌지 않습니다 — %s" % path,
+                      code=codes.STALE_COPY_REFUSED, path=path)
+    if low in discover._EXCLUDE_NAMES:                       # ④ 엔진 보일러플레이트
+        raise Refused("거부: 게임 엔진 내부 설정 파일입니다 — %s" % base,
+                      code=codes.ENGINE_BOILERPLATE_REFUSED, path=path)
+
+
+def config_candidate_warnings(appid, path):
+    """등록은 허용하되 화면에 되묻게 만드는 신호. **거부가 아니다.** v2 신설.
+
+    엔진 반환값에 싣지 않고 접착층이 따로 조회한다 — 경고는 정책이 아니라 표시이고,
+    반환 구조를 바꾸면 M1과의 diff fence가 헐거워진다.
+    """
+    out = []
+    if discover._classify(path)[0] is None:
+        out.append(codes.WARN_NOT_DISCOVER_CANDIDATE)
+    prefix = compat_prefix(appid)
+    if prefix:
+        real_prefix = os.path.realpath(prefix)
+        rel = os.path.realpath(path)[len(real_prefix) + 1:]
+        if not any(rel.startswith(r.replace("/", os.sep) + os.sep)
+                   for r in discover._SCAN_ROOTS):
+            out.append(codes.WARN_OUTSIDE_SCAN_ROOTS)
+    return out
+
+
+def assert_backup_in_root(appid, backup_path):
+    """G15 — 복원은 **그 게임의 백업 폴더 안**만 읽는다. v2 신설.
+
+    M1의 restore_backup은 backup_path에 check_path를 걸지 않아 파일시스템 어디든 읽어서
+    게임 설정 파일에 쓸 수 있었다. RPC가 경로 대신 backup_id를 받게 바뀌었으므로 접착층에서는
+    도달할 수 없지만, **엔진 자신이 그것을 보장해야** 다음 호출자가 생겨도 안전하다.
+    """
+    root = os.path.realpath(store.backups_dir(appid))
+    real = os.path.realpath(backup_path)
+    if os.path.islink(backup_path) or not real.startswith(root + os.sep):
+        raise Refused("거부: 이 게임의 백업 폴더 밖 경로입니다 — %s" % backup_path,
+                      code=codes.BACKUP_OUT_OF_ROOT, path=backup_path)
+
+
+def detect_cloud_synced(appid, config_path):
+    """G6 판정 — 설정 파일이 Steam 클라우드 동기화 대상인가.
+
+    ① remotecache 항목과 **경로 세그먼트 전체 접미 일치**
+       (basename 매칭은 오답을 낸다: ETS2는 클라우드가 추적하는 config.cfg와
+        실제 그래픽 설정 config.cfg가 경로가 다른 별개 파일이다)
+    ② ctime != mtime 이면 클라우드가 쓴 파일
+    """
+    reasons = []
+    entries = remotecache_entries(appid)
+    if entries:
+        parts = [p for p in os.path.normpath(config_path).split(os.sep) if p]
+        for entry in entries:
+            entry_parts = [p for p in entry.replace("\\", "/").split("/") if p]
+            if entry_parts and parts[-len(entry_parts):] == entry_parts:
+                reasons.append("remotecache 항목과 경로 일치: %s" % entry)
+                break
+    try:
+        info = os.stat(config_path)
+        if abs(info.st_ctime - info.st_mtime) > 0.000001:
+            reasons.append("ctime != mtime (클라우드가 마지막으로 쓴 파일로 보임)")
+    except OSError:
+        pass
+    return (len(reasons) > 0), reasons
+
+
+# ---------------------------------------------------------------- 조회
+
+def game_or_fail(reg, appid):
+    entry = store.game(reg, appid)
+    if not entry:
+        raise Refused("거부: appid %s가 등록되어 있지 않습니다. 먼저 add 하십시오." % appid, code=codes.GAME_NOT_REGISTERED)
+    return entry
+
+
+def disk_state(reg, appid):
+    """디스크의 현재 설정 파일이 어느 프로필과 일치하는지."""
+    entry = game_or_fail(reg, appid)
+    path = entry["config_path"]
+    result = {"exists": os.path.exists(path), "sha1": None, "matches": None}
+    if not result["exists"]:
+        return result
+    result["sha1"] = store.sha1_file(path)
+    for profile in store.list_profiles(appid):
+        meta = store.load_meta(appid, profile)
+        if meta and meta.get("sha1") == result["sha1"]:
+            result["matches"] = profile
+            break
+    return result
+
+
+# ---------------------------------------------------------------- sticky 학습
+
+_KEY_RE = re.compile(r"^\s*([^=<>\s][^=]{0,120}?)\s*=")
+
+
+def _line_key(line):
+    """줄에서 '키'를 뽑는다. 파싱이 아니라 보고용 라벨링이며 실패해도 무해하다."""
+    match = _KEY_RE.match(line)
+    return match.group(1) if match else line.strip()[:80]
+
+
+def learn_sticky(reg, appid):
+    """전환되지 않는 항목(.sav 등이 지배하는 값)을 스스로 알아낸다.
+
+    ⚠️ **2026-08-03부터 어디서도 자동으로 부르지 않는다.** 함수는 남겨 두지만 호출부는
+    전부 뗐다(UI 새로고침·`apply_profile`·CLI `list`/`status` 4곳).
+
+    이유: 이 함수가 보는 것은 "적용 시점 사본과 지금 디스크가 다르다"뿐이고, **그 차이를
+    만든 것이 게임인지 사용자인지 구분할 정보가 툴에 없다.** 프로필 두 벌을 만드는 세팅
+    단계에서는 같은 항목을 여러 번 만지는 것이 정상이라, 사용자의 조작이 그대로 "게임이
+    되돌린 값"으로 학습됐다. 실사용에서 스텔라 블레이드에 거짓 19줄이 등재됐고, 그중
+    17줄이 하필 두 프로필을 가르는 항목이었다(M1-FIELD-ISSUES-2026-08-03.md).
+    **코딩 실수가 아니라 설계 결함이다** — 툴은 "세팅이 끝난 시점"을 모른다.
+
+    되살리려면 세팅/운용 구분이 설계에 들어가야 한다(v2 주제). 아래 로직과 기준선 방어는
+    그때 재사용할 자산이라 지우지 않았다. 되돌림이 실재한다는 것 자체는 T1에서 실측됐다.
+
+    적용 시점 사본(.applied)과 게임이 다시 쓴 디스크 파일을 줄 단위로 비교한다.
+    같은 키가 **같은 값으로 2회 이상** 되돌아오면 확정으로 승격한다.
+    보고 전용이라 실패해도 교체 동작에는 영향이 없다.
+    """
+    entry = store.game(reg, appid)
+    if not entry:
+        return []
+    profile = entry.get("last_applied")
+    if not profile:
+        return []
+    applied_path = store.applied_copy_path(appid, profile)
+    config_path = entry["config_path"]
+    if not (os.path.exists(applied_path) and os.path.exists(config_path)):
+        return []
+    disk_sha1 = store.sha1_file(config_path)
+    if disk_sha1 == entry.get("applied_sha1"):
+        return []                       # 게임이 아직 다시 쓰지 않았다
+    if disk_sha1 == entry.get("last_learn_sha1"):
+        return []                       # 같은 상태를 두 번 세지 않는다
+
+    # **기준선이 기록과 어긋나면 배우지 않는다.**
+    # `.applied`(기준선 파일)와 `applied_sha1`(기록)은 항상 같이 갱신되므로, 어긋났다면
+    # 사본이 낡았다는 뜻이다 — 그걸 기준으로 비교하면 프로필을 재저장하며 정상적으로 바뀐
+    # 줄까지 "게임이 되돌리는 항목"으로 오인하고, 두 번 반복되면 영구 승격된다(QA 5라운드 R2).
+    # 사본을 갱신도 삭제도 못 하는 상황(프로필 폴더 쓰기 불가)에서도 이 검사가 마지막으로 막는다.
+    # **모르는 채로 조용히 있는 편이, 틀린 것을 아는 척하는 것보다 낫다.**
+    if entry.get("applied_sha1") and store.sha1_file(applied_path) != entry["applied_sha1"]:
+        return []
+
+    applied = store.read_bytes(applied_path)
+    disk = store.read_bytes(config_path)
+    if store.looks_binary(applied) or store.looks_binary(disk):
+        return []                       # 바이너리는 줄 비교 불가
+
+    applied_map = {}
+    for line in applied.decode("utf-8", "replace").splitlines():
+        if line.strip():
+            applied_map[_line_key(line)] = line.strip()
+
+    candidates = entry.setdefault("sticky_candidates", {})
+    promoted = []
+    for line in disk.decode("utf-8", "replace").splitlines():
+        if not line.strip():
+            continue
+        key = _line_key(line)
+        current = line.strip()
+        before = applied_map.get(key)
+        if before is None or before == current:
+            continue
+        record = candidates.get(key)
+        if record and record.get("value") == current:
+            record["count"] = record.get("count", 1) + 1
+        else:
+            candidates[key] = {"value": current, "count": 1, "applied_was": before}
+            continue
+        if record["count"] >= 2:
+            sticky = entry.setdefault("sticky_lines", [])
+            if not any(item.get("key") == key for item in sticky):
+                sticky.append({
+                    "key": key,
+                    "value": current,
+                    "learned_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                })
+                promoted.append(key)
+    entry["last_learn_sha1"] = disk_sha1
+    return promoted
+
+
+# ---------------------------------------------------------------- 동작
+
+def add_game(reg, appid, config_path, name=None):
+    appid = str(appid)
+    path = os.path.abspath(os.path.expanduser(config_path))
+    real = check_path(appid, path)                       # G11
+    assert_config_candidate(appid, real)                  # G14 (v2 신설)
+    if not os.path.exists(real):
+        raise Refused("거부: 파일이 존재하지 않습니다 — %s" % real, code=codes.FILE_NOT_FOUND)
+    if not os.path.isfile(real):
+        raise Refused("거부: 일반 파일이 아닙니다 — %s" % real, code=codes.NOT_REGULAR_FILE)
+    check_sanity(store.read_bytes(real), what="설정 파일")   # G4
+    synced, reasons = detect_cloud_synced(appid, real)     # G6
+    entry = reg["games"].setdefault(appid, {})
+    entry.update({
+        "name": name or entry.get("name") or ("appid %s" % appid),
+        "config_path": real,
+        "cloud_synced": synced,
+        "cloud_reasons": reasons,
+    })
+    entry.setdefault("last_applied", None)
+    entry.setdefault("applied_sha1", None)
+    entry.setdefault("auto", False if synced else True)
+    entry.setdefault("sticky_lines", [])
+    entry.setdefault("sticky_candidates", {})
+    if synced:
+        entry["auto"] = False                              # G6 — 자동은 고정 해제
+    return entry
+
+
+def save_profile(reg, appid, profile):
+    """현재 디스크 상태를 프로필로 캡처한다."""
+    appid = str(appid)
+    entry = game_or_fail(reg, appid)
+    path = entry["config_path"]
+    check_path(appid, path)                                # G11
+    if not os.path.exists(path):
+        raise Refused("거부: 설정 파일이 없습니다 — %s" % path, code=codes.CONFIG_MISSING)
+    data = store.read_bytes(path)
+    old = store.load_meta(appid, profile)
+    # 같은 슬롯의 이전 캡처와 크기만 대조한다. 줄 수까지 묶으면 게임 업데이트로
+    # 옵션 항목이 늘어난 정상 캡처가 거부된다.
+    check_sanity(data, old.get("size") if old else None, None,
+                 what="현재 설정 파일")                                      # G4
+
+    warning = None
+    if running_game(appid):
+        warning = ("주의: 게임이 실행 중입니다. 지금 캡처하면 게임이 종료하며 다시 쓸 값이 아니라 "
+                   "현재 디스크 상태가 저장됩니다.")
+    if old:                                                # 덮어쓰기 전 프로필도 대피
+        old_file = store.profile_file_path(appid, profile)
+        if old_file and os.path.exists(old_file):
+            store.make_backup(appid, store.read_bytes(old_file),
+                              "profile_%s" % profile, old["filename"])
+    meta = store.write_profile(appid, profile, os.path.basename(path), data, src=path)
+    return {"meta": meta, "warning": warning}
+
+
+def apply_profile(reg, appid, profile):
+    """프로필을 제자리에 적용한다. 적용 전에 현재 상태를 이전 프로필로 체크인한다."""
+    appid = str(appid)
+    entry = game_or_fail(reg, appid)
+    path = entry["config_path"]
+    check_path(appid, path)                                # G11
+
+    if running_game(appid):                                # G5
+        raise Refused(
+            "거부: 게임이 실행 중입니다. 게임을 완전히 종료한 뒤 적용하십시오.\n"
+            "  (실행 중에 교체하면 게임이 종료하면서 덮어써 아무 효과가 없습니다.)",
+            code=codes.GAME_RUNNING
+        )
+
+    target_meta = store.load_meta(appid, profile)
+    target_file = store.profile_file_path(appid, profile)
+    if not (target_meta and target_file and os.path.exists(target_file)):
+        raise Refused("거부: 프로필 '%s'이 없습니다. 먼저 save 하십시오." % profile, code=codes.PROFILE_MISSING)
+    target_data = store.read_bytes(target_file)
+    if store.sha1_bytes(target_data) != target_meta.get("sha1"):
+        raise Refused("거부: 프로필 '%s'의 내용이 메타와 어긋납니다 (저장소 손상)." % profile, code=codes.PROFILE_CORRUPT)
+
+    notes = []
+    # 여기 있던 learn_sticky() 호출을 뺐다(2026-08-03). **오염의 가장 굵은 경로였다** —
+    # 실사용 흐름이 "적용 → 플레이 → 인게임 조정 → 다시 적용"이라, 이 자리의 학습은
+    # 사용자가 방금 손으로 바꾼 값을 매번 "게임이 되돌린 값"으로 집어삼켰다. 일괄 적용도
+    # 이 경로를 탄다. 원래 주석("체크인이 덮기 전에 학습부터")이 강제하던 순서 제약도
+    # 학습을 안 하는 이상 사라진다. 사정은 M1-FIELD-ISSUES-2026-08-03.md.
+
+    # ---- 체크인: 현재 디스크 상태를 직전 프로필로 되쓴다 (G3)
+    previous = entry.get("last_applied")
+    state = disk_state(reg, appid)
+    if state["exists"]:
+        if not previous:
+            notes.append("체크인 건너뜀: 이전에 적용한 프로필 기록이 없습니다 (G3).")
+        elif state["matches"] == previous:
+            notes.append("체크인 불필요: 디스크가 '%s'와 동일합니다." % previous)
+        elif state["matches"] and state["matches"] != previous:
+            notes.append(
+                "체크인 건너뜀: 디스크가 다른 프로필 '%s'와 정확히 일치합니다 (G3 — 모드 혼선 방지)."
+                % state["matches"]
+            )
+        else:
+            disk_data = store.read_bytes(path)
+            prev_meta = store.load_meta(appid, previous)
+            check_sanity(disk_data, prev_meta.get("size") if prev_meta else None,
+                         prev_meta.get("lines") if prev_meta else None,
+                         what="체크인할 현재 파일")               # G4
+            if prev_meta:
+                prev_file = store.profile_file_path(appid, previous)
+                if prev_file and os.path.exists(prev_file):
+                    store.make_backup(appid, store.read_bytes(prev_file),
+                                      "profile_%s" % previous, prev_meta["filename"])
+            store.write_profile(appid, previous, os.path.basename(path), disk_data, src=path)
+            notes.append("체크인: 현재 설정을 프로필 '%s'에 반영했습니다." % previous)
+
+    # ---- 적용
+    #
+    # 적용할 프로필의 온전성은 **자기 자신의 meta**로만 판정한다 (sha1은 위에서 이미 대조).
+    # 현재 디스크(=직전 프로필)와 크기·줄 수를 비교하면, 두 프로필이 정상적인 이유로
+    # 크게 다를 때 전환 자체가 영구히 거부된다 — 그건 이 툴이 하려는 일 그 자체다.
+    check_sanity(target_data, what="적용할 프로필")               # G4
+    if state["exists"]:
+        disk_data = store.read_bytes(path)
+        try:
+            store.make_backup(appid, disk_data, "disk", os.path.basename(path))
+        except OSError as exc:                                   # G13
+            raise Refused("거부: 백업에 실패해 적용을 중단했습니다 (%s). 원본은 그대로입니다." % exc, code=codes.BACKUP_FAILED)
+
+    # 권한과 소유자를 그대로 이어받는다. 소유자 보존은 Decky(백엔드가 root) 확장을 막지 않기 위함.
+    mode = None
+    owner = None
+    try:
+        info = os.stat(path)
+        mode = info.st_mode & 0o777
+        owner = (info.st_uid, info.st_gid)
+    except OSError:
+        pass
+    store.atomic_write(path, target_data, mode, owner)            # G9
+    store.atomic_write(store.applied_copy_path(appid, profile), target_data)
+
+    entry["last_applied"] = profile
+    entry["applied_sha1"] = store.sha1_bytes(target_data)
+    entry["last_learn_sha1"] = None
+    return {"notes": notes, "sha1": entry["applied_sha1"]}
+
+
+#: apply_all의 게임별 결과 코드. UI·CLI가 이 문자열로 분기한다.
+BULK_OUTCOMES = ("applied", "already", "no_profile", "refused", "error")
+
+
+def apply_all(reg, profile):
+    """등록된 모든 게임에 같은 프로필을 적용한다. 게임별 결과 목록을 돌려준다.
+
+    **하나가 실패해도 나머지를 계속 진행한다.** 모드를 바꿔 부팅한 상황에서 "5개 중 2개만
+    바뀌고 멈췄다"는 결과는 아무것도 안 한 것보다 나쁘다 — 어디까지 됐는지 모르는 채로
+    게임에 들어가게 된다. 그래서 **중단하지 않고, 대신 무엇이 안 됐는지를 전부 돌려준다.**
+    호출자는 이 목록을 **반드시 사용자에게 보여줘야 한다**(UI는 결과 창, CLI는 표 출력).
+
+    반환: `[{"appid", "name", "outcome", "code", "note"}]`. `outcome`은 `BULK_OUTCOMES` 중 하나다.
+    `code`는 `refused`/`error`일 때만 값이 있다(`Refused.code` 또는 `codes.UNEXPECTED`) —
+    나머지는 `None`이다. 화면이 "실행 중이라 못 했다"와 "프로필이 깨졌다"를 구분하려면 이게 필요하다.
+    등록 순서가 아니라 **appid 정렬 순서**로 돈다 — UI의 게임 목록과 같은 순서라야
+    결과를 대조할 수 있다.
+
+    저장은 하지 않는다. 호출자가 `store.save_registry(reg)`를 부른다.
+    """
+    results = []
+    for appid in sorted(reg["games"]):
+        entry = reg["games"].get(appid) or {}
+        row = {"appid": appid, "name": entry.get("name") or appid,
+               "outcome": "error", "note": "", "code": None}
+        results.append(row)
+
+        # 게임 하나의 처리 전체를 감싼다 — 실패 지점이 어디든 **그 게임만** 실패해야 한다.
+        try:
+            meta = store.load_meta(appid, profile)
+            if not meta:
+                row["outcome"] = "no_profile"
+                row["note"] = "프로필 '%s'을 아직 만들지 않았습니다." % profile
+                continue
+
+            # ---- 이미 그 프로필이면 **쓰지 않는다**. 성능이 아니라 안전 때문이다.
+            #
+            # 백업은 게임당 10개 링이고(store.BACKUP_KEEP) 적용 한 번마다 최소 1개가 쌓이며
+            # 오래된 것이 잘려 나간다. 일괄 적용은 이 툴에서 가장 자주 눌리는 버튼이 되므로,
+            # 아무것도 달라지지 않는 재적용까지 백업을 쌓으면 **정작 되돌려야 할 때 되돌릴
+            # 지점이 링 밖으로 밀려 사라진다.** 게임이 N개면 한 번에 N개가 동시에 밀린다.
+            try:
+                state = disk_state(reg, appid)
+            except Exception:
+                state = {}
+            if state.get("sha1") and state["sha1"] == meta.get("sha1"):
+                row["outcome"] = "already"
+                _record_already(entry, appid, profile, meta)
+                continue
+
+            result = apply_profile(reg, appid, profile)
+            row["outcome"] = "applied"
+            row["note"] = "  ".join(result.get("notes") or [])
+        except Refused as exc:
+            row["outcome"] = "refused"
+            row["note"] = str(exc).splitlines()[0]
+            row["code"] = exc.code
+        except Exception as exc:
+            # **일부러 넓게 잡는다.** 이 함수의 존재 이유는 "하나가 실패해도 나머지는 계속
+            # 간다"이고, 그 약속은 예외 **종류**에 따라 깨지면 안 된다. 좁게 잡았다가
+            # 레지스트리 항목 손상(`KeyError: config_path`) 하나에 전체 루프가 죽었다
+            # (QA 5라운드 R1). 그러면 UI는 결과 창조차 못 띄우고 멈추는데, **Game Mode엔
+            # 터미널이 없어 사용자가 원인을 볼 방법이 아예 없다.**
+            # 사람이 읽을 문장을 앞에 두고 예외는 괄호로 남긴다. 앞부분이 없으면 사용자는
+            # `KeyError: 'config_path'`만 보고 무엇을 해야 할지 알 수 없고, 뒷부분이 없으면
+            # 내가 원인을 못 찾는다 — **Game Mode엔 터미널이 없어 이 줄이 유일한 단서다.**
+            row["outcome"] = "error"
+            row["note"] = ("이 게임의 등록 정보를 처리하지 못했습니다. 다시 등록해 보십시오. "
+                           "(%s: %s)" % (type(exc).__name__, exc))
+            row["code"] = codes.UNEXPECTED
+    return results
+
+
+def _record_already(entry, appid, profile, meta):
+    """디스크가 이미 목표 프로필과 같아 **쓰지 않고 넘어갈 때** 기록을 사실에 맞춘다.
+
+    파일은 안 건드리지만 **기록은 진짜 적용과 똑같이** 맞춰야 한다. 셋 다 필요하다.
+
+    1. `last_applied` — 이게 다른 프로필을 가리키고 있으면, 나중에 사용자가 인게임에서
+       조정한 뒤의 체크인이 **그 조정을 엉뚱한 프로필에 써 넣는다**(G3는 "디스크가 다른
+       프로필과 정확히 일치할 때"만 막아 주는데, 조정 후에는 그 조건이 이미 깨져 있다).
+    2. `.applied` 그림자 사본 — `learn_sticky`가 "게임이 제멋대로 되돌리는 줄"을 찾는
+       **기준선**이다. 이것만 낡은 채로 두면(QA 5라운드 R2) 프로필을 재저장하며 정상적으로
+       바뀐 줄까지 sticky 후보로 오인하고, 두 번 반복되면 `sticky_lines`에 **영구 승격**된다.
+       되돌리는 수단이 없어서 사용자는 멀쩡한 설정을 '전환 안 되는 항목'으로 믿게 된다.
+    3. `last_learn_sha1` — 학습 캐시. 기준선을 갈았으면 같이 무효화해야 다시 판정한다.
+    """
+    entry["last_applied"] = profile
+    entry["applied_sha1"] = meta.get("sha1")
+    entry["last_learn_sha1"] = None
+    shadow = store.applied_copy_path(appid, profile)
+    try:
+        source = store.profile_file_path(appid, profile)
+        if source and os.path.exists(source):
+            store.atomic_write(shadow, store.read_bytes(source))
+    except OSError:
+        # 그림자 사본은 학습용 보조 자료일 뿐이라, 못 써도 일괄 작업을 실패시키지 않는다 —
+        # 디스크는 이미 옳은 상태이므로 "오류"로 보고하면 오히려 사용자를 오도한다.
+        #
+        # 다만 **낡은 사본을 그대로 두는 것이 가만히 두는 것보다 나쁘다.** 그게 남아 있으면
+        # `learn_sticky`가 그걸 기준선으로 삼아 R2와 똑같은 오염을 만든다. 그래서 지운다 —
+        # 파일이 없으면 `learn_sticky`는 아무것도 배우지 않고 그냥 돌아가고(있는지부터 본다),
+        # 다음 진짜 적용이 사본을 다시 만들면서 정상으로 돌아온다. **모르는 채로 조용히 있는
+        # 편이, 틀린 것을 아는 척하는 것보다 낫다.**
+        try:
+            if os.path.exists(shadow):
+                os.remove(shadow)
+        except OSError:
+            pass                # 지우는 것마저 막혔다면(디렉터리 권한) 더 할 수 있는 게 없다.
+                                # 사용자 쪽 복구 수단은 `forget-sticky`가 맡는다.
+
+
+def forget_sticky(reg, appid):
+    """학습한 sticky 목록을 지운다 — **잘못 배운 것을 되돌리는 유일한 수단이다.**
+
+    **2026-08-03부터 자동 학습은 멈췄다**(`learn_sticky` 참조). 그래서 이 명령은 이제
+    "새로 쌓이는 것을 지우는" 용도가 아니라 **이미 잘못 배운 기록을 청소하는** 용도다.
+    한 번 지우면 다시 쌓이지 않는다.
+
+    sticky 학습은 자동이었고, 같은 키가 두 번 되돌아오면 `sticky_lines`로 확정 승격됐다.
+    그런데 승격을 되돌리는 길이 없어서, 한 번 잘못 배우면 UI의 "이 항목은 프로필로 전환되지
+    않습니다" 목록에 **영구히** 남는다 — 사용자는 멀쩡히 동작하는 설정을 포기하거나 툴을
+    의심하게 된다(QA 5라운드 지적). 원인 하나는 고쳤지만(`_record_already`의 기준선 갱신),
+    학습이 추측인 이상 **되돌리는 수단 자체가 있어야 한다.**
+
+    (학습이 자동이던 시절의 단서 — v2에서 되살릴 때 다시 유효해진다: 지우면 다음 학습부터
+    다시 셌고, 원인이 남아 있으면 같은 항목이 또 올라오는 것이 정상이었다. 또 `restore_backup`
+    직후에는 `.applied` 사본과 `applied_sha1`이 어긋나 학습이 멈춰 있어, 지워도 다음 진짜
+    `apply` 전까지는 새로 배우지 않았다 — 의도된 안전 동작이지 데이터 문제가 아니다.)
+    """
+    appid = str(appid)
+    entry = game_or_fail(reg, appid)
+    removed = len(entry.get("sticky_lines") or [])
+    candidates = len(entry.get("sticky_candidates") or {})
+    entry["sticky_lines"] = []
+    entry["sticky_candidates"] = {}
+    entry["last_learn_sha1"] = None
+    return {"removed": removed, "candidates": candidates}
+
+
+def restore_backup(reg, appid, backup_path):
+    """백업을 제자리에 되돌린다. 되돌리기 전 현재 상태도 백업한다."""
+    appid = str(appid)
+    entry = game_or_fail(reg, appid)
+    path = entry["config_path"]
+    check_path(appid, path)
+    assert_backup_in_root(appid, backup_path)             # G15 (v2 신설)
+    if running_game(appid):
+        raise Refused("거부: 게임이 실행 중입니다.", code=codes.GAME_RUNNING)
+    if not os.path.exists(backup_path):
+        raise Refused("거부: 백업 파일이 없습니다 — %s" % backup_path, code=codes.BACKUP_FILE_MISSING)
+    data = store.read_bytes(backup_path)
+    check_sanity(data, what="백업 파일")
+    if os.path.exists(path):
+        store.make_backup(appid, store.read_bytes(path), "disk", os.path.basename(path))
+    store.atomic_write(path, data)
+    entry["applied_sha1"] = store.sha1_bytes(data)
+    entry["last_learn_sha1"] = None
+    return {"restored": backup_path}
+
+
+def suggest_gpu_map(reg):
+    """현재 VULKAN_ADAPTER가 gpu_map에 없으면 등록을 제안한다."""
+    adapter, source = detect.read_adapter()
+    if not adapter:
+        return None
+    if adapter in reg.get("gpu_map", {}):
+        return None
+    return {"adapter": adapter, "source": source}

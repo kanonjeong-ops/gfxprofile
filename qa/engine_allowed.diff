@@ -1,0 +1,382 @@
+--- M1/engine.py
++++ v2/engine.py
+@@ -10,18 +10,33 @@
+ import re
+ import time
+ 
+-from . import detect, store
++from . import codes, detect, discover, store
+ 
+ 
+ class Refused(Exception):
+-    """가드에 걸려 거부됨. 사용자에게 그대로 보여줄 수 있는 메시지를 담는다."""
++    """가드에 걸려 거부됨. 사용자에게 그대로 보여줄 수 있는 메시지를 담는다.
++
++    v2 추가: `code`(codes.py의 상수)와 `params`. 메시지는 M1 그대로 한국어를 들고 있고,
++    프론트는 **메시지를 파싱하지 않고** code로 번역문을 고른다.
++    """
++
++    def __init__(self, message, code=None, **params):
++        super().__init__(message)
++        self.code = code
++        self.params = params
+ 
+ 
+ # ---------------------------------------------------------------- Steam 조회
+ 
+ def steam_root():
+-    # store.home_path를 쓴다 — root로 실행돼도(Decky 백엔드) 데스크톱 사용자의 홈을 봐야 한다.
+-    for candidate in ((".steam", "steam"), (".local", "share", "Steam")):
++    # store.home_path를 쓴다 — 이 백엔드는 `deck` 사용자로 돌지만(Decky는 root가 opt-in이고
++    # 우리 plugin.json의 flags는 비어 있다), 사용자명이 `deck`이 아닌 배포판(Bazzite 등)이
++    # 있으므로 홈은 언제나 store.user_home()이 정한다.
++    for candidate in ((".steam", "steam"),
++                      (".local", "share", "Steam"),
++                      # flatpak Steam. 이 기기엔 없지만 배포 대상엔 있을 수 있다.
++                      (".var", "app", "com.valvesoftware.Steam", ".steam", "steam"),
++                      (".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam")):
+         path = store.home_path(*candidate)
+         if os.path.isdir(path):
+             return path
+@@ -56,11 +71,24 @@
+ 
+ 
+ def compat_prefix(appid):
+-    """해당 appid의 Proton prefix 경로. 없으면 None."""
+-    for root in steam_libraries():
+-        path = os.path.join(root, "steamapps", "compatdata", str(appid), "pfx")
+-        if os.path.isdir(path):
+-            return path
++    """해당 appid의 Proton prefix 경로. 없으면 None.
++
++    ★ **매니페스트 우선 2패스**다 (v2). 첫 매치를 그대로 돌려주면 안 된다 —
++      게임을 SD로 옮기면 내장 라이브러리에 **빈 pfx 껍데기**가 남고, 라이브러리 순서상
++      껍데기가 항상 먼저 잡힌다. 그러면 SD에 있는 진짜 설정 파일이 prefix 밖으로 판정돼
++      `check_path`(G11)가 정상 파일을 거부한다(TEKKEN 7 389730 실재 사례).
++      게임이 **지금 어디에 설치돼 있는가**는 `appmanifest_<appid>.acf`가 정한다.
++      2차 패스는 M1과 같은 동작이라, 매니페스트를 못 찾는 경우의 결과는 바뀌지 않는다.
++    """
++    roots = steam_libraries()
++    for want_manifest in (True, False):
++        for root in roots:
++            if want_manifest and not os.path.exists(
++                    os.path.join(root, "steamapps", "appmanifest_%s.acf" % appid)):
++                continue
++            path = os.path.join(root, "steamapps", "compatdata", str(appid), "pfx")
++            if os.path.isdir(path):
++                return path
+     return None
+ 
+ 
+@@ -111,19 +139,20 @@
+ def check_path(appid, path):
+     """G11 — 심볼릭 링크 금지, prefix(없으면 홈) 밖 금지."""
+     if os.path.islink(path):
+-        raise Refused("거부: 대상 경로가 심볼릭 링크입니다 — %s" % path)
++        raise Refused("거부: 대상 경로가 심볼릭 링크입니다 — %s" % path, code=codes.PATH_IS_SYMLINK)
+     real = os.path.realpath(path)
+     prefix = compat_prefix(appid)
+     if prefix:
+         if not real.startswith(os.path.realpath(prefix) + os.sep):
+             raise Refused(
+                 "거부: 경로가 이 게임의 Proton prefix 밖입니다.\n"
+-                "  경로: %s\n  prefix: %s" % (real, prefix)
++                "  경로: %s\n  prefix: %s" % (real, prefix),
++                code=codes.PATH_OUTSIDE_PREFIX
+             )
+     else:
+         home = os.path.realpath(store.user_home())
+         if not real.startswith(home + os.sep):
+-            raise Refused("거부: appid %s의 prefix를 찾을 수 없고 경로가 홈 밖입니다 — %s" % (appid, real))
++            raise Refused("거부: appid %s의 prefix를 찾을 수 없고 경로가 홈 밖입니다 — %s" % (appid, real), code=codes.PATH_OUTSIDE_HOME)
+     return real
+ 
+ 
+@@ -137,13 +166,14 @@
+     (QA 반려 ①: 이 구분이 없어 정상적인 프로필 전환이 영구히 거부됐다.)
+     """
+     if not data:
+-        raise Refused("거부: %s가 비어 있습니다 (0바이트)." % what)
++        raise Refused("거부: %s가 비어 있습니다 (0바이트)." % what, code=codes.FILE_EMPTY)
+     if ref_size:
+         ratio = len(data) / float(ref_size)
+         if ratio < 0.25 or ratio > 4.0:
+             raise Refused(
+                 "거부: %s 크기가 기준의 %.0f%%입니다 (허용 25~400%%). "
+-                "다른 파일을 가리키고 있을 수 있습니다." % (what, ratio * 100)
++                "다른 파일을 가리키고 있을 수 있습니다." % (what, ratio * 100),
++                code=codes.SIZE_OUT_OF_RANGE
+             )
+     if ref_lines:
+         lines = store.count_lines(data)
+@@ -151,8 +181,81 @@
+             ratio = lines / float(ref_lines)
+             if ratio < 0.8 or ratio > 1.2:
+                 raise Refused(
+-                    "거부: %s 줄 수가 기준의 %.0f%%입니다 (허용 80~120%%)." % (what, ratio * 100)
++                    "거부: %s 줄 수가 기준의 %.0f%%입니다 (허용 80~120%%)." % (what, ratio * 100),
++                    code=codes.LINE_COUNT_OUT_OF_RANGE
+                 )
++
++
++_SAV_DENY_SUFFIX = (".sav",)
++_SAV_DENY_SEGMENT = ("savegames",)      # 정확 일치. "Saved Games"(공백)는 여기 안 걸린다
++
++
++def assert_config_candidate(appid, path):
++    """G14 — 통째 교체 대상이 될 수 없는 파일을 거부한다 (fail-closed). **v2 신설.**
++
++    P4('.sav는 절대 열지 않는다')의 **유일한 강제 지점**이다. M1에서 P4는 선언뿐이고
++    강제 코드가 0줄이었다 — discover가 후보로 안 내놓았을 뿐이고, v2는 파일 선택기를 붙여
++    임의 경로가 도달한다.
++
++    거부 사유는 넷이고 **전부 '그 파일이 무엇인가'가 아니라 '무엇이 아닌가'로만 판정한다.**
++    '설정 파일처럼 보이는가'는 거부가 아니라 경고 사유다(config_candidate_warnings).
++    그 구분이 없으면 이 기기 밖의 정상 게임이 막힌다.
++
++    가드는 **이 문 하나에서만** 건다. 여러 곳에 흩으면 한 곳이 빠져 조용히 뚫린다.
++    """
++    base = os.path.basename(path)
++    low = base.lower()
++    if low.endswith(_SAV_DENY_SUFFIX):                       # ① 세이브 파일 — P4
++        raise Refused("거부: 세이브 파일(.sav)은 다루지 않습니다 — %s" % path,
++                      code=codes.SAV_REFUSED, path=path)
++    segs = [s.lower() for s in os.path.normpath(path).split(os.sep)[:-1]]   # 디렉터리만
++    if any(s in _SAV_DENY_SEGMENT for s in segs):            # ② 세이브 폴더 — P4
++        raise Refused("거부: 세이브 폴더 안의 파일은 다루지 않습니다 — %s" % path,
++                      code=codes.SAV_REFUSED, path=path)
++    # ③ 낡은 사본 — discover가 순회에서 프루닝하던 규칙을 여기서 상속한다.
++    #   이걸 등록하면 툴은 죽은 파일을 관리하고 게임이 실제로 읽는 파일은 영영 안 바뀐다.
++    # ★ `".bak" in s`는 너무 넓다 — `com.bakery.game` 같은 정상 폴더까지 막는다(리뷰 3-1).
++    #   막으려는 것은 **백업 폴더**이므로 `.bak`으로 끝나거나 경로 성분이 backup으로 끝나는 것만 본다.
++    if any(s.endswith(".bak") or ".bak." in s or s.endswith("backup") for s in segs):
++        raise Refused("거부: 백업·구버전 폴더 안의 파일입니다. 이것을 등록하면 게임이 실제로 읽는 "
++                      "파일은 영영 바뀌지 않습니다 — %s" % path,
++                      code=codes.STALE_COPY_REFUSED, path=path)
++    if low in discover._EXCLUDE_NAMES:                       # ④ 엔진 보일러플레이트
++        raise Refused("거부: 게임 엔진 내부 설정 파일입니다 — %s" % base,
++                      code=codes.ENGINE_BOILERPLATE_REFUSED, path=path)
++
++
++def config_candidate_warnings(appid, path):
++    """등록은 허용하되 화면에 되묻게 만드는 신호. **거부가 아니다.** v2 신설.
++
++    엔진 반환값에 싣지 않고 접착층이 따로 조회한다 — 경고는 정책이 아니라 표시이고,
++    반환 구조를 바꾸면 M1과의 diff fence가 헐거워진다.
++    """
++    out = []
++    if discover._classify(path)[0] is None:
++        out.append(codes.WARN_NOT_DISCOVER_CANDIDATE)
++    prefix = compat_prefix(appid)
++    if prefix:
++        real_prefix = os.path.realpath(prefix)
++        rel = os.path.realpath(path)[len(real_prefix) + 1:]
++        if not any(rel.startswith(r.replace("/", os.sep) + os.sep)
++                   for r in discover._SCAN_ROOTS):
++            out.append(codes.WARN_OUTSIDE_SCAN_ROOTS)
++    return out
++
++
++def assert_backup_in_root(appid, backup_path):
++    """G15 — 복원은 **그 게임의 백업 폴더 안**만 읽는다. v2 신설.
++
++    M1의 restore_backup은 backup_path에 check_path를 걸지 않아 파일시스템 어디든 읽어서
++    게임 설정 파일에 쓸 수 있었다. RPC가 경로 대신 backup_id를 받게 바뀌었으므로 접착층에서는
++    도달할 수 없지만, **엔진 자신이 그것을 보장해야** 다음 호출자가 생겨도 안전하다.
++    """
++    root = os.path.realpath(store.backups_dir(appid))
++    real = os.path.realpath(backup_path)
++    if os.path.islink(backup_path) or not real.startswith(root + os.sep):
++        raise Refused("거부: 이 게임의 백업 폴더 밖 경로입니다 — %s" % backup_path,
++                      code=codes.BACKUP_OUT_OF_ROOT, path=backup_path)
+ 
+ 
+ def detect_cloud_synced(appid, config_path):
+@@ -186,7 +289,7 @@
+ def game_or_fail(reg, appid):
+     entry = store.game(reg, appid)
+     if not entry:
+-        raise Refused("거부: appid %s가 등록되어 있지 않습니다. 먼저 add 하십시오." % appid)
++        raise Refused("거부: appid %s가 등록되어 있지 않습니다. 먼저 add 하십시오." % appid, code=codes.GAME_NOT_REGISTERED)
+     return entry
+ 
+ 
+@@ -307,10 +410,11 @@
+     appid = str(appid)
+     path = os.path.abspath(os.path.expanduser(config_path))
+     real = check_path(appid, path)                       # G11
++    assert_config_candidate(appid, real)                  # G14 (v2 신설)
+     if not os.path.exists(real):
+-        raise Refused("거부: 파일이 존재하지 않습니다 — %s" % real)
++        raise Refused("거부: 파일이 존재하지 않습니다 — %s" % real, code=codes.FILE_NOT_FOUND)
+     if not os.path.isfile(real):
+-        raise Refused("거부: 일반 파일이 아닙니다 — %s" % real)
++        raise Refused("거부: 일반 파일이 아닙니다 — %s" % real, code=codes.NOT_REGULAR_FILE)
+     check_sanity(store.read_bytes(real), what="설정 파일")   # G4
+     synced, reasons = detect_cloud_synced(appid, real)     # G6
+     entry = reg["games"].setdefault(appid, {})
+@@ -337,7 +441,7 @@
+     path = entry["config_path"]
+     check_path(appid, path)                                # G11
+     if not os.path.exists(path):
+-        raise Refused("거부: 설정 파일이 없습니다 — %s" % path)
++        raise Refused("거부: 설정 파일이 없습니다 — %s" % path, code=codes.CONFIG_MISSING)
+     data = store.read_bytes(path)
+     old = store.load_meta(appid, profile)
+     # 같은 슬롯의 이전 캡처와 크기만 대조한다. 줄 수까지 묶으면 게임 업데이트로
+@@ -368,16 +472,17 @@
+     if running_game(appid):                                # G5
+         raise Refused(
+             "거부: 게임이 실행 중입니다. 게임을 완전히 종료한 뒤 적용하십시오.\n"
+-            "  (실행 중에 교체하면 게임이 종료하면서 덮어써 아무 효과가 없습니다.)"
++            "  (실행 중에 교체하면 게임이 종료하면서 덮어써 아무 효과가 없습니다.)",
++            code=codes.GAME_RUNNING
+         )
+ 
+     target_meta = store.load_meta(appid, profile)
+     target_file = store.profile_file_path(appid, profile)
+     if not (target_meta and target_file and os.path.exists(target_file)):
+-        raise Refused("거부: 프로필 '%s'이 없습니다. 먼저 save 하십시오." % profile)
++        raise Refused("거부: 프로필 '%s'이 없습니다. 먼저 save 하십시오." % profile, code=codes.PROFILE_MISSING)
+     target_data = store.read_bytes(target_file)
+     if store.sha1_bytes(target_data) != target_meta.get("sha1"):
+-        raise Refused("거부: 프로필 '%s'의 내용이 메타와 어긋납니다 (저장소 손상)." % profile)
++        raise Refused("거부: 프로필 '%s'의 내용이 메타와 어긋납니다 (저장소 손상)." % profile, code=codes.PROFILE_CORRUPT)
+ 
+     notes = []
+     # 여기 있던 learn_sticky() 호출을 뺐다(2026-08-03). **오염의 가장 굵은 경로였다** —
+@@ -424,7 +529,7 @@
+         try:
+             store.make_backup(appid, disk_data, "disk", os.path.basename(path))
+         except OSError as exc:                                   # G13
+-            raise Refused("거부: 백업에 실패해 적용을 중단했습니다 (%s). 원본은 그대로입니다." % exc)
++            raise Refused("거부: 백업에 실패해 적용을 중단했습니다 (%s). 원본은 그대로입니다." % exc, code=codes.BACKUP_FAILED)
+ 
+     # 권한과 소유자를 그대로 이어받는다. 소유자 보존은 Decky(백엔드가 root) 확장을 막지 않기 위함.
+     mode = None
+@@ -456,7 +561,9 @@
+     게임에 들어가게 된다. 그래서 **중단하지 않고, 대신 무엇이 안 됐는지를 전부 돌려준다.**
+     호출자는 이 목록을 **반드시 사용자에게 보여줘야 한다**(UI는 결과 창, CLI는 표 출력).
+ 
+-    반환: `[{"appid", "name", "outcome", "note"}]`. `outcome`은 `BULK_OUTCOMES` 중 하나다.
++    반환: `[{"appid", "name", "outcome", "code", "note"}]`. `outcome`은 `BULK_OUTCOMES` 중 하나다.
++    `code`는 `refused`/`error`일 때만 값이 있다(`Refused.code` 또는 `codes.UNEXPECTED`) —
++    나머지는 `None`이다. 화면이 "실행 중이라 못 했다"와 "프로필이 깨졌다"를 구분하려면 이게 필요하다.
+     등록 순서가 아니라 **appid 정렬 순서**로 돈다 — UI의 게임 목록과 같은 순서라야
+     결과를 대조할 수 있다.
+ 
+@@ -466,7 +573,7 @@
+     for appid in sorted(reg["games"]):
+         entry = reg["games"].get(appid) or {}
+         row = {"appid": appid, "name": entry.get("name") or appid,
+-               "outcome": "error", "note": ""}
++               "outcome": "error", "note": "", "code": None}
+         results.append(row)
+ 
+         # 게임 하나의 처리 전체를 감싼다 — 실패 지점이 어디든 **그 게임만** 실패해야 한다.
+@@ -498,6 +605,7 @@
+         except Refused as exc:
+             row["outcome"] = "refused"
+             row["note"] = str(exc).splitlines()[0]
++            row["code"] = exc.code
+         except Exception as exc:
+             # **일부러 넓게 잡는다.** 이 함수의 존재 이유는 "하나가 실패해도 나머지는 계속
+             # 간다"이고, 그 약속은 예외 **종류**에 따라 깨지면 안 된다. 좁게 잡았다가
+@@ -510,6 +618,7 @@
+             row["outcome"] = "error"
+             row["note"] = ("이 게임의 등록 정보를 처리하지 못했습니다. 다시 등록해 보십시오. "
+                            "(%s: %s)" % (type(exc).__name__, exc))
++            row["code"] = codes.UNEXPECTED
+     return results
+ 
+ 
+@@ -586,10 +695,11 @@
+     entry = game_or_fail(reg, appid)
+     path = entry["config_path"]
+     check_path(appid, path)
++    assert_backup_in_root(appid, backup_path)             # G15 (v2 신설)
+     if running_game(appid):
+-        raise Refused("거부: 게임이 실행 중입니다.")
++        raise Refused("거부: 게임이 실행 중입니다.", code=codes.GAME_RUNNING)
+     if not os.path.exists(backup_path):
+-        raise Refused("거부: 백업 파일이 없습니다 — %s" % backup_path)
++        raise Refused("거부: 백업 파일이 없습니다 — %s" % backup_path, code=codes.BACKUP_FILE_MISSING)
+     data = store.read_bytes(backup_path)
+     check_sanity(data, what="백업 파일")
+     if os.path.exists(path):
+--- M1/store.py
++++ v2/store.py
+@@ -11,6 +11,8 @@
+ import tempfile
+ import time
+ 
++from . import codes
++
+ BACKUP_KEEP = 10
+ REGISTRY_VERSION = 1
+ DESKTOP_UID = 1000          # 핸드헬드의 주 사용자(SteamOS에서는 deck)
+@@ -19,11 +21,14 @@
+ def user_home():
+     """**실제 사용자**의 홈. `os.path.expanduser("~")`를 직접 쓰지 말 것.
+ 
+-    Decky 확장을 막지 않기 위한 장치다 — Decky 플러그인 백엔드는 **root로 돈다.**
+-    그때 `~`는 `/root`가 되어 Steam 라이브러리 탐색이 통째로 죽고, 툴이 아무것도 못 찾는다.
+-    루트로 실행돼도 데스크톱 사용자의 홈을 가리키게 한다.
++    ⚠️ M1의 원래 주석은 *"Decky 백엔드는 root로 돈다"*고 적었는데 **틀렸다.**
++    Decky는 root가 opt-in이고(`plugin.json`의 `flags`), 우리 flags는 비어 있어 `deck`으로 돌아간다.
++
++    그럼에도 이 사슬이 필요한 이유는 root가 아니라 **사용자명이 `deck`이 아닌 배포판**(Bazzite 등)
++    때문이다. 그래서 loader가 준 `DECKY_USER_HOME`을 가장 먼저 본다 — 그게 있으면 추측이 필요 없다.
++    UID 1000은 아무 단서도 없을 때의 마지막 수단이다.
+     """
+-    explicit = os.environ.get("GFXPROFILE_HOME")
++    explicit = os.environ.get("GFXPROFILE_HOME") or os.environ.get("DECKY_USER_HOME")
+     if explicit:
+         return explicit
+     if os.geteuid() != 0:
+@@ -101,10 +106,10 @@
+     디렉터리 자체도 fsync해서 rename이 메타데이터까지 내려가게 한다.
+ 
+     `owner=(uid, gid)`를 주면 쓰기 후 소유자를 되돌린다.
+-    **Decky 확장을 막지 않기 위한 조치다** — Decky 플러그인 백엔드는 root로 돌기 때문에,
+-    소유자를 되돌리지 않으면 게임 설정 파일이 root 소유가 되어 **게임(deck 사용자)이 종료 시
+-    파일을 다시 쓰지 못한다.** 지금은 전부 deck으로 돌아 무해하지만, 나중에 이걸 빠뜨리면
+-    원인 찾기 어려운 고장이 된다.
++    ⚠️ M1 주석은 이것을 *"Decky 백엔드가 root로 돌기 때문"*이라 적었는데 **틀린 전제였다**
++    (root는 opt-in이고 우리 `flags`는 비어 있다). 그래도 남겨 두는 이유는, 언젠가 root로 도는
++    경로가 생기면 게임 설정 파일이 root 소유가 되어 **게임(deck)이 종료 시 다시 쓰지 못하기**
++    때문이다. 지금은 무해한 무동작이다.
+     """
+     directory = os.path.dirname(os.path.abspath(path)) or "."
+     os.makedirs(directory, exist_ok=True)
+@@ -151,7 +156,16 @@
+ 
+ 
+ class RegistryError(Exception):
+-    """레지스트리를 읽을 수 없음. 사용자에게 그대로 보여줄 안내를 담는다."""
++    """레지스트리를 읽을 수 없음. 사용자에게 그대로 보여줄 안내를 담는다.
++
++    v2 추가: `code`(codes.py 상수)와 `params`. engine.Refused와 같은 형태다 —
++    접착층이 두 예외를 같은 방식으로 봉투에 실을 수 있어야 분기가 늘지 않는다.
++    """
++
++    def __init__(self, message, code=None, **params):
++        super().__init__(message)
++        self.code = code
++        self.params = params
+ 
+ 
+ def load_registry():
+@@ -168,9 +182,10 @@
+                ("  초기화: rm %s  (등록 정보만 사라지고 프로필·백업은 남습니다)" % path)
+         raise RegistryError(
+             "거부: 레지스트리가 손상되어 읽을 수 없습니다.\n"
+-            "  파일: %s\n  원인: %s\n%s" % (path, exc, hint))
++            "  파일: %s\n  원인: %s\n%s" % (path, exc, hint),
++            code=codes.REGISTRY_UNREADABLE)
+     if not isinstance(reg, dict):
+-        raise RegistryError("거부: 레지스트리 형식이 올바르지 않습니다 — %s" % path)
++        raise RegistryError("거부: 레지스트리 형식이 올바르지 않습니다 — %s" % path, code=codes.REGISTRY_MALFORMED)
+     base = default_registry()
+     for key, value in base.items():
+         reg.setdefault(key, value)

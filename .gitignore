@@ -1,0 +1,11 @@
+# 의존성 — pnpm-lock.yaml로 재현 (build.sh가 오프라인 설치)
+node_modules/
+
+# 빌드 산출물 — build.sh로 재생성
+dist/
+pkg/
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
