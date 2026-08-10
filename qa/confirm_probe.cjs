@@ -22,6 +22,7 @@ globalThis.window = globalThis.window || { navigator: { userAgent: "gfxprofile-p
 const GAME = {
   appid: "1000", name: "Probe Game", has_dock: true, has_internal: true,
   disk_matches: "dock", last_applied: "dock", cloud_synced: false, running: false,
+  backups: 0,          // P9: 봉투에 추가된 필드 — 목을 실물 모양과 맞춰 둔다
 };
 
 // ── 관측 ─────────────────────────────────────────────────────────────────────
@@ -77,6 +78,9 @@ const modules = {
     // ★ P5: `tCode`(코드→문구 단일 관문)도 목에 넣는다 — 없으면 소비처가 TypeError로
     //   죽고 "로직 FAIL"처럼 보인다(인계 문서 5-B의 낡은 목 함정).
     tCode: (code) => String(code),
+    // P9/F11: i18n 목이 낡으면 렌더가 통째로 죽고 \"로직 FAIL\"처럼 보인다.
+    setProfileNames: () => {},
+    tDefault: (k) => String(k),
     isLangResolved: () => true,
     ensureLang: () => Promise.resolve(),
   },
@@ -131,8 +135,11 @@ hookSlot = 0;
 h(StatusPage, null);
 
 // 라벨은 i18n 목이 키를 그대로 돌려주므로 키로 갈린다.
-const applyBtns = buttons.filter((b) => /^APPLY_/.test(b.label));
-const saveBtns = buttons.filter((b) => /^SAVE_(DOCK|INTERNAL)_SHORT/.test(b.label));
+// ⚠️ F11 ②: 라벨 키가 슬롯별(`APPLY_DOCK_SHORT`)에서 **표시명 파라미터형**(`APPLY_SHORT {이름}`)
+//   으로 바뀌었다 — 프로필 이름이 문장에 박혀 있으면 사용자가 이름을 바꿨을 때 그 버튼만
+//   옛 이름을 말하기 때문이다. 목의 `t()`가 키를 그대로 돌려주므로 접두어로 가른다.
+const applyBtns = buttons.filter((b) => /^APPLY_SHORT\b/.test(b.label));
+const saveBtns = buttons.filter((b) => /^SAVE_SHORT\b/.test(b.label));
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
 

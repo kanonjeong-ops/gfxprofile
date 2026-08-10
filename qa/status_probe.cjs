@@ -32,6 +32,9 @@ const games = Array.from({ length: N }, (_, i) => ({
   last_applied: "dock",
   cloud_synced: false,
   running: false,
+  // P9: 봉투에 추가된 필드. 이 프로브는 안 읽지만 **목이 실물 모양과 어긋나면**
+  //   나중에 그 필드를 읽는 코드가 들어왔을 때 조용히 undefined를 본다.
+  backups: 0,
 }));
 const incompleteCount = games.filter((g) => !g.has_internal).length;
 
@@ -110,6 +113,9 @@ const modules = {
     // ★ P5: `tCode`(코드→문구 단일 관문)도 목에 넣는다 — 없으면 소비처가 TypeError로
     //   죽고 "로직 FAIL"처럼 보인다(인계 문서 5-B의 낡은 목 함정).
     tCode: (code) => String(code),
+    // P9/F11: i18n 목이 낡으면 렌더가 통째로 죽고 \"로직 FAIL\"처럼 보인다.
+    setProfileNames: () => {},
+    tDefault: (k) => String(k),
     // ★ 언어 확정은 이미 끝난 것으로 둔다 — 이 프로브가 재는 것은 정렬·필터 로직이지 i18n이 아니다.
     //   (목을 안 늘리면 렌더가 통째로 죽어 "로직 FAIL"처럼 보인다 — 인계 문서 5-B의 경고 지점)
     isLangResolved: () => true,

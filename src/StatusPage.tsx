@@ -1,31 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
-import { ConfirmModal, DialogButton, Focusable, ToggleField, showModal } from "./deckyui";
+import { DialogButton, Focusable, ToggleField, showModal } from "./deckyui";
 import { DiscoverTab } from "./DiscoverTab";
-import { ensureLang, isLangResolved, t, tCode } from "./i18n";
-import { BACKUP_WARN_APPLIES, LIST_BOTTOM_PADDING } from "./limits";
+import { ensureLang, isLangResolved, setProfileNames, t, tCode } from "./i18n";
+import { LIST_BOTTOM_PADDING } from "./limits";
 import { ManageTab } from "./ManageTab";
+import { slotSummary } from "./slots";
+import { SaveConfirmModal } from "./saveConfirm";
 import { PLUGIN_VERSION } from "./version";
 import {
   applyProfile, getOverview, saveProfile,
   type ConfirmParams, type Overview, type OverviewGame, type Profile,
 } from "./rpc";
-
-/**
- * 「덮어쓸 내용」이 지금 어떤 상태인지를 한 줄로 — 백엔드가 준 4분류를 그대로 쓴다.
- *
- * ★ M1은 화면 문구를 합쳤지만 **코드는 갈라 둔다**(설계 §2-E-0). 합치면 `"unknown"`이
- *   *"게임에서 조정함"*과 *"조회 실패"* 두 뜻을 갖게 되어 문구를 고를 수 없다.
- */
-function diskStateText(p: ConfirmParams): string {
-  if (p.disk_state === "other_profile" && p.matched_profile) {
-    return t("DISK_STATE_OTHER", {
-      profile: t(p.matched_profile === "dock" ? "PROFILE_DOCK" : "PROFILE_INTERNAL"),
-    });
-  }
-  if (p.disk_state === "unknown") return t("DISK_STATE_UNKNOWN");
-  if (p.disk_state === "missing") return t("DISK_STATE_MISSING");
-  return t("DISK_STATE_LOOKUP_FAILED");
-}
 
 /**
  * 전체 화면 「현황」 탭 — 게임마다 두 프로필의 상태를 한 줄로 보여준다.
@@ -66,9 +51,10 @@ function StatusRow({
           {game.name}
         </div>
         <div style={{ fontSize: "11px", color: "#9aa0a6" }}>
-          {t(game.has_dock ? "SLOT_SAVED" : "SLOT_EMPTY", { profile: t("PROFILE_DOCK") })}
-          {" · "}
-          {t(game.has_internal ? "SLOT_SAVED" : "SLOT_EMPTY", { profile: t("PROFILE_INTERNAL") })}
+          {/* ★ F5: 「저장됨 · 시각」. 문장은 `slots.ts` 한 곳에서 만든다 — 두 탭이 같은 것을
+              말해야 하고, 「저장」과 「적용」을 화면이 섞지 않아야 한다(복원은 적용 기록을
+              갱신하지 않는다 — 없는 사실을 만들지 않는다). */}
+          {slotSummary(game)}
           {game.disk_matches ? ` · ${t("DISK_NOW", { profile: t(game.disk_matches === "dock" ? "PROFILE_DOCK" : "PROFILE_INTERNAL") })}` : ""}
         </div>
       </div>
@@ -86,7 +72,7 @@ function StatusRow({
             onClick={() => onApply(game.appid, p)}
             style={{ minWidth: "88px", padding: "6px 8px", fontSize: "13px" }}
           >
-            {t(p === "dock" ? "APPLY_DOCK_SHORT" : "APPLY_INTERNAL_SHORT")}
+            {t("APPLY_SHORT", { profile: t(p === "dock" ? "PROFILE_DOCK" : "PROFILE_INTERNAL") })}
           </DialogButton>
           {/* 저장은 **빈 슬롯에도** 눌러야 한다 — 프로필을 처음 만드는 동작이 이것이다.
               그래서 `has_*`로 비활성화하지 않는다(적용과 조건이 다르다).
@@ -99,7 +85,7 @@ function StatusRow({
             onClick={() => onSave(game.appid, p)}
             style={{ minWidth: "104px", padding: "6px 8px", fontSize: "13px" }}
           >
-            {t(p === "dock" ? "SAVE_DOCK_SHORT" : "SAVE_INTERNAL_SHORT")}
+            {t("SAVE_SHORT", { profile: t(p === "dock" ? "PROFILE_DOCK" : "PROFILE_INTERNAL") })}
           </DialogButton>
         </div>
       ))}
@@ -136,6 +122,9 @@ export function StatusPage() {
     // detail=true — 이 화면만 `disk_matches`를 쓴다.
     getOverview(true).then(
       (res) => {
+        // ★ 표시명(F11 ①)은 봉투로 온다 — 상태를 넣기 **전에** i18n에 반영해야 첫 렌더부터
+        //   사용자가 정한 이름이 나온다(나중에 갈아 끼우면 이름이 한 번 깜빡인다).
+        if (res.ok) setProfileNames(res.data.profile_names);
         if (res.ok) setOverview(res.data);
         else setNote(tCode(res.code, "LOAD_FAILED"));
       },
@@ -208,48 +197,24 @@ export function StatusPage() {
            *   **진단 가능성**이다. "안전하니 됐다"로 요건을 조용히 바꾸지 않는다.
            */
           try {
+            /*
+             * ★ 확인창 자체는 `saveConfirm.tsx` 한 곳에 있다(P9) — 「관리」 탭의 복원 후속
+             *   저장이 같은 흐름을 타기 때문이다. 같은 창을 두 화면이 각자 그리면 언젠가
+             *   한쪽이 덜 말하게 된다.
+             */
             showModal(
-              <ConfirmModal
-                strTitle={t("SAVE_CONFIRM_TITLE", { profile: label })}
-                /*
-                 * ★ 2026-08-07 실기: `"\n\n"`로 이어 붙였더니 **한 문단으로 뭉쳐 렌더**됐다
-                 *   (`4a1892bae1 덮어쓸 내용:`이 붙어 읽혔다). `strDescription`은 `ReactNode`라
-                 *   문자열이 아니라 **엘리먼트로** 줘야 줄이 갈린다.
-                 */
-                strDescription={
-                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                    <div>{t("SAVE_CONFIRM_BODY")}</div>
-                    <div>{t("SAVE_CONFIRM_CURRENT", { size: p.size, sha1: p.sha1_short })}</div>
-                    <div>{t("SAVE_CONFIRM_INCOMING", { state: diskStateText(p) })}</div>
-                    {/* ★ 실측으로 확정된 한계를 여기서 말한다(P4-1): 덮어쓴 프로필의 대피본은
-                        `disk` 백업과 **한 링(10칸)을 공유**해서, 그 게임을 10번 적용하면 사라진다.
-                        "되돌릴 수 있다"고만 적으면 조건부 참이고, 조건을 안 적으면 오정보다. */}
-                    <div style={{ color: "#ffb454" }}>
-                      {t("SAVE_CONFIRM_BACKUP_LIMIT", { n: BACKUP_WARN_APPLIES })}
-                    </div>
-                  </div>
-                }
-                strOKButtonText={t("SAVE_CONFIRM_OK")}
-                strCancelButtonText={t("CANCEL")}
-                /*
-                 * ⚠️ **「기본 포커스를 취소에」는 여기서 못 한다** (2026-08-07 실측).
-                 *   설계·인계 문서가 *"`preferredFocus`가 `FooterLegendProps`에 있으니 안전장치를
-                 *   이식할 수 있다"*고 적었는데, 그건 `DialogButton`·`Focusable` 얘기다.
-                 *   `ConfirmModalProps`(`@decky/ui` 4.11.0 `Modal.d.ts:34`)는 `ModalRootProps`를
-                 *   상속할 뿐 **`preferredFocus`가 없다** — `tsc`가 잡았다.
-                 *   → 쓸 수 있는 방어는 `bDestructiveWarning` 하나다(파괴적 동작으로 표시).
-                 *   **기본 포커스가 어디인지는 실기로 확인해야 하는 미지수로 남는다.**
-                 */
-                bDestructiveWarning
-                onOK={() => {
+              <SaveConfirmModal
+                params={p}
+                profile={profile}
+                onConfirm={() => {
                   setBusy(true);
                   // 받은 토큰을 **그대로** 되돌린다. 지어낼 수 없고, 고쳐 봐야 거부된다.
                   saveProfile(appid, profile, p.confirm_token)
                     .then(finish, () => setNote(tCode("UNEXPECTED", "SAVE_FAILED")))
                     .finally(() => setBusy(false));
-                  }}
-                />,
-              );
+                }}
+              />,
+            );
           } catch (err) {
             // 백엔드에 닿지 못한 것이 아니라 **화면이 못 뜬 것**이다 — 이건 실제로 오류라
             // `console.error`가 맞는 레벨이고, 이 레벨만 `cef_log`에 실린다(실측 사실 ②).

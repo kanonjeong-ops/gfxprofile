@@ -33,3 +33,13 @@ export const BACKUP_WARN_APPLIES = 5;
  *   (실기에서 아직도 가려지면 이 숫자만 올린다. 고칠 자리가 하나라는 것이 이 상수의 값어치다.)
  */
 export const LIST_BOTTOM_PADDING = "80px";
+
+/**
+ * 프로필 **표시명 길이 상한**(F11 ①) — 화면 안내 문구가 쓰는 숫자.
+ *
+ * ★ **정본은 백엔드 `gfxp/labels.py`의 `MAX_LEN`이다.** 여기 값은 그것을 화면에 말하기 위한
+ *   사본이고, `qa/test_profile_names.py`가 **두 값이 같은지 직접 대조**한다 —
+ *   어긋나면 FAIL이다. 숫자를 문구에 다시 박지 마라(2026-08-07 QA 반려 ①의 형태:
+ *   화면이 실측과 다른 수를 약속했고, 그 약속이 거짓이었다).
+ */
+export const PROFILE_NAME_MAX = 20;

@@ -5,7 +5,7 @@
 가드를 둘 늘리자 기준이 통째로 깨졌다(설계 E2). 집합 항등은 코드가 늘거나 줄어도 안 깨진다.
 
 이 테스트가 있어야 raise에 code를 다는 작업을 기계적으로 해도 안전하다.
-검사 대상: py_modules/gfxp/{engine,store,remove}.py 의 `raise Refused(...)` / `raise RegistryError(...)`
+검사 대상: py_modules/gfxp/{engine,store,remove,restore,confirm,labels}.py 의 `raise Refused(...)` / `raise RegistryError(...)`
 """
 import ast
 import pathlib
@@ -51,7 +51,11 @@ def main():
     # ★ `remove.py`를 여기 넣지 않으면 그 파일의 `code=` 규율은 **검사 밖**이다
     #   (DESIGN-DELETE 반증 채택 2 — "test_codes가 자동으로 잠근다"는 허구였다).
     #   스캔 대상은 손으로 유지하는 목록이라 새 정책 파일을 만들 때마다 여기에 등재해야 한다.
-    for fname in ("engine.py", "store.py", "remove.py"):
+    #   ⚠️ `confirm.py`·`labels.py`는 **오늘은 `raise`가 0건이라 아무것도 안 잠근다**(2026-08-10
+    #     qa-lead 지적). 그래도 등재하는 이유는 대칭이다 — fence 밖 정책 파일 다섯이 같은 규율
+    #     아래 있어야, 그중 하나에 첫 `raise`가 생기는 날 **자동으로** 검사에 걸린다.
+    for fname in ("engine.py", "store.py", "remove.py", "restore.py",
+                  "confirm.py", "labels.py"):
         path = ROOT / "py_modules" / "gfxp" / fname
         for lineno, exc, const in raises_in(path):
             total += 1

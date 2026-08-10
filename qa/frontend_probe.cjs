@@ -33,6 +33,12 @@ globalThis.document = globalThis.document || { title: "gfxprofile-probe" };
 
 const buttons = [];
 const applyCalls = [];
+//: P10 — `applyAll`에 실제로 들어간 인자 전량(프로필 + 토큰). `applyCalls`는 E1이 쓰던
+//: "눌렀더니 호출은 나갔는가"의 지표라 **모양을 바꾸지 않는다**(바꾸면 그 판정이 조용히 깨진다).
+const rpcCalls = [];
+const modals = [];
+let modalThrows = false;      // 확인창을 못 띄우는 상황(진단 가능성 요건)
+const TOKEN_FOR = (profile) => `TOKEN-${profile}`;
 let missing = [];
 let hookSlot = 0;
 
@@ -87,8 +93,25 @@ const modules = {
     useQuickAccessVisible: () => true,
   },
   "./rpc": {
-    applyAll: (profile) => {
+    // ★ P10(F8): **2단계 계약**이다 — 토큰 없는 1차 호출은 아무것도 쓰지 않고
+    //   `CONFIRM_REQUIRED` + 5버킷 미리보기를 돌려준다. 백엔드와 같은 모양이어야
+    //   프론트가 실제로 무엇을 하는지 잴 수 있다(목이 낡으면 "실행됐다"를 오판한다).
+    //   ⚠️ 미리보기에 `running_refused: 1`을 넣는다 — E1의 위험이 모달 층으로 옮겨갈 수
+    //     있는 자리(그 숫자를 이유로 OK를 죽이는 우회)를 재기 위한 조건이다.
+    applyAll: (profile, token) => {
       applyCalls.push(profile);
+      rpcCalls.push({ profile, token: token === undefined ? null : token });
+      if (!token) {
+        return Promise.resolve({
+          ok: false,
+          code: "CONFIRM_REQUIRED",
+          params: {
+            confirm_token: TOKEN_FOR(profile),
+            profile,
+            would_apply: 8, already: 0, no_profile: 1, running_refused: 1, cannot_apply: 0,
+          },
+        });
+      }
       return Promise.resolve({ ok: true, data: { results: [], counts: {} } });
     },
     getOverview: () => Promise.resolve({ ok: true, data: { games: [], counts: COUNTS } }),
@@ -101,10 +124,14 @@ const modules = {
     // ★ P5: `tCode`(코드→문구 단일 관문)도 목에 넣는다 — 없으면 소비처가 TypeError로
     //   죽고 "로직 FAIL"처럼 보인다(인계 문서 5-B의 낡은 목 함정).
     tCode: (code) => String(code),
+    // P9/F11: i18n 목이 낡으면 렌더가 통째로 죽고 \"로직 FAIL\"처럼 보인다.
+    setProfileNames: () => {},
+    tDefault: (k) => String(k),
     setLang: () => {},
   },
   "./deckyui": {
     ButtonItem: { __kind: "ButtonItem" },
+    ConfirmModal: { __kind: "ConfirmModal" },
     Focusable: { __kind: "Focusable" },
     Navigation: { Navigate: () => {} },
     ToggleField: { __kind: "ToggleField" },
@@ -112,7 +139,12 @@ const modules = {
     ModalRoot: { __kind: "ModalRoot" },
     PanelSection: { __kind: "PanelSection" },
     PanelSectionRow: { __kind: "PanelSectionRow" },
-    showModal: () => {},
+    showModal: (node) => {
+      // `showModal`은 런타임에 얻어지는 값이라 **undefined일 수 있다** — 그 상황을 만들어
+      // "안전하지만 아무 흔적도 없이 죽는" 경로가 남아 있지 않은지 본다(QA 반려 ②).
+      if (modalThrows) throw new TypeError("showModal is not a function");
+      modals.push(node);
+    },
     titleClass: () => undefined,
     uicheckMissing: () => missing,
   },
@@ -182,16 +214,58 @@ buttons.forEach((b) => {
     /* 클릭 자체가 던지면 그것도 동작하지 않는 것이다 — applyCalls로 판정된다 */
   }
 });
-console.log(
-  JSON.stringify({
-    buttons: buttons.map((b, i) => ({ label: labels[i], disabled: !!b.props.disabled })),
-    langReady: true,
-    missing,
-    // ★ 측정 경로에 닿았는지 — 주입한 dock_ready(9)가 라벨에 보이는가.
-    sawCounts: labels.some((l) => l.includes("9")),
-    // 각 버튼을 눌렀을 때 실제로 일괄 적용이 호출됐는가(대리 지표가 아니라 의미).
-    applyCalls,
-    // 조상 스타일로 클릭이 막혀 있는가.
-    styleBlocked: findBlocked(content, false),
-  }),
-);
+
+// ★ P10: 확인창은 **`.then` 콜백**에서 뜨므로 마이크로태스크를 한 번 흘려야 관측된다.
+//   여기서 기다리지 않으면 "모달 0개"를 보고 **아무것도 못 잰 채** 판정하게 된다.
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+(async () => {
+  await settle();
+  const okDisabled = modals.some((m) => m && m.props && m.props.bOKDisabled);
+  const modalKinds = modals.map((m) => (m && m.type && m.type.__kind) || String(m));
+  // 확인창의 OK를 누른다 — **받은 토큰을 그대로** 되돌려 2차 호출이 나가야 실행이다.
+  for (const m of modals) {
+    const onOK = m && m.props && m.props.onOK;
+    if (typeof onOK === "function") onOK();
+  }
+  await settle();
+  const executed = rpcCalls.filter((c) => c.token).map((c) => c.profile);
+  const replayedForeignToken = rpcCalls.some((c) => c.token && c.token !== TOKEN_FOR(c.profile));
+
+  // ④ 확인창을 **못 띄우는** 상황: 그래도 실행되면 안 되고(fail-closed), 흔적은 남아야 한다.
+  modalThrows = true;
+  const beforeFail = rpcCalls.length;
+  buttons.forEach((b) => {
+    try {
+      if (typeof b.props.onClick === "function") b.props.onClick();
+    } catch (e) { /* 위와 같다 */ }
+  });
+  await settle();
+  const executedAfterModalFailure = rpcCalls.slice(beforeFail).some((c) => c.token);
+  modalThrows = false;
+
+  console.log(
+    JSON.stringify({
+      buttons: buttons.map((b, i) => ({ label: labels[i], disabled: !!b.props.disabled })),
+      langReady: true,
+      missing,
+      // ★ 측정 경로에 닿았는지 — 주입한 dock_ready(9)가 라벨에 보이는가.
+      sawCounts: labels.some((l) => l.includes("9")),
+      // 각 버튼을 눌렀을 때 실제로 일괄 적용이 호출됐는가(대리 지표가 아니라 의미).
+      applyCalls,
+      // 조상 스타일로 클릭이 막혀 있는가.
+      styleBlocked: findBlocked(content, false),
+      // ── P10(F8) 2단계 계약 ──────────────────────────────────────────────
+      // 1차 호출에 토큰이 실려 있으면 프론트가 토큰을 지어낸 것이다(계약 붕괴).
+      firstCallsHadToken: rpcCalls.slice(0, 2).some((c) => !!c.token),
+      confirmModals: modalKinds,
+      // ★ E1이 모달 층으로 옮겨간 형태 — 실행 중 수를 이유로 OK를 죽이면 같은 위반이다.
+      modalOkDisabled: okDisabled,
+      // OK를 눌렀을 때 **받은 토큰 그대로** 2차 호출이 나갔는가.
+      executed,
+      replayedForeignToken,
+      // 확인창이 안 떠도 실행되면 fail-closed가 깨진 것이다.
+      executedAfterModalFailure,
+    }),
+  );
+})();

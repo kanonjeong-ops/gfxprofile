@@ -39,7 +39,10 @@ export function BulkApplyButton({
         disabled={ready === 0 || busy}
         onClick={() => onApply(profile)}
       >
-        {t(profile === "dock" ? "BULK_DOCK" : "BULK_INTERNAL")}{" "}
+        {/* ★ 라벨은 **표시명 하나**에서 나온다(F11) — 프로필 이름이 문장에 박혀 있으면
+            사용자가 이름을 바꿨을 때 이 버튼만 옛 이름을 말한다. 이름의 정본은 i18n의
+            `PROFILE_*` 한 곳이고, 사용자가 정한 이름은 거기서 덮어써진다. */}
+        {t("BULK_APPLY", { profile: t(profile === "dock" ? "PROFILE_DOCK" : "PROFILE_INTERNAL") })}{" "}
         {ready > 0 ? t("BULK_COUNT", { n: ready }) : t("BULK_NONE")}
       </ButtonItem>
     </PanelSectionRow>

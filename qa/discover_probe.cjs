@@ -304,6 +304,12 @@ async function run(opts) {
     "./i18n": {
       t: (k, p) => (p ? `${k} ${Object.values(p).join(" ")}` : String(k)),
       tCode: (code) => String(code),
+      // P9/F11: i18n 목이 낡으면 렌더가 통째로 죽고 "로직 FAIL"처럼 보인다(인계 문서 5-B).
+      setProfileNames: () => {},
+      tDefault: (k) => String(k),
+      // P9/F11: i18n 목이 낡으면 렌더가 통째로 죽고 \"로직 FAIL\"처럼 보인다.
+      setProfileNames: () => {},
+      tDefault: (k) => String(k),
     },
     "./filepicker": {
       pickConfigFile: (start) => {
@@ -612,6 +618,9 @@ async function main() {
       "./i18n": {
         t: (k, p) => (p ? `${k} ${Object.values(p).join(" ")}` : String(k)),
         tCode: (code) => String(code),
+        // P9/F11: i18n 목이 낡으면 렌더가 통째로 죽고 "로직 FAIL"처럼 보인다(인계 문서 5-B).
+        setProfileNames: () => {},
+        tDefault: (k) => String(k),
         isLangResolved: () => true,
         ensureLang: () => Promise.resolve(),
       },

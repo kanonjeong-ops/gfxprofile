@@ -38,7 +38,7 @@ if not _RUNTIME_DIR:
     )
 os.environ["GFXPROFILE_DATA_DIR"] = _RUNTIME_DIR
 
-from gfxp import codes, confirm, discover, engine, lang, remove, store  # noqa: E402  (격리 뒤에 import해야 한다)
+from gfxp import codes, confirm, discover, engine, labels, lang, remove, restore, store  # noqa: E402  (격리 뒤에 import해야 한다)
 
 #: 로드 1회당 하나. cef_log·백엔드 로그를 이번 로드분으로 좁히는 토큰이다.
 SESSION = "%d-%s" % (int(time.time()), secrets.token_hex(3))
@@ -274,6 +274,48 @@ def _entry_payload(entry):
     }
 
 
+def _saved_label(value):
+    """`meta.saved_at`(ISO `2026-08-10T09:26:51+0900`) → 화면용 `2026-08-10 09:26`.
+
+    ★ **포맷은 백엔드가 한 곳에서 한다.** 프론트가 문자열을 쪼개면 판정이 두 곳으로 갈리고,
+      그건 v2가 명시적으로 버린 방식이다(백업 파일명 파싱을 백엔드에 둔 것과 같은 이유).
+    ★ 파싱하지 않는다 — 자리로 잘라 낸다. 형식이 예상과 다르면 **원문을 그대로** 돌려준다
+      (모르는 값을 예쁘게 꾸미려다 없는 사실을 만들지 않는다).
+    """
+    text = value or ""
+    if len(text) >= 16 and text[10] == "T":
+        return text[:10] + " " + text[11:16]
+    return text
+
+
+def _slot_view(appid, profile):
+    """그 슬롯의 `(적용 가능한가, 마지막 저장 표시값)` — **meta를 한 번만 읽는다.**
+
+    ★ 왜 합쳤나(F5): 예전에는 `_profile_ready`가 `load_meta`를, 그 안의
+      `store.profile_file_path`가 **같은 meta를 또** 읽었다(슬롯당 2회). `saved_at`을 화면에
+      올리려면 세 번째 읽기가 생기므로, 대신 **읽기를 1회로 줄이면서** 값을 같이 꺼낸다 —
+      F5는 봉투를 넓히지만 파일 접근은 오히려 **줄어든다.** 그래서 `detail` 게이트가 필요 없다
+      (게이트의 근거는 "파일 크기에 좌우되는 예측 불가 비용"인데 여기엔 해당하지 않는다).
+
+    ⚠️ meta가 dict가 아니면(비JSON 손상·유효 JSON이지만 비객체) **적용 불가 슬롯**으로 본다.
+      그러지 않으면 `meta["filename"]`이 TypeError를 내고 **현황 탭 전체가 죽는다**
+      (2026-08-09 조사 발견 — store는 fence라 방어를 소비자인 여기 둔다).
+    """
+    try:
+        meta = store.load_meta(appid, profile)
+    except (OSError, ValueError):
+        return False, ""
+    if not isinstance(meta, dict):
+        return False, ""
+    filename = meta.get("filename")
+    if not filename or not isinstance(filename, str):
+        # 파일명이 없으면 본체를 가리킬 수 없다 = 적용 불가. (`profile_file_path`는 이 경우
+        # KeyError를 내므로 여기서 접는 것이 엔진 수락 조건과 같은 결론에 더 안전하게 닿는다.)
+        return False, _saved_label(meta.get("saved_at"))
+    path = os.path.join(store.profile_dir(appid, profile), filename)
+    return os.path.exists(path), _saved_label(meta.get("saved_at"))
+
+
 def _profile_ready(appid, profile):
     """그 프로필을 **실제로 적용할 수 있는가**.
 
@@ -282,19 +324,12 @@ def _profile_ready(appid, profile):
       **라벨이 거짓말을 한다.**
       그래서 판정 기준을 **엔진이 실제로 수락하는 조건과 같게** 맞춘다
       (`engine.apply_profile`: meta 있음 ∧ 본체 파일 존재). 두 곳이 다른 기준을 쓰면 언젠가 어긋난다.
+
+    ★ 판정 자체는 `_slot_view` 한 곳에 있다(F5에서 합쳤다) — 여기와 `get_overview`가 각자
+      판정하면 *"화면에는 저장됐다는데 적용은 거부되는"* 어긋남이 언젠가 생긴다.
+      이 함수는 그 판정의 **이름 붙은 입구**로 남는다(회귀 테스트가 이 이름을 부른다).
     """
-    # ⚠️ meta가 dict가 아니면(유효 JSON이지만 `"text"`·`[1]` 같은 비객체, 또는 비JSON 손상)
-    #   적용 불가 슬롯으로 본다 — 그러지 않으면 store.profile_file_path가 `meta["filename"]`에서
-    #   TypeError를 내고 **get_overview(현황 탭) 전체가 UNEXPECTED로 죽는다**(2026-08-09 조사 발견,
-    #   Codex #5와 같은 버그 클래스의 현황 경로 갈래). store는 fence라 방어를 소비자인 여기 둔다.
-    try:
-        meta = store.load_meta(appid, profile)
-    except (OSError, ValueError):
-        return False
-    if not isinstance(meta, dict):
-        return False
-    path = store.profile_file_path(appid, profile)
-    return bool(path) and os.path.exists(path)
+    return _slot_view(appid, profile)[0]
 
 
 def _disk_state_safe(reg, appid):
@@ -338,6 +373,8 @@ _CONFIRM_MAX = 32             # 토큰이 무한히 쌓이지 않게 — 발급�
 _ADD_GAME_SCOPE = "add_game"  # 등록 토큰의 네임스페이스. profile 값과 절대 겹치지 않는다
 _DELETE_SCOPE = "delete_game"  # 개별 삭제 토큰의 네임스페이스 (M2 — DESIGN-DELETE §3-B)
 _RESET_SCOPE = "reset_all"     # 전체 초기화 토큰의 네임스페이스
+_RESTORE_SCOPE = "restore_backup"   # 복원 토큰의 네임스페이스 (M2 — DESIGN-F6-F8 §2-B)
+_APPLY_ALL_SCOPE = "apply_all"      # 일괄 적용 토큰의 네임스페이스 (M2 — DESIGN-F6-F8 §3-C)
 #: 전체 초기화의 type-to-confirm 문자열 — **고정 단어**다(사용자 확정 2026-08-09).
 #: 등록 수 같은 가변값이 아니다: 위조 방지는 토큰의 몫이고 입력은 *이해 확인* 장치다.
 #: 파괴 규모 고지는 입력이 아니라 모달 본문의 파괴 내역(games·profiles) 표시가 전담한다.
@@ -451,17 +488,35 @@ class Plugin:
         games = []
         for appid in sorted(reg["games"], key=lambda a: reg["games"][a].get("name", a)):
             entry = reg["games"][appid]
+            # ★ F5: 슬롯 상태와 **마지막 저장 시각을 같이** 꺼낸다(meta 읽기 1회 — 위 `_slot_view`).
+            dock_ready, dock_saved = _slot_view(appid, "dock")
+            intl_ready, intl_saved = _slot_view(appid, "internal")
             games.append({
                 "appid": appid,
                 "name": entry.get("name") or ("appid %s" % appid),
-                "has_dock": _profile_ready(appid, "dock"),
-                "has_internal": _profile_ready(appid, "internal"),
+                "has_dock": dock_ready,
+                "has_internal": intl_ready,
+                # ★ F5 — 상시 표시용. **「마지막 저장」이지 「마지막 적용」이 아니다.**
+                #   복원(`restore_backup`)은 `last_applied`를 갱신하지 않으므로(M1 fence 동작),
+                #   화면에 "마지막 적용"을 그리면 복원 뒤에 **낡은 값이 사실인 척** 보인다.
+                #   그래서 이 봉투도 화면도 「저장」만 말한다 — 없는 사실을 만들지 않는다.
+                "saved_at": {"dock": dock_saved, "internal": intl_saved},
                 "disk_matches": _disk_state_safe(reg, appid).get("matches") if detail else None,
+                # ★ 「관리」 탭의 `[백업 N]`이 쓰는 수 — **백엔드가 센다**(counts와 같은 규칙).
+                #   ⚠️ 설계(§2-D ⓐ)는 `detail=true` 전용으로 적었으나 **detail과 무관하게** 낸다:
+                #     관리 탭은 Codex #6 이후 `detail=false`로 부른다(그쪽은 원본 설정 파일을
+                #     전수 sha1 하는 비용을 일부러 뺐다). detail을 켜면 그 낭비가 되살아나고,
+                #     이 값의 실제 비용은 **파일을 읽지 않는 listdir 1회**뿐이라 detail 게이트의
+                #     근거(파일 크기에 좌우되는 예측 불가 비용)가 여기엔 적용되지 않는다.
+                "backups": restore.backup_count(appid),
                 "last_applied": entry.get("last_applied"),
                 "cloud_synced": bool(entry.get("cloud_synced")),
                 "running": appid in running,
             })
-        return _ok(games=games, counts={
+        # ★ F11 ①: 사용자가 정한 표시명. **빈 문자열이면 기본 이름**이고, 그 기본 이름이
+        #   무엇인지는 백엔드가 모른다 — 번역이라 언어에 따라 다르고 판정은 프론트 i18n
+        #   한 곳에만 있어야 한다. 식별자(`dock`/`internal`)는 이 값과 **무관하게 불변**이다.
+        return _ok(games=games, profile_names=labels.stored(reg), counts={
             "total": len(games),
             # ★ 일괄 버튼 라벨이 쓰는 수 — **등록 수가 아니라 그 프로필을 실제로 가진 게임 수**다.
             #   등록 수를 쓰면 없는 게임은 건너뛰므로 라벨이 거짓말을 한다(M1 ui_tk의 교훈).
@@ -487,14 +542,39 @@ class Plugin:
         return _ok(**result)
 
     @route
-    def apply_all(self, profile):
+    def apply_all(self, profile, confirm_token=None):
         """주 동작 — 등록된 전부에 같은 프로필을 적용한다.
+
+        ★★ **2단계 계약이다** (F8, 2026-08-09 사용자 요청 — 오발동 방지). 토큰이 없으면
+          **아무것도 쓰지 않고** `CONFIRM_REQUIRED` + 5버킷 미리보기를 돌려준다. 2차 호출의
+          동작은 현행과 바이트 동일하다 — 하나 거부·나머지 적용·봉투 `ok:true`.
+
+        ★ **항상 묻는다**(would_apply=0이어도). 위협 모델은 데이터 손실이 아니라 **의도치 않은
+          발동 그 자체**다(P2 실기의 드래그 오발동 전례). "변경 없을 때만 조용히 실행"으로
+          조건부를 만들면 방지 장치가 어떤 때는 잡고 어떤 때는 안 잡는 비결정적 물건이 된다.
+
+        ★ 토큰 슬롯 = `("*", scope, reset_fingerprint(reg), profile)` — **4번 칸에 profile을
+          묶는다.** 비워 두면 dock 미리보기에서 발급한 토큰이 `apply_all("internal", token)`에
+          그대로 소비돼, 사용자가 확인한 것과 **다른 방향**의 일괄 쓰기가 확인 없이 실행된다
+          (개정 2판이 잡은 계약 결함). `reset_all`이 challenge를 같은 칸에 넣는 문법 그대로라
+          `_issue`/`_consume`은 한 줄도 고치지 않는다.
+
+        ⚠️ 지문에 **디스크 sha1은 넣지 않는다**(설계 §3-C 후단). 실행 중인 게임이 설정을
+          다시 쓸 때마다 토큰이 무효가 되면 확인→재확인 루프가 생겨 방지 장치가 사용 불능이
+          된다 — 미리보기 숫자의 사소한 낡음은 화면의 「예상」 표기가 감당한다.
 
         ⚠️ **게임별 실패가 있어도 봉투는 `ok:true`다.** 일괄 적용의 불변식은
         "하나가 실패해도 나머지는 계속"이고, 봉투를 실패로 만들면 그 불변식이 봉투 층에서 뒤집힌다.
         무엇이 안 됐는지는 `results[].outcome`으로 전부 올라간다.
         """
         reg = store.load_registry()
+        fp = remove.reset_fingerprint(reg)
+        if not _consume(confirm_token, "*", _APPLY_ALL_SCOPE, fp, profile):
+            # ★ 여기서 **파일을 하나도 건드리지 않는다.** 미리보기는 순수 조회다.
+            preview = confirm.apply_all_preview(reg, profile, _running_appids())
+            return _fail(codes.CONFIRM_REQUIRED,
+                         confirm_token=_issue("*", _APPLY_ALL_SCOPE, fp, profile),
+                         profile=profile, **preview)
         results = engine.apply_all(reg, profile)
         counts = {}
         for row in results:
@@ -744,6 +824,8 @@ class Plugin:
         """
         reg = store.load_registry()
         params = remove.delete_preview(reg, appid)         # 미등록이면 GAME_NOT_REGISTERED
+        # 시각 표기는 **한 함수**를 지난다(F5) — 같은 값이 화면마다 다른 모양으로 보이지 않게.
+        params["saved_at"] = {p: _saved_label(v) for p, v in (params.get("saved_at") or {}).items()}
         fp = remove.delete_fingerprint(appid)
         if not _consume(confirm_token, str(appid), _DELETE_SCOPE, fp, ""):
             # ★ 여기서 **아무것도 지우지 않는다.** 토큰이 없든 위조든 만료든 사이에 상태가
@@ -786,6 +868,10 @@ class Plugin:
                          confirm_token=_issue("*", _RESET_SCOPE, fp, _RESET_CHALLENGE),
                          games=len(reg["games"]),
                          profiles=_profile_total(reg),
+                         # ★ F11 ①: 표시명은 registry settings에 살아서 **이 초기화에 같이
+                         #   지워진다.** 모르고 잃으면 안 되므로 확인창이 미리 말한다
+                         #   (0이면 화면이 그 줄을 안 그린다 — 기존 문법).
+                         named=labels.custom_count(reg),
                          challenge=_RESET_CHALLENGE)
 
         results = []
@@ -823,6 +909,83 @@ class Plugin:
             SESSION, counts, {r["appid"]: r["outcome"] for r in results}, problems)
         store.save_registry(fresh)
         return _ok(results=results, counts=counts)
+
+    # ── 표시명 (F11 ①) ───────────────────────────────────────────────────────
+    @route
+    def set_profile_name(self, profile, name=None):
+        """프로필의 **전역 표시명**을 바꾼다. 화면 글자만 바뀐다.
+
+        ★★ **식별자는 건드리지 않는다.** `dock`/`internal`은 경로 조각(`profiles/<appid>/dock/`)이자
+          RPC 인자이자 registry 키다. 여기서 저장하는 것은 `settings.profile_names`의 **문자열**
+          하나뿐이고, 저장된 프로필·백업·로그·테스트가 무는 문자열은 하나도 움직이지 않는다.
+          (`_VALIDATORS["profile"]`가 여전히 {dock, internal}만 통과시킨다 — 이름을 바꿔도
+          RPC 계약은 그대로다.)
+
+        ★ 빈 값·공백만 입력은 **거부가 아니라 기본값 복귀**다(`labels.normalize`). 거부로 만들면
+          "이름 지우기"를 할 방법이 사라지고, 화면에는 쓸데없는 오류 분기가 생긴다.
+        ★ 상한 초과는 **잘라서 저장하고 결과를 돌려준다** — 화면이 그 값을 그대로 그리므로
+          사용자가 본 것과 저장된 것이 갈리지 않는다.
+        """
+        reg = store.load_registry()
+        names = labels.set_name(reg, profile, name)
+        # ★ 감사 로그는 **`save_registry`보다 먼저** (QA R4).
+        decky.logger.info("set_profile_name session=%s profile=%s name=%r",
+                          SESSION, profile, names.get(str(profile), ""))
+        store.save_registry(reg)
+        return _ok(profile_names=names)
+
+    # ── 백업 복원 (P9) ───────────────────────────────────────────────────────
+    @route
+    def list_backups(self, appid):
+        """그 게임의 백업 목록. **읽기 전용 — 아무것도 쓰지 않는다**(`discover_games`와 같은 지위).
+
+        파일명 파싱·정렬·개수는 **전부 백엔드**가 한다(`restore.backup_rows`). 프론트가
+        문자열을 쪼개면 판정이 두 곳으로 갈리고, 그 순간 화면이 실제와 다른 것을 말한다.
+        """
+        reg = store.load_registry()
+        engine.game_or_fail(reg, appid)                 # 미등록 → GAME_NOT_REGISTERED
+        return _ok(backups=restore.backup_rows(appid))
+
+    @route
+    def restore_backup(self, appid, backup_id, confirm_token=None):
+        """백업 하나를 **디스크(게임 설정 파일)** 로 되돌린다 — 프로필 슬롯은 건드리지 않는다.
+
+        ★★ **2단계 시맨틱**이다. 여기까지가 ①(디스크 복원)이고, 그 내용을 프로필 슬롯에
+          반영하는 ②는 **기존 저장 흐름**(`save_profile`)이 맡는다. 복합 RPC로 묶지 않는다 —
+          묶으면 한 호출에 확인이 둘(복원 확인 + 덮어쓰기 확인) 겹치는 새 계약이 생긴다.
+          문 두 개를 각자 지나는 것이 "가드는 문 하나에서만"의 올바른 적용이다.
+
+        ★ 판정은 **3-상태**다(`restore.needs_confirm`):
+          `already`는 **엔진을 부르기 전에** 돌려준다 — 엔진에는 already 스킵이 없어서
+          낙하시키면 같은 백업을 다시 누를 때마다 대피본이 쌓여 **백업 링이 밀린다.**
+          `proceed`(설정 파일 없음)는 잃을 것이 없어 묻지 않는다. `confirm`만 토큰을 요구한다.
+
+        ⚠️ 토큰은 (디스크 sha1, 백업 파일 sha1)에 묶인다 — 확인창 사이에 게임이 설정을 다시
+          쓰거나 백업이 prune되면 무효가 되고 갱신된 params로 다시 묻는다(TOCTOU).
+        """
+        reg = store.load_registry()
+        # 실행 중 게임·경로 봉쇄·미등록은 여기서 `Refused`로 나간다(route 데코레이터가 봉투에 싣는다).
+        state, params = restore.needs_confirm(reg, appid, backup_id)
+        if state == "already":
+            # 쓰기 0 · 대피 0 · 링 소모 0. `apply_all`의 already와 같은 판단이다.
+            return _ok(outcome="already", **params)
+        if state == "confirm":
+            fp_disk, fp_backup = restore.fingerprint(reg, appid, backup_id)
+            if not _consume(confirm_token, str(appid), _RESTORE_SCOPE, fp_disk, fp_backup):
+                # ★ 여기서 **파일을 건드리지 않는다.** 없든 위조든 만료든 상태가 바뀌었든
+                #   전부 같은 자리다 — 화면이 할 일은 "다시 물어보기" 하나뿐이다.
+                return _fail(codes.CONFIRM_REQUIRED,
+                             confirm_token=_issue(str(appid), _RESTORE_SCOPE, fp_disk, fp_backup),
+                             **params)
+        result = engine.restore_backup(
+            reg, appid, os.path.join(store.backups_dir(appid), str(backup_id)))
+        # ★ 감사 로그는 **`save_registry`보다 먼저** (QA R4). 뒤에 두면 저장이 실패해 예외가
+        #   나가는 순간 **설정 파일은 이미 바뀌었는데 로그가 한 줄도 없는** 상태가 된다.
+        decky.logger.info(
+            "restore_backup session=%s appid=%s backup=%s kind=%s state=%s",
+            SESSION, appid, backup_id, params["kind"], state)
+        store.save_registry(reg)
+        return _ok(outcome="restored", **params, **result)
 
     # ── 생명주기 ─────────────────────────────────────────────────────────────
     async def _main(self):

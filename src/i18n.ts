@@ -92,13 +92,46 @@ function resolveAnyway(): void {
 }
 
 /**
+ * 프로필 **표시명 덮어쓰기** (F11 ①) — 사용자가 정한 이름이 `PROFILE_DOCK`/`PROFILE_INTERNAL`을
+ * 대신한다.
+ *
+ * ★★ **왜 i18n 층인가**: 화면에서 프로필 이름이 나오는 자리는 이미 전부 그 두 키를 지난다
+ *   (버튼 라벨·확인창·요약·백업 종류 …). 여기서 한 번 갈아 끼우면 **모든 자리가 자동으로**
+ *   따라온다 — 컴포넌트마다 이름을 프롭으로 나르면 언젠가 한 곳이 빠지고, 빠진 곳만
+ *   옛 이름을 말한다. *"두 곳에서 판정하면 언젠가 어긋난다"*의 표시 계층 판이다.
+ * ★ **식별자는 이 함수가 절대 건드리지 않는다.** 바뀌는 것은 `t()`가 돌려주는 글자뿐이고
+ *   `dock`/`internal`은 경로·RPC 인자·registry 키로 그대로 남는다.
+ * ★ 빈 값·공백만은 **기본 이름으로 되돌린다**(백엔드도 같은 규칙으로 정규화한다 —
+ *   여기 방어는 봉투가 손상됐을 때 빈 라벨이 화면에 남지 않게 하는 마지막 그물이다).
+ */
+const PROFILE_NAME_KEYS = { dock: "PROFILE_DOCK", internal: "PROFILE_INTERNAL" } as const;
+const overrides: Partial<Record<StringKey, string>> = {};
+
+export function setProfileNames(names?: { dock?: string; internal?: string } | null): void {
+  for (const slot of ["dock", "internal"] as const) {
+    const key = PROFILE_NAME_KEYS[slot];
+    const value = (names?.[slot] ?? "").trim();
+    if (value) overrides[key] = value;
+    else delete overrides[key];
+  }
+}
+
+/**
+ * **덮어쓰기를 무시한** 기본 문구. 표시명 편집창이 *"비우면 무엇으로 돌아가는지"*를 말할 때만
+ * 쓴다 — `t()`는 사용자가 정한 이름을 돌려주므로 그것으로는 기본 이름을 보여줄 수 없다.
+ */
+export function tDefault(key: StringKey): string {
+  return TABLES[current]?.[key] ?? en[key] ?? key;
+}
+
+/**
  * `{name}` 자리를 params로 채운다.
  *
  * 키가 없으면 **키 문자열 자체**를 돌려준다 — 빈 화면보다 낫고, 무엇이 빠졌는지도 보인다.
  * (P5의 집합 항등 테스트가 이 상황 자체를 없애는 것이 본래 방어선이다.)
  */
 export function t(key: StringKey, params?: Record<string, string | number>): string {
-  const raw = TABLES[current]?.[key] ?? en[key] ?? key;
+  const raw = overrides[key] ?? TABLES[current]?.[key] ?? en[key] ?? key;
   if (!params) return raw;
   return raw.replace(/\{(\w+)\}/g, (whole, name: string) =>
     name in params ? String(params[name]) : whole,

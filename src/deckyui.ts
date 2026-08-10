@@ -15,11 +15,13 @@ import {
   Focusable,
   // ⚠️ `ModalRoot`는 **타입이 `any`다**(`@decky/ui` 4.11.0 `Modal.d.ts:47`) — 기존 관례대로
   //    여기에 명시해 둔다. 타입 검사가 이 컴포넌트에 대해서는 아무것도 보장하지 않는다.
-  //    ★ 지금 화면에서 직접 쓰지는 않는다. 전체 초기화 확인창의 **폴백 경로**(설계 §4-D ②:
-  //      `bOKDisabled`가 런타임에 무효면 lsfg-vk처럼 자작 모달 + 자체 버튼 disabled)를 위한
-  //      것이고, **여기 올려 두는 것 자체가 관측 장치**다 — self-check가 런타임에 실제로
+  //    ★ **주 경로에서 쓴다**(정정 2026-08-10 QA R5: 예전 주석은 "직접 쓰지 않는다"였다) —
+  //      「관리」 탭의 백업 목록(`ManageTab.BackupList`)이 이것으로 뜬다. 그 창의 답은
+  //      예/아니오가 아니라 **여러 행 중 하나 고르기**라 `ConfirmModal`이 맞지 않는다.
+  //      전체 초기화 확인창의 **폴백 경로**(설계 §4-D ②: `bOKDisabled`가 런타임에 무효면
+  //      lsfg-vk처럼 자작 모달 + 자체 버튼 disabled)도 이 컴포넌트를 쓴다.
+  //      **여기 올려 두는 것 자체가 관측 장치**이기도 하다 — self-check가 런타임에 실제로
   //      얻어지는지 보고, 못 얻으면 `uicheck_missing`으로 백엔드 로그에 남는다.
-  //      폴백이 필요해진 순간에야 "그런데 ModalRoot도 undefined였다"를 알게 되면 늦다.
   ModalRoot,
   Navigation,
   PanelSection,

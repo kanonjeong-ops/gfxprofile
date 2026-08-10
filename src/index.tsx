@@ -3,21 +3,24 @@ import { useCallback, useEffect, useState } from "react";
 import {
   applyAll,
   getOverview,
+  type ApplyAllConfirmParams,
   type ApplyRow,
   type Outcome,
   type Overview,
   type Profile,
 } from "./rpc";
-import { ensureLang, t, tCode, type StringKey } from "./i18n";
+import { ensureLang, setProfileNames, t, tCode, type StringKey } from "./i18n";
 import { PLUGIN_VERSION } from "./version";
 import { BulkApplyButton } from "./BulkApplyButton";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { StatusPage } from "./StatusPage";
 import {
+  ConfirmModal,
   DialogButton,
   Navigation,
   PanelSection,
   PanelSectionRow,
+  showModal,
   titleClass,
   uicheckMissing,
 } from "./deckyui";
@@ -113,6 +116,63 @@ function buildSummary(
   return { headline, hints };
 }
 
+/**
+ * 일괄 적용 확인창 (F8) — **오발동을 막는 마찰**이다.
+ *
+ * ★★ 이 모달은 설계 정본 §9-E 모달 정당성 기준(파괴적 **그리고** 저빈도)의 **예외**다.
+ *   일괄 적용은 주 동작이고 매 부팅 누르는 고빈도 버튼이며 파괴적이지도 않다(백업이 선행되는
+ *   정상 쓰기). 그럼에도 붙이는 근거는 **최신 사용자 결정(2026-08-09 — 오발동 방지 명시 요청)**이
+ *   기준에 우선한다는 것이다. 전례가 실재한다: P2 실기에서 결과 목록을 드래그하다
+ *   **의도하지 않은 일괄 적용이 실행됐다.**
+ *
+ * ★ 숫자는 **전부 백엔드가 센 값**이고 화면은 「예상」이라고 말한다 — 실행 결과의 정본은
+ *   적용 후 요약과 백엔드 로그다. 0인 버킷 줄은 그리지 않는다(`counts.incomplete`의 기존 규칙).
+ * ★ `bDestructiveWarning`은 **붙이지 않는다**(세션 잠정 확정) — 일괄 적용은 파괴가 아니라
+ *   주 동작이고, 붙이면 "저장 덮어쓰기·삭제 급"과 시각 언어가 뭉개진다. C 묶음 재검토 등재분.
+ * ★ **OK는 항상 활성**이다. `running_refused`는 고지 줄에만 쓰이고 활성 조건에 절대 들어가지
+ *   않는다 — 조건이 되는 순간 E1(실행 중 게임이 일괄 적용을 막지 않는다)이 모달 층에서 뒤집힌다.
+ */
+function ApplyAllConfirm({
+  params,
+  onConfirm,
+  closeModal,
+}: {
+  params: ApplyAllConfirmParams;
+  onConfirm: () => void;
+  /** `showModal`이 최상위 엘리먼트에 주입한다. 우리가 감싼 컴포넌트가 받으므로 그대로 넘긴다. */
+  closeModal?: () => void;
+}) {
+  const profileName = t(PROFILE_KEY[params.profile]);
+  // 0인 버킷은 줄에서 뺀다 — 없는 것을 0으로 나열하면 정작 중요한 숫자가 묻힌다.
+  const parts = (
+    [
+      ["APPLY_ALL_PREVIEW_APPLY", params.would_apply],
+      ["APPLY_ALL_PREVIEW_ALREADY", params.already],
+      ["APPLY_ALL_PREVIEW_NO_PROFILE", params.no_profile],
+      ["APPLY_ALL_PREVIEW_RUNNING", params.running_refused],
+      ["APPLY_ALL_PREVIEW_CANNOT", params.cannot_apply],
+    ] as const
+  )
+    .filter(([, n]) => n > 0)
+    .map(([key, n]) => t(key, { n }));
+  return (
+    <ConfirmModal
+      strTitle={t("APPLY_ALL_CONFIRM_TITLE", { profile: profileName })}
+      strDescription={
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          <div>{t("APPLY_ALL_CONFIRM_BODY", { profile: profileName })}</div>
+          {parts.length > 0 ? <div>{t("APPLY_ALL_CONFIRM_EXPECT", { list: parts.join(" · ") })}</div> : null}
+          <div style={HINT_STYLE}>{t("APPLY_ALL_CONFIRM_NOTE")}</div>
+        </div>
+      }
+      strOKButtonText={t("APPLY_ALL_CONFIRM_OK")}
+      strCancelButtonText={t("CANCEL")}
+      closeModal={closeModal}
+      onOK={onConfirm}
+    />
+  );
+}
+
 // ★ 마지막 일괄 적용 요약은 **컴포넌트 밖**에 둔다.
 //   QAM을 닫으면 패널이 언마운트되므로(실측: 다시 열면 요약 줄이 사라졌다) 상태에만 두면
 //   "무슨 일이 있었는지"가 창을 닫는 순간 없어진다. 결과는 화면 수명보다 오래 남아야 한다.
@@ -139,6 +199,8 @@ function Content() {
     getOverview().then(
       (res) => {
         if (res.ok) {
+          // 표시명(F11 ①)을 먼저 반영한다 — 라벨이 그려지기 전이어야 이름이 안 깜빡인다.
+          setProfileNames(res.data.profile_names);
           setOverview(res.data);
           setFailure(null);
         } else {
@@ -184,12 +246,44 @@ function Content() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
+  /**
+   * 일괄 적용 — **1차 호출은 미리보기, 2차 호출이 실행**이다(F8).
+   *
+   * ★ 판정은 백엔드에만 있다. 여기서 "무엇이 적용될까"를 다시 세지 않는다 — 프론트가 세면
+   *   두 곳에서 세는 것이고 언젠가 어긋난다(`counts`와 같은 규칙).
+   * ★★ 확인창을 **못 띄우면 그 사실을 말한다**(2026-08-07 QA 반려 ②). `showModal`은 런타임에
+   *   얻어지는 값이라 `undefined`일 수 있고, 그러면 `TypeError`가 `.then` 콜백 안에서 나
+   *   **아무 흔적 없이 버튼이 죽는다.** 안전(=토큰이 없어 실행되지 않음)과 진단 가능성은
+   *   다른 요건이다.
+   */
   const runApplyAll = useCallback(
-    (profile: Profile) => {
+    (profile: Profile, token?: string) => {
       setBusy(true);
-      applyAll(profile)
+      applyAll(profile, token)
         .then(
           (res) => {
+            if (!res.ok && res.code === "CONFIRM_REQUIRED") {
+              // ⚠️ 실패가 아니라 **흐름 신호**다(FLOW_CODES) — 오류 문구로 그리지 않는다.
+              //    이 시점에 백엔드는 파일을 1바이트도 쓰지 않았다.
+              const p = res.params as unknown as ApplyAllConfirmParams;
+              try {
+                showModal(
+                  <ApplyAllConfirm
+                    params={p}
+                    // 받은 토큰을 **그대로** 되돌린다. 지어낼 수 없고, 고쳐 봐야 거부된다.
+                    onConfirm={() => runApplyAll(profile, p.confirm_token)}
+                  />,
+                );
+              } catch (err) {
+                failTag(`apply-confirm-modal-failed err=${String(err)}`);
+                // ⚠️ code에 `"UNEXPECTED"`를 넣으면 안 된다 — `tCode`는 **i18n에 등재된 코드면
+                //   그 문구를 이긴다**(단일 관문의 정의). 그러면 "예기치 못한 오류"가 떠서
+                //   *확인창이 안 떴다*는 진짜 사유가 사라진다. 등재되지 않은 코드를 줘야
+                //   fallback(=아래 키)이 화면에 나온다.
+                setFailure({ key: "APPLY_CONFIRM_MODAL_FAILED", code: "MODAL" });
+              }
+              return;
+            }
             if (res.ok) {
               const { headline, hints } = buildSummary(profile, res.data.results, res.data.counts);
 
