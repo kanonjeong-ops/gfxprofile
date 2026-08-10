@@ -29,7 +29,10 @@
   말하는데 실제로는 1개만 거부된다. 중복 산정 규칙(게임 하나는 정확히 한 버킷)도 여기서 잠긴다.
 
 ### 이 파일이 잠그는 것
-  ① 게임별 **버킷 ↔ outcome 1:1**(위 표 전수)
+  ① 게임별 **버킷 ↔ outcome 대응**(위 표 전수). ⚠️ 이것을 *"1:1"*이라 부르지 않는다
+     (2026-08-10 최종 QA): `cannot_apply`는 `refused`(GAME_RUNNING 제외)와 `error`를 **함께**
+     받는다. 잠그는 것은 ⓐ 모든 outcome이 어느 버킷엔가 들고 ⓑ 게임 하나는 한 버킷에만 들며
+     ⓒ 어긋나도 "적용된다 해 놓고 안 되는" **안전한 방향**이라는 것이다.
   ② **격리 계약** — meta 손상 2건이 섞여 있어도 나머지 게임이 정상 분류된다.
      격리가 없으면 미리보기가 통째로 죽어 `CONFIRM_REQUIRED`가 영영 안 나오고
      **일괄 적용 버튼이 전면 불능**이 된다(반증이 잡은 최심각 결함).
@@ -39,7 +42,7 @@
 ⚠️ 660은 **설계 §3-B의 적대 세계 열거에 없던 케이스**다(2026-08-10 qa-lead가 찾았다).
   `entry["config_path"]`가 없으면 엔진은 `apply_profile` 진입 즉시 KeyError → `error`인데
   미리보기는 그 자리를 안 보고 `would_apply`로 셌다 — *"적용된다 해 놓고 안 되는"* 어긋남이다.
-  미러에 그 판정을 더해 1:1을 회복했고, 이 세계가 그것을 잠근다.
+  미러에 그 판정을 더해 대응을 회복했고, 이 세계가 그것을 잠근다.
   (남은 어긋남 하나 — `config_path`가 **심볼릭 링크**여서 G11이 거부하는 경우 — 는 설계가
    선언한 한계다: 실행 시점 가드는 미리보기가 예측하지 않는다. 방향은 같은 쪽으로 안전하다.)
 
@@ -219,7 +222,7 @@ def main_test():                                                # noqa: C901
             if per_game.get(appid) != want:
                 P("① [%s] 미리보기 버킷이 %s다(기대 %s)" % (appid, per_game.get(appid), want))
 
-        # ── ① 실제 실행과 1:1 ────────────────────────────────────────────────
+        # ── ① 실제 실행과의 대응(버킷이 그 outcome을 받는가) ────────────────────
         #    ★ 미리보기를 **먼저** 재고 나서 실행한다(순서를 바꾸면 미리보기가 실행 후 세계를 본다).
         rows = engine.apply_all(copy.deepcopy(reg), PROFILE)
         outcomes = {r["appid"]: (r["outcome"], r.get("code")) for r in rows}
@@ -228,7 +231,7 @@ def main_test():                                                # noqa: C901
         for appid, want in EXPECTED.items():
             outcome, code = outcomes.get(appid, ("<없음>", None))
             if outcome not in ALLOWED[want]:
-                P("★① [%s] 미리보기=%s인데 실제 outcome=%s(code=%s) — 1:1 대응이 깨졌다"
+                P("★① [%s] 미리보기=%s인데 실제 outcome=%s(code=%s) — 버킷이 그 결과를 안 받는다"
                   % (appid, want, outcome, code))
             if want == "running_refused" and code != "GAME_RUNNING":
                 P("★① [%s] running_refused로 셌는데 실제 거부 사유가 %s다 — 실행 중이 아니라 "

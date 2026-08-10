@@ -10,7 +10,9 @@ registry 값(`last_applied`)이자 백업 파일명의 tag(`profile_dock`)다. �
 태워 본다("경로가 있다"와 "동작한다"는 다르다).
 
 ### 잠그는 것
-  ① **식별자 불변** — 이름 변경 후: 디렉터리·meta 경로 그대로 · registry games/entry 불변 ·
+  ① **식별자 불변** — 이름 변경 후: 디렉터리·meta 경로 그대로 · **프로필/백업 트리의 파일
+     바이트 지문 전량 불변**(2026-08-10 최종 QA 결함 2 — 경로만 보면 본문을 덮는 변이가 통과한다) ·
+     registry games/entry 불변 ·
      `apply_all("dock")`·`save_profile(appid,"dock")`이 그대로 동작 · 백업 tag 불변 ·
      바뀐 것은 `settings.profile_names` **하나뿐**(registry 전후 차이를 실제로 대조한다).
   ② 저장·조회 왕복(`set_profile_name` → `get_overview.profile_names`).
@@ -46,6 +48,26 @@ U1 = pathlib.Path(
 DOCK = b"quality=dock\nshadows=high\nsource=DOCK-PROFILE\n"
 INTERNAL = b"quality=intl\nshadows=low_\nsource=INTL-PROFILE\n"
 SAVED_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
+
+
+def tree_sha(root):
+    """디렉터리 전체의 `상대경로 → sha1`. **경로 존재가 아니라 내용까지** 잰다.
+
+    ⚠️ 2026-08-10 최종 QA 결함 2: 예전에는 경로 존재·basename 집합만 봤다. 그러면 표시명 변경이
+      **기존 백업·프로필의 본문만 덮는** 변이가 통과한다 — "식별자 불변"이라는 이 파일의 핵심
+      주장이 실제 측정보다 강했던 것이다. 지금은 바이트까지 대조한다.
+    """
+    import hashlib
+    out = {}
+    for base, _dirs, files in os.walk(root):
+        for name in files:
+            path = os.path.join(base, name)
+            try:
+                with open(path, "rb") as fh:
+                    out[os.path.relpath(path, root)] = hashlib.sha1(fh.read()).hexdigest()
+            except OSError:
+                out[os.path.relpath(path, root)] = "unreadable"
+    return out
 
 
 def boot(tmp):
@@ -152,6 +174,13 @@ def main_test():                                                # noqa: C901
         dock_dir = store.profile_dir("100", "dock")
         dock_meta = store.profile_meta_path("100", "dock")
         backups_before = {os.path.basename(p) for p in store.list_backups("100")}
+        # ★ 경로가 아니라 **내용**을 떠 둔다(결함 2). 프로필 본체·meta·백업 전량이 대상이다.
+        profiles_root = os.path.join(store.data_dir(), "profiles")
+        backups_root = os.path.join(store.data_dir(), "backups")
+        profiles_sha_before = tree_sha(profiles_root)
+        backups_sha_before = tree_sha(backups_root)
+        if not profiles_sha_before or not backups_sha_before:
+            P("★① 사전 조건 실패 — 지문을 뜰 프로필/백업이 없다(아무것도 못 잰다)")
         if not os.path.isdir(dock_dir) or not os.path.exists(dock_meta):
             P("★① 사전 조건 실패 — 이름 변경 전에 이미 dock 경로가 없다")
 
@@ -165,6 +194,15 @@ def main_test():                                                # noqa: C901
             P("★★① 표시명을 바꿨더니 **프로필 디렉터리/메타가 사라졌다** — 식별자가 표시명을 따라갔다")
         if {os.path.basename(p) for p in store.list_backups("100")} != backups_before:
             P("★★① 표시명 변경이 백업 파일명을 건드렸다 — tag(`profile_dock`)는 식별자다")
+        # ★ 파일 **내용**까지 그대로인가(결함 2) — 이름만 남기고 본문을 덮는 변이를 잡는다.
+        prof_diff = sorted(k for k in set(profiles_sha_before) | set(tree_sha(profiles_root))
+                           if profiles_sha_before.get(k) != tree_sha(profiles_root).get(k))
+        bk_diff = sorted(k for k in set(backups_sha_before) | set(tree_sha(backups_root))
+                         if backups_sha_before.get(k) != tree_sha(backups_root).get(k))
+        if prof_diff:
+            P("★★① 표시명 변경이 **프로필 파일 내용**을 바꿨다 — %s" % prof_diff[:5])
+        if bk_diff:
+            P("★★① 표시명 변경이 **백업 파일 내용**을 바꿨다 — %s" % bk_diff[:5])
         after_reg = store.load_registry()
         if after_reg["games"] != before_reg["games"]:
             P("★★① 표시명 변경이 registry의 games를 건드렸다")

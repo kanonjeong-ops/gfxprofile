@@ -17,6 +17,9 @@
   ⑤ **디스크 sha1은 지문에 없다**(의도적 배제, §3-C 후단) — 게임이 설정 파일을 다시 써도
      토큰은 유효하다. 넣으면 확인→재확인 루프가 생겨 방지 장치가 사용 불능이 된다.
   ⑥ **2차 실행이 현행 apply_all과 동일** — 게임별 outcome 전량·봉투 ok:true·하나 거부 나머지 적용.
+     ★ 그리고 ⑥″에서 **같은 초기 세계 × 두 경로**(route 2차 vs `engine.apply_all` 직접)를 돌려
+       **결과 행 전량(순서 포함)과 파일계 전체 바이트**를 대조한다(G10). 행 수·counts만 보면
+       순서 뒤집기·이름 변조·무관한 파일 쓰기가 전부 통과한다(2026-08-10 최종 QA 결함 1).
   ⑦ 미리보기 params가 화면이 필요로 하는 5버킷 + profile + 토큰을 싣는다.
 
 ★ 거짓 검사 방지: 각 단언마다 "FAIL이 되는 입력"을 같이 만든다 —
@@ -71,11 +74,52 @@ def mkgame(tmp, engine, store, appid, name, internal=True):
     return cfg
 
 
+class _FrozenClock:
+    """`store`가 쓰는 시계를 **얼린다** — 백업 파일명(`%Y%m%d-%H%M%S`)과 `saved_at`이 실행 시각에
+    좌우되면 두 번의 실행이 **초 경계만 달라도** 다른 바이트를 낸다. 재려는 것은 시간이 아니라
+    *"route 경유와 엔진 직접 호출이 같은 것을 쓰는가"*이므로, 시간을 상수로 만들어 그 축을 없앤다.
+    (테스트가 시간을 흉내 내는 것이 아니라 **비교에서 시간을 제거**하는 것이다.)"""
+
+    def __init__(self, real):
+        self._real = real
+
+    def strftime(self, fmt, *args):
+        if fmt == "%Y%m%d-%H%M%S":
+            return "20260101-000000"
+        if fmt == "%Y-%m-%dT%H:%M:%S%z":
+            return "2026-01-01T00:00:00+0900"
+        return self._real.strftime(fmt, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def snapshot_world(tmp, keep):
+    """합성 세계 전체를 `keep`으로 복사해 둔다(데이터 루트 + 게임 설정 파일 전부)."""
+    if keep.exists():
+        shutil.rmtree(keep)
+    shutil.copytree(tmp, keep, symlinks=True)
+
+
+def restore_world(tmp, keep):
+    """스냅샷을 **제자리로** 되돌린다. 경로가 그대로여야 registry의 `config_path`가 유효하다 —
+    다른 루트로 복사해 비교하면 registry가 원본을 가리켜 격리가 깨진다."""
+    for child in tmp.iterdir():
+        if child == keep:
+            continue
+        shutil.rmtree(child) if child.is_dir() else child.unlink()
+    for child in keep.iterdir():
+        target = tmp / child.name
+        shutil.copytree(child, target, symlinks=True) if child.is_dir() else shutil.copy2(child, target)
+
+
 def world_sha(tmp):
     """합성 세계 **전 파일**의 (상대경로 → sha1). 미리보기가 무쓰기인지를 **효과로** 잰다."""
     import hashlib
     out = {}
     for root, _dirs, files in os.walk(tmp):
+        if os.sep + ".snapshot" in root + os.sep:
+            continue                       # 비교용 사본은 세계의 일부가 아니다
         for name in files:
             path = os.path.join(root, name)
             try:
@@ -146,6 +190,64 @@ def main_test():                                                # noqa: C901
             P("⑦ 미리보기 개수가 실물과 다르다 — would_apply=%s no_profile=%s (기대 2·1)"
               % (p.get("would_apply"), p.get("no_profile")))
         token = p.get("confirm_token")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # ⑥″ ★ G10 — **2차 실행 = 엔진 직접 호출과 바이트 동일** (2026-08-10 최종 QA 결함 1)
+        #
+        #   ⚠️ **아무 실행도 지나지 않은 세계에서** 잰다. 앞에서 한 번이라도 실행하면 그때
+        #     route가 남긴 것이 기준 스냅샷에 들어가 두 경로 모두에 존재하게 되고,
+        #     '무관한 파일을 더 쓰는' 변이를 **검사가 눈감는다**(실증: 그 변이가 통과했다).
+        #
+        #   전까지는 "행 수와 counts가 맞나"만 봤다. 그러면 route가 행 순서를 바꾸거나
+        #   name·note·code를 갈아 끼우거나 무관한 파일을 더 써도 통과한다 — 그런데 이 불변식은
+        #   *"route 층에서 미리 걸러내지 않는다"*는 재제안 금지의 **근거로 쓰이는 계약**이다.
+        #   근거가 약하면 그 금지도 약해진다. 그래서 **같은 초기 세계**에서 두 경로를 각각 돌려
+        #   결과 행 전량(순서 포함)과 파일계 전체를 대조한다.
+        #
+        #   ⚠️ 두 실행이 시간에 좌우되지 않도록 시계를 얼린다(백업 파일명·saved_at).
+        # ═══════════════════════════════════════════════════════════════════
+        keep = tmp / ".snapshot"
+        real_clock, store.time = store.time, _FrozenClock(store.time)
+        try:
+            snapshot_world(tmp, keep)
+
+            # (A) route 경유 2차 실행
+            env_a = rpc(main, "apply_all", "dock")
+            tok_a = params_of(env_a).get("confirm_token")
+            env_a = rpc(main, "apply_all", "dock", confirm_token=tok_a)
+            rows_a = data_of(env_a).get("results")
+            world_a = world_sha(tmp)
+
+            restore_world(tmp, keep)
+
+            # (B) 엔진 직접 호출 — route가 하는 나머지(저장)는 그대로 흉내 낸다
+            reg_b = store.load_registry()
+            rows_b = engine.apply_all(reg_b, "dock")
+            store.save_registry(reg_b)
+            world_b = world_sha(tmp)
+
+            if not env_a.get("ok"):
+                P("⑥″ 사전 조건 실패 — route 2차 실행이 성공하지 않았다 (%s)" % env_a)
+            if rows_a != rows_b:
+                P("★⑥″ route의 결과 행이 엔진 직접 호출과 다르다 — 순서·이름·사유가 갈렸다\n"
+                  "      route=%s\n      engine=%s" % (rows_a, rows_b))
+            diff = sorted(k for k in set(world_a) | set(world_b) if world_a.get(k) != world_b.get(k))
+            if diff:
+                P("★⑥″ 두 경로가 만든 **파일계가 다르다** — %s" % diff[:6])
+            # 계측기 반증: 이 비교가 실제로 무언가를 재는가(두 실행이 세계를 바꾸긴 했는가)
+            base = world_sha(keep)
+            if not [k for k in set(base) | set(world_b) if base.get(k) != world_b.get(k)]:
+                P("⑥″ 계측기 무효 — 적용이 세계를 하나도 안 바꿨다(대조가 항진식이다)")
+            if not rows_b:
+                P("⑥″ 계측기 무효 — 엔진 기준 결과 행이 비었다")
+        finally:
+            store.time = real_clock
+            # ★ 뒤 절들이 보던 세계를 그대로 돌려준다 — 이 절이 세계를 바꿔 놓으면
+            #   다음 단언들이 **자기가 만들지 않은 상태** 위에서 돌아 거짓 FAIL을 낸다(실제로 냈다).
+            if keep.exists():
+                restore_world(tmp, keep)
+                shutil.rmtree(keep, ignore_errors=True)
+
 
         # 계측기 반증: **정상 2차 실행에서는 세계가 실제로 바뀐다.**
         # (안 바뀌면 위 ①은 "항상 안 바뀜"을 본 것이므로 무의미하다.)

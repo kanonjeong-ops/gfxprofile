@@ -109,11 +109,16 @@ def add_game_needs_confirm(warnings):
 #   재현**한다. 그래서 계약을 문서가 아니라 **테스트로** 못박는다
 #   (`qa/test_apply_preview_equivalence.py` — 적대 합성 세계 전수).
 #
-# ★ 버킷은 **5개**이고 엔진 `BULK_OUTCOMES` 5종과 1:1이다(engine.py:551).
+# ★ 버킷은 **5개**이고, 엔진 `BULK_OUTCOMES` 5종(engine.py:551)을 **빠짐없이 안전하게 분류**한다.
+#   ⚠️ 표현 주의(2026-08-10 최종 QA): 이것을 *"1:1"*이라고 부르면 안 된다 — 아래 표대로
+#     `running_refused`는 `refused` 중 실행 중인 것만, `cannot_apply`는 나머지 `refused`와
+#     `error`를 **함께** 받는다. 즉 버킷→outcome은 다대일이 섞인 **전사(全射) 분류**이고,
+#     보장하는 것은 ① 모든 outcome이 어느 버킷엔가 든다 ② 게임 하나는 정확히 한 버킷에만 든다
+#     ③ 어긋나더라도 "적용된다 해 놓고 안 되는" **안전한 방향**이다 — 이 셋이다.
 #   4버킷(refused/error를 would_apply로 셈)은 반증에서 잡힌 오산이다 —
 #   "적용 예상 9개"라고 해 놓고 실제로는 3개만 되는 화면이 나온다.
-#: 미리보기 버킷 ↔ 엔진 outcome: would_apply→applied · already→already ·
-#: no_profile→no_profile · running_refused→refused(GAME_RUNNING) · cannot_apply→refused(기타)/error
+#: 미리보기 버킷 ← 엔진 outcome: would_apply←applied · already←already ·
+#: no_profile←no_profile · running_refused←refused(GAME_RUNNING) · cannot_apply←refused(기타)+error
 APPLY_BUCKETS = ("would_apply", "already", "no_profile", "running_refused", "cannot_apply")
 
 
