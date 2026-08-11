@@ -12,6 +12,7 @@
 """
 
 import copy
+import hashlib
 import inspect
 import json
 import logging
@@ -38,7 +39,8 @@ if not _RUNTIME_DIR:
     )
 os.environ["GFXPROFILE_DATA_DIR"] = _RUNTIME_DIR
 
-from gfxp import codes, confirm, discover, engine, labels, lang, remove, restore, store  # noqa: E402  (격리 뒤에 import해야 한다)
+from gfxp import (codes, confirm, discover, engine, exclude, labels, lang,  # noqa: E402
+                  remove, restore, store)                     # (격리 뒤에 import해야 한다)
 
 #: 로드 1회당 하나. cef_log·백엔드 로그를 이번 로드분으로 좁히는 토큰이다.
 SESSION = "%d-%s" % (int(time.time()), secrets.token_hex(3))
@@ -230,9 +232,17 @@ def _discover_entries(reg):
     내면** 같은 게임이 2행 나온다. 이 기기 실측은 0건이지만(껍데기 쪽은 후보가 0개라
     `discover`가 이미 걸러 낸다) 구조적으로 발생 가능하다. 후보가 많은 쪽을 남긴다 —
     껍데기(후보 0~적음)가 진짜를 밀어내지 않는다.
+
+    ★ **감지 제외(A9)의 필터도 여기 한 곳뿐이다**(설계 §8-C). dedup **이전**에 거른다 —
+      제외된 appid가 dedup 경쟁에 끼면 계산만 늘고 결과는 같다. `discover.py`는 fence라
+      인자를 늘리지 않는다: 제외는 **탐지 알고리즘이 아니라 표시 정책**이고, 그 정책을
+      두 route가 공유하는 자리가 바로 여기다.
     """
+    excluded = exclude.excluded_map(reg)
     best = {}
     for entry in discover.discover(known_appids=set(reg["games"])):
+        if entry["appid"] in excluded:
+            continue
         prev = best.get(entry["appid"])
         if prev is None or len(entry["candidates"]) > len(prev["candidates"]):
             best[entry["appid"]] = entry
@@ -288,8 +298,22 @@ def _saved_label(value):
     return text
 
 
+def _excluded_rows(reg):
+    """감지 제외 목록을 봉투용으로 — `[{appid, name, excluded_at_label}]`.
+
+    ★ `discover_games`와 `include_game`이 **같은 헬퍼**를 지난다(설계 §8-D R-10). 봉투 모양이
+      route마다 다르면 화면이 route별 분기를 갖게 되고, 그 분기가 곧 어긋남의 자리가 된다.
+    ★ 시각 표기는 `_saved_label` 한 함수를 지난다(F5와 같은 규칙) — 같은 값이 화면마다
+      다른 모양으로 보이지 않는다.
+    """
+    return [{"appid": row["appid"], "name": row["name"],
+             "excluded_at_label": _saved_label(row["excluded_at"])}
+            for row in exclude.rows(reg)]
+
+
 def _slot_view(appid, profile):
-    """그 슬롯의 `(적용을 **시도할 수 있는가**, 마지막 저장 표시값)` — meta를 한 번만 읽는다.
+    """그 슬롯의 `(적용을 **시도할 수 있는가**, 마지막 저장 표시값, meta의 sha1)` —
+    meta를 한 번만 읽는다.
 
     ⚠️ 이름과 값의 뜻을 정확히(2026-08-10 최종 QA 표류 2): 여기서 재는 것은
       **meta가 읽히고 본체 파일이 존재한다**까지다. 엔진은 실행 시점에 **더 본다** —
@@ -306,20 +330,34 @@ def _slot_view(appid, profile):
     ⚠️ meta가 dict가 아니면(비JSON 손상·유효 JSON이지만 비객체) **적용 불가 슬롯**으로 본다.
       그러지 않으면 `meta["filename"]`이 TypeError를 내고 **현황 탭 전체가 죽는다**
       (2026-08-09 조사 발견 — store는 fence라 방어를 소비자인 여기 둔다).
+
+    ★ 세 번째 칸 `meta의 sha1`은 **`profiles_identical`(H3)의 재료**다 — 같은 meta 읽기에서
+      같이 꺼내므로 파일 접근은 F5 이후 그대로 슬롯당 1회다(IO 순증 0). str이 아니면
+      빈 문자열로 접는다: 판정이 `None == None` 같은 **우연 일치**로 참이 되면 안 된다(D-04).
+
+    ★ 안전하지 않은 슬롯은 **읽지 않는다**(2026-08-11 P11 게이트 경-ⓐ). `get_overview`는
+      registry의 games **키**를 그대로 도는데 그 키는 `_VALIDATORS`를 한 번도 지나지 않는다 —
+      손상·수동 편집된 `"../../X"`·절대경로 키에서 이 함수가 **데이터 루트 밖 meta를 읽고
+      있었다**(조사 프로브로 실측). 술어는 슬롯 지문·`backup_count`와 **같은 한 곳**이다.
     """
+    if not remove.slot_in_position(appid, profile):
+        return False, "", ""
     try:
         meta = store.load_meta(appid, profile)
     except (OSError, ValueError):
-        return False, ""
+        return False, "", ""
     if not isinstance(meta, dict):
-        return False, ""
+        return False, "", ""
+    sha1 = meta.get("sha1")
+    if not isinstance(sha1, str):
+        sha1 = ""
     filename = meta.get("filename")
     if not filename or not isinstance(filename, str):
         # 파일명이 없으면 본체를 가리킬 수 없다 = 적용 불가. (`profile_file_path`는 이 경우
         # KeyError를 내므로 여기서 접는 것이 엔진 수락 조건과 같은 결론에 더 안전하게 닿는다.)
-        return False, _saved_label(meta.get("saved_at"))
+        return False, _saved_label(meta.get("saved_at")), sha1
     path = os.path.join(store.profile_dir(appid, profile), filename)
-    return os.path.exists(path), _saved_label(meta.get("saved_at"))
+    return os.path.exists(path), _saved_label(meta.get("saved_at")), sha1
 
 
 def _profile_ready(appid, profile):
@@ -346,11 +384,158 @@ def _disk_state_safe(reg, appid):
     (engine.py:306 `meta.get`). fence라 내부 방어가 불가하므로 **disk_state 소비자는 전부 이
     래퍼를 지난다** — 손상 슬롯은 빈 dict("알 수 없음")로 접어 get_overview(현황 탭, detail=true)·
     저장 지문이 손상 meta 하나로 통째 죽지 않게 한다(2026-08-09 조사 발견 — disk_state 소비를
-    한 곳에 모아 소비처마다 방어를 흩뿌리는 두더지 잡기를 피한다)."""
+    한 곳에 모아 소비처마다 방어를 흩뿌리는 두더지 잡기를 피한다).
+
+    ★ 안전하지 않은 슬롯도 여기서 같이 접는다(2026-08-11 P11 게이트 경-ⓐ). `disk_state`는
+      두 슬롯의 meta를 읽는데(engine.py) 그 appid는 registry **키**라 `_VALIDATORS`를 지나지
+      않는다 — 접지 않으면 `get_overview(detail=True)`가 데이터 루트 **밖** meta를 읽는다
+      (조사 프로브로 실측 4건). 술어는 `_slot_view`·슬롯 지문과 **같은 한 곳**이다."""
+    if not all(remove.slot_in_position(appid, p) for p in remove.PROFILES):
+        return {}
     try:
         return engine.disk_state(reg, appid)
     except (engine.Refused, OSError, ValueError, AttributeError, TypeError):
         return {}
+
+
+# ── 체크인 관측 (F6 — 설계 §5-E) ─────────────────────────────────────────────
+# 엔진의 체크인(G3)은 *"적용 전에 현재 디스크를 직전 프로필로 되쓰는"* 조용한 덮어쓰기다
+# (engine.py:494-519). 그 사실을 화면에 전하는 신호가 엔진에는 **한국어 자유문 `notes[]`밖에
+# 없고**, 프론트의 note 파싱은 금지다. 그렇다고 엔진에 구조 필드를 넣으면 fence 재계약이다.
+# → **접착층이 직전 프로필 슬롯의 전후 지문을 대조해 관측한다.** 엔진은 한 줄도 안 바뀐다
+#   (§14-A의 가드 1줄은 관측이 아니라 쓰기 안전이라 별건이다).
+_FP_CHUNK = 64 * 1024          # 스트리밍 해시의 청크. 큰 파일에서도 메모리 상한이 고정된다
+
+
+def _file_fp(path):
+    """파일 하나의 sha1 — **64KB 스트리밍**이다.
+
+    ★ `store.sha1_file`을 쓰지 않는다(store.py:79는 전체를 한 번에 읽는다). G4에는 절대 크기
+      상한이 없어(engine.py:159 — 비어있지 않음만 검사) 프로필 본체 크기의 상한이 없다.
+    """
+    digest = hashlib.sha1()
+    with open(path, "rb") as fh:
+        while True:
+            chunk = fh.read(_FP_CHUNK)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+#: 지문에서 빼는 **엔진 고정 마커** — 체크인과 무관하게 갱신된다(2026-08-11 P11 게이트 R1).
+#: `engine.apply_profile`은 적용 말미에(engine.py:545) `already` 경로는 `_record_already`가
+#: (engine.py:643) 이 그림자 사본을 다시 쓴다. 둘 다 §5의 **정상 동작**이고 체크인이 아니다.
+#: 포함하면 「적용 → 같은 슬롯 재저장 → 재적용(already)」이라는 **일상 흐름**에서 note는
+#: "체크인 불필요"인데 관측은 프로필명을 실어, §5-E ⓒ(note↔관측 동등)가 깨진다(재현됨).
+#: ★ 이것은 "파일명으로 거르기"의 부활이 아니다: 체크인이 쓰는 것은 `write_profile`의
+#:   **본체 + meta.json 둘뿐**이고, 이 이름은 store의 상수(`applied_copy_path`)다.
+#: ⚠️ 알려진 한계(P11 게이트 C1): 설정 파일 basename이 **정확히 `.applied`인 게임**은 본체와
+#:   마커가 같은 경로가 되어, 부분 쓰기(본체 성공+meta 실패) 시 관측이 침묵할 수 있다(합성 실증).
+#:   그런 게임은 마커 별칭 충돌로 **엔진의 sticky 학습부터 구조적으로 깨져 있어**(P11 이전 문제)
+#:   병적 사례로 처분한다 — 등록 문에서 이 이름을 예약하는 근본 폐쇄는 엔진 fence 변경이라
+#:   별도 결정 사안(DECISIONS-IMPL-UX-2026-08-11.md C1).
+_APPLIED_MARKER = ".applied"
+
+
+def _slot_fp(appid, profile):
+    """프로필 슬롯의 **복합 지문** — 슬롯 디렉터리 안 정규 파일의 (이름, 내용 sha1).
+    (엔진 고정 마커 `.applied` 하나만 뺀다 — 위 `_APPLIED_MARKER` 참조.)
+
+    ★★ **그 밖의 파일명 예외는 0개다.** meta만 재면 안 되는 이유: `store.write_profile`은 본체와
+      meta를 **별도 atomic write**로 쓰므로(store.py:256-272) 본체만 바뀌고 meta 쓰기가 실패한
+      **부분 쓰기** 갈래가 실재한다. 그리고 이름으로 거르면 안 되는 이유:
+        · 설정 파일 basename이 `.graphics.ini`류 **숨김명**일 수 있다(등록 가드는 숨김명을
+          금지하지 않는다 — engine.py:193·206·409). 점 파일을 빼면 그 게임의 본체가 안 잡힌다.
+        · `.gfxprofile-tmp-*`도 **빼지 않는다.** 그 이름을 금지하는 가드도 없어 정상 본체
+          이름과 충돌할 수 있다. 쓰기 잔재가 지문에 잡히는 경우는 **과보고**로 끝나는데,
+          이 관측의 실패 모드로는 침묵(미보고)보다 과보고가 안전하다(F6의 본질이 고지다).
+    ★ 관측은 엔진 호출의 **전/후**에 돈다 — 쓰기 비행 중이 아니라서 일시 파일이 잡히는 것은
+      쓰기가 비정상 중단된 경우뿐이다.
+    ⚠️ 비용은 **슬롯 실물 크기에 선형**이고 상한은 없다(실사용 설정 파일은 소형이다).
+      "read ≤N회" 같은 고정 약속을 하지 않는다.
+    ★ **이 함수는 절대 예외를 내지 않는다.** `except` 갈래 안에서도 불리므로(아래 관측기),
+      여기서 던지면 원래의 실패를 가린다 — 판독 불능은 전부 센티널로 접는다.
+      pre가 센티널이고 post가 실물이면 "바뀌었다"로 보이지만 그 역시 과보고 방향이다.
+    ★ 안전하지 않은 슬롯은 **조회하지 않고** 고정 센티널로 접는다 — `restore.backup_count`·
+      `remove.delete_preview`와 **같은 문법**이다(Codex #2). `apply_all`의 관측기는 registry의
+      games **키**를 그대로 도는데 그 키들은 `_VALIDATORS`를 한 번도 지나지 않는다(손상·수동
+      편집된 `"../../X"`·절대경로 키). 지문을 뜨겠다고 루트 밖을 읽지는 않는다.
+      ⚠️ 술어는 **이 함수가 실제로 읽는 경로**(그 슬롯 하나)로 좁혀 쓴다(P11 게이트 R2) —
+        넓은 `_paths_in_position`을 쓰면 `backups/`만 링크인 정상 게임에서 실제 체크인이
+        침묵해, *"잔여 한계는 과보고 방향뿐"*이라는 §5-E의 불변식이 깨진다.
+    """
+    if not remove.slot_in_position(appid, profile):
+        return "unsafe"
+    try:
+        directory = store.profile_dir(appid, profile)
+        parts = []
+        for name in sorted(os.listdir(directory)):
+            if name == _APPLIED_MARKER:
+                continue                                   # 체크인 신호가 아니다 — 위 상수 참조
+            path = os.path.join(directory, name)
+            if not os.path.isfile(path):
+                continue                                   # 디렉터리·끊긴 링크는 잴 내용이 없다
+            try:
+                parts.append("%s\0%s" % (name, _file_fp(path)))
+            except OSError:
+                parts.append("%s\0unreadable" % name)      # 못 읽는 것도 상태의 일부다
+        # surrogateescape — os.listdir이 돌려준 이름이 UTF-8이 아니어도 지문을 만들 수 있다
+        # (인코딩 실패로 관측기가 죽는 갈래를 만들지 않는다).
+        return store.sha1_bytes("\n".join(parts).encode("utf-8", "surrogateescape"))
+    except OSError:
+        return "absent"                                    # 슬롯 없음·조회 실패
+    except Exception:                                      # noqa: BLE001 — 관측이 앱을 죽이지 않는다
+        return "unknown"
+
+
+def _valid_previous(reg, appid):
+    """관측기에 넣을 **직전 프로필** — `{"dock","internal"}` 밖이면 None으로 접는다(D-03).
+
+    `load_registry`는 최상위 키만 보정하므로(store.py:189-194) 손상·수동 편집된 registry의
+    `last_applied`에는 숫자도 절대경로도 들어올 수 있다. 봉투 계약(`checked_in: Profile|null`)을
+    지키려면 여기서 접어야 한다.
+    ⚠️ 이 검증은 **관측기의 입력만** 지킨다 — 엔진에는 원 registry가 그대로 들어가므로
+      raw 값이 경로 조각으로 재소비되는 쓰기 경로는 **엔진 안 가드**가 막는다(§14-A).
+      가드 덕에 손상 값에서 관측기(None)와 엔진(체크인 건너뜀)의 판정이 자연 정합한다.
+    """
+    games = reg.get("games") or {}
+    entry = games.get(str(appid))
+    previous = entry.get("last_applied") if isinstance(entry, dict) else None
+    return previous if previous in ("dock", "internal") else None
+
+
+def _checkin_observer(reg, appids):
+    """엔진 호출 **전** 지문을 떠 두고, 나중에 *"무엇이 체크인됐는지"*를 돌려주는 관측기.
+
+    ★ 개별 적용과 일괄 적용이 **같은 관측기**를 쓴다(설계 §5-E 후단 "동형"). 두 곳에서 각자
+      지문을 뜨면 언젠가 판정이 갈린다 — `get_overview`의 counts를 백엔드가 세는 것과 같은 규칙.
+    반환 = `[{appid, name, profile}]`. 개별 적용은 이 목록에서 프로필 하나만 꺼내 쓴다.
+    이름은 **스냅샷 시점**에 잡는다(실행이 registry를 바꿔도 화면이 그릴 이름은 그때 것이다).
+    ⚠️ 이름은 **str로 정규화**한다(D-08): 손상·수동 편집된 registry의 `name`은 숫자일 수 있고,
+      그대로 실으면 봉투 계약(`name: string`)이 깨진다. 신설 필드라 여기서 접는 것이 맞다.
+    """
+    before = {}
+    for appid in appids:
+        previous = _valid_previous(reg, appid)
+        if not previous:
+            continue                       # 직전 프로필이 없으면 체크인 갈래 자체가 없다
+        entry = reg["games"].get(appid) or {}
+        name = entry.get("name")
+        before[appid] = (previous,
+                         name if isinstance(name, str) and name else ("appid %s" % appid),
+                         _slot_fp(appid, previous))
+
+    def observed():
+        return [{"appid": appid, "name": name, "profile": previous}
+                for appid, (previous, name, fp) in sorted(before.items())
+                if _slot_fp(appid, previous) != fp]
+    return observed
+
+
+def _checked_in(rows):
+    """개별 적용 봉투의 `checked_in` — 관측 목록의 프로필 하나 또는 None."""
+    return rows[0]["profile"] if rows else None
 
 
 # ── 확인 토큰 ────────────────────────────────────────────────────────────────
@@ -498,13 +683,30 @@ class Plugin:
         for appid in sorted(reg["games"], key=lambda a: reg["games"][a].get("name", a)):
             entry = reg["games"][appid]
             # ★ F5: 슬롯 상태와 **마지막 저장 시각을 같이** 꺼낸다(meta 읽기 1회 — 위 `_slot_view`).
-            dock_ready, dock_saved = _slot_view(appid, "dock")
-            intl_ready, intl_saved = _slot_view(appid, "internal")
+            dock_ready, dock_saved, dock_sha = _slot_view(appid, "dock")
+            intl_ready, intl_saved, intl_sha = _slot_view(appid, "internal")
+            config_path = entry.get("config_path")
+            if not isinstance(config_path, str) or not remove._paths_in_position(appid):
+                # ★ 경로가 제자리가 아닌 게임에는 **경로를 말하지 않는다** — `delete_preview`의
+                #   unsafe 분기와 **같은 술어·같은 결론**이다(P11 게이트 ⓒ 통일). 화면이
+                #   "설정 파일: …"이라고 안내할 수 있는 상태가 아니고, 두 화면이 같은 게임을
+                #   두고 다르게 말하면 어느 쪽이 참인지 사용자가 가릴 방법이 없다.
+                config_path = ""
             games.append({
                 "appid": appid,
                 "name": entry.get("name") or ("appid %s" % appid),
                 "has_dock": dock_ready,
                 "has_internal": intl_ready,
+                # ★ 화면의 "설정 파일: {path}" 한 줄 — **표시 전용**이다(D-08).
+                #   빈 값이면 화면이 그 줄을 안 그린다(기존 "0이면 안 그림" 문법).
+                #   프론트는 이 값으로 경로 연산을 하지 않는다 — 경로 판단은 전부 백엔드다.
+                "config_path": config_path,
+                # ★ 두 프로필의 내용이 같은가(H3) — "갈아끼워도 달라지는 게 없다"를 화면이
+                #   말할 수 있게 한다. **둘 다 적용 가능하고, 두 meta sha가 비어 있지 않은
+                #   문자열이며, 서로 같을 때만** 참이다 — `None == None`류 우연 일치로 참이
+                #   되면 화면이 없는 사실을 말한다(D-04). 재료는 위에서 이미 읽었다(IO 순증 0).
+                "profiles_identical": bool(dock_ready and intl_ready
+                                           and dock_sha and dock_sha == intl_sha),
                 # ★ F5 — 상시 표시용. **「마지막 저장」이지 「마지막 적용」이 아니다.**
                 #   복원(`restore_backup`)은 `last_applied`를 갱신하지 않으므로(M1 fence 동작),
                 #   화면에 "마지막 적용"을 그리면 복원 뒤에 **낡은 값이 사실인 척** 보인다.
@@ -535,20 +737,51 @@ class Plugin:
             # 두 프로필 중 하나라도 없는 게임 수. 화면의 '프로필 미완성 {n}개' 한 줄이 쓴다.
             # 프론트에서 games를 다시 세지 않는 이유는 위와 같다 — 두 곳에서 세면 언젠가 어긋난다.
             "incomplete": sum(1 for g in games if not (g["has_dock"] and g["has_internal"])),
+            # ★ 감지에서 제외한 게임 수(A9). 설정 팝업의 [전체 초기화] 활성 조건이 쓴다 —
+            #   마지막 게임을 등록 해제하면 `total=0`인데 제외 목록은 남으므로, total만 보면
+            #   그 목록을 지울 방법이 UI에서 사라진다(D-01). **원본 키 수**다(격리분 포함 —
+            #   `exclude.excluded_map` 주석 참조).
+            "excluded": len(exclude.excluded_map(reg)),
         })
 
     @route
     def apply_profile(self, appid, profile):
-        """게임 하나에 적용. 보조 동작이다(주 동작은 일괄 적용)."""
+        """게임 하나에 적용. 보조 동작이다(주 동작은 일괄 적용).
+
+        ★ 봉투에 **`checked_in`**(F6, 설계 §5-E)을 싣는다 — 엔진이 적용 전에 현재 디스크를
+          직전 프로필로 되쓴 경우 그 프로필 이름, 아니면 `null`이다. 조용한 덮어쓰기를 화면이
+          말할 수 있게 하는 유일한 구조 신호다(엔진 신호는 한국어 자유문 note뿐이라 못 쓴다).
+
+        ★★ **실패 봉투에도 싣는다**(D-02). 엔진은 체크인을 **쓴 뒤에** 백업 실패·설정 파일
+          쓰기 실패로 예외를 낼 수 있다(engine.py:526-544). 성공 경로에만 관측을 두면
+          *"적용은 실패했는데 프로필은 이미 바뀐"* 상태를 화면이 통째로 침묵한다.
+        """
         reg = store.load_registry()
-        result = engine.apply_profile(reg, appid, profile)
-        # ★ 설정 파일을 실제로 갈아끼운 사실을 남긴다. 남기지 않으면 나중에
-        #   "내 설정이 왜 바뀌었지"를 추적할 방법이 아예 없다 — 2026-08-05 실기에서
-        #   의도하지 않은 일괄 적용이 일어났을 때, 로그가 없어 무엇이 실행됐는지 가리지 못했다.
-        #   **`save_registry`보다 먼저** 남긴다(QA R4 — 저장이 실패해도 파일은 이미 바뀌었다).
-        decky.logger.info("apply_profile session=%s appid=%s profile=%s", SESSION, appid, profile)
-        store.save_registry(reg)
-        return _ok(**result)
+        observed = _checkin_observer(reg, [str(appid)])   # 엔진 호출 **전** 지문
+        try:
+            result = engine.apply_profile(reg, appid, profile)
+            checked_in = _checked_in(observed())
+            # ★ 설정 파일을 실제로 갈아끼운 사실을 남긴다. 남기지 않으면 나중에
+            #   "내 설정이 왜 바뀌었지"를 추적할 방법이 아예 없다 — 2026-08-05 실기에서
+            #   의도하지 않은 일괄 적용이 일어났을 때, 로그가 없어 무엇이 실행됐는지 가리지 못했다.
+            #   **`save_registry`보다 먼저** 남긴다(QA R4 — 저장이 실패해도 파일은 이미 바뀌었다).
+            decky.logger.info("apply_profile session=%s appid=%s profile=%s checked_in=%s",
+                              SESSION, appid, profile, checked_in)
+            store.save_registry(reg)
+        except engine.Refused as exc:
+            exc.params["checked_in"] = _checked_in(observed())
+            raise                       # route 데코레이터가 params를 그대로 실패 봉투에 전개한다
+        except Exception as exc:        # noqa: BLE001 — 체크인이 이미 일어났을 수 있는 실패
+            # 전문 로그는 여기서 남긴다. 데코레이터의 UNEXPECTED 경로는 params를 싣지 못해
+            # 체크인 사실이 사라지므로, 사유를 `Refused`로 바꿔 봉투에 태운다(메시지는 고정
+            # 문구다 — 예외 문자열에 경로가 실려 화면으로 새지 않게).
+            # 로그 접두는 데코레이터와 **같은 `unexpected`**다 — 진단은 접두로 grep한다.
+            decky.logger.error("unexpected session=%s route=apply_profile appid=%s profile=%s\n%s",
+                               SESSION, appid, profile, traceback.format_exc())
+            raise engine.Refused("거부: 예기치 못한 오류로 적용을 마치지 못했습니다.",
+                                 code=codes.UNEXPECTED,
+                                 checked_in=_checked_in(observed())) from exc
+        return _ok(**result, checked_in=checked_in)
 
     @route
     def apply_all(self, profile, confirm_token=None):
@@ -583,33 +816,51 @@ class Plugin:
             preview = confirm.apply_all_preview(reg, profile, _running_appids())
             return _fail(codes.CONFIRM_REQUIRED,
                          confirm_token=_issue("*", _APPLY_ALL_SCOPE, fp, profile),
-                         profile=profile, **preview)
-        results = engine.apply_all(reg, profile)
-        counts = {}
-        for row in results:
-            counts[row["outcome"]] = counts.get(row["outcome"], 0) + 1
-        # ★ 감사 로그는 **`save_registry`보다 먼저** 남긴다 (2026-08-05 QA R4).
-        #   뒤에 두면, registry 저장이 실패해 예외가 나가는 순간 **설정 파일은 이미 바뀐 뒤인데
-        #   로그가 한 줄도 없는** 상태가 된다(엔진은 config를 먼저 쓴다).
-        #   그리고 `applied`만 적으면 안 된다 — `.applied` 기록 실패로 outcome이 `error`가 되어도
-        #   설정 파일은 이미 바뀌었을 수 있다. **전 게임의 outcome을 그대로** 남겨야
-        #   "무엇이 바뀌었을 수 있는가"를 로그만으로 좁힐 수 있다.
-        #   ★ 2026-08-06 외부 검증 반증 1: `outcomes`만 남기면 **어느 게임이 왜 거부됐는지가
-        #     어디에도 안 남는다.** 화면에서 상세를 뺀 근거가 "로그가 정본"인데 그 로그에 사유가
-        #     없으면 그 정보는 그냥 사라진 것이다. 그래서 **문제 행(code가 있는 것)만** 상세를 싣는다 —
-        #     정상(applied/already/no_profile)은 code가 없어 자동으로 빠지므로 200게임에서도 안 불어난다.
-        #     `note`는 200자로 자른다(예외 메시지에 긴 경로가 실릴 수 있다).
-        problems = {
-            r["appid"]: {"code": r.get("code"), "note": (r.get("note") or "")[:200]}
-            for r in results if r.get("code")
-        }
-        decky.logger.info(
-            "apply_all session=%s profile=%s counts=%s outcomes=%s problems=%s",
-            SESSION, profile, counts,
-            {r["appid"]: r["outcome"] for r in results}, problems,
-        )
-        store.save_registry(reg)
-        return _ok(results=results, counts=counts)
+                         # ★ 확인창 본문의 "등록된 게임 {total}개"는 **이 값만** 쓴다(D-06):
+                         #   토큰 발급 시점의 스냅샷이라, 화면 숫자가 토큰이 지문 낸 대상과
+                         #   언제나 같은 것을 가리킨다(`get_overview`의 total은 다른 시점의
+                         #   조회라 어긋날 수 있다). 5버킷의 합 = 이 값이 계약이다.
+                         profile=profile, total=len(reg["games"]), **preview)
+        # ★ 체크인 관측(F6)은 개별 적용과 **동형**이다 — 같은 관측기를 쓴다(설계 §5-E 후단).
+        #   엔진 `apply_all`은 게임별 예외를 내부 격리하므로(row outcome) 봉투가 `ok:true`인 채
+        #   실패한 게임의 체크인도 이 관측이 덮는다.
+        observed = _checkin_observer(reg, sorted(reg["games"]))   # 엔진 호출 **전** 지문
+        try:
+            results = engine.apply_all(reg, profile)
+            checkin = observed()
+            counts = {}
+            for row in results:
+                counts[row["outcome"]] = counts.get(row["outcome"], 0) + 1
+            # ★ 감사 로그는 **`save_registry`보다 먼저** 남긴다 (2026-08-05 QA R4).
+            #   뒤에 두면, registry 저장이 실패해 예외가 나가는 순간 **설정 파일은 이미 바뀐 뒤인데
+            #   로그가 한 줄도 없는** 상태가 된다(엔진은 config를 먼저 쓴다).
+            #   그리고 `applied`만 적으면 안 된다 — `.applied` 기록 실패로 outcome이 `error`가 되어도
+            #   설정 파일은 이미 바뀌었을 수 있다. **전 게임의 outcome을 그대로** 남겨야
+            #   "무엇이 바뀌었을 수 있는가"를 로그만으로 좁힐 수 있다.
+            #   ★ 2026-08-06 외부 검증 반증 1: `outcomes`만 남기면 **어느 게임이 왜 거부됐는지가
+            #     어디에도 안 남는다.** 화면에서 상세를 뺀 근거가 "로그가 정본"인데 그 로그에 사유가
+            #     없으면 그 정보는 그냥 사라진 것이다. 그래서 **문제 행(code가 있는 것)만** 상세를 싣는다 —
+            #     정상(applied/already/no_profile)은 code가 없어 자동으로 빠지므로 200게임에서도 안 불어난다.
+            #     `note`는 200자로 자른다(예외 메시지에 긴 경로가 실릴 수 있다).
+            problems = {
+                r["appid"]: {"code": r.get("code"), "note": (r.get("note") or "")[:200]}
+                for r in results if r.get("code")
+            }
+            decky.logger.info(
+                "apply_all session=%s profile=%s counts=%s outcomes=%s problems=%s checkin=%s",
+                SESSION, profile, counts,
+                {r["appid"]: r["outcome"] for r in results}, problems,
+                [row["appid"] for row in checkin],
+            )
+            store.save_registry(reg)
+        except Exception as exc:        # noqa: BLE001 — `save_registry` 실패도 여기로 온다
+            # ⚠️ 엔진 `apply_all`은 게임별 예외를 **내부에서 격리**하므로 여기로 `Refused`가
+            #   올라오는 갈래는 없다 — 안 오는 것을 잡는 분기를 두지 않는다(죽은 문 금지).
+            decky.logger.error("unexpected session=%s route=apply_all profile=%s\n%s",
+                               SESSION, profile, traceback.format_exc())
+            raise engine.Refused("거부: 예기치 못한 오류로 일괄 적용을 마치지 못했습니다.",
+                                 code=codes.UNEXPECTED, checkin=observed()) from exc
+        return _ok(results=results, counts=counts, checkin=checkin)
 
     @route
     def save_profile(self, appid, profile, confirm_token=None):
@@ -678,7 +929,30 @@ class Plugin:
         #   그러면 안내가 가리키는 「파일 직접 고르기」를 화면이 아예 그릴 수 없다 —
         #   **없는 조작을 권하는 문구**가 바로 QA가 반려한 상태다.
         #   프론트가 경로를 지어내지 않게 백엔드가 실재하는 루트를 준다.
-        return _ok(entries=payload, counts=counts, libraries=engine.steam_libraries())
+        # ★ `excluded`는 감지에서 제외한 게임(A9) — 「제외한 게임 보기」 뷰의 재료다.
+        #   `include_game`과 **같은 헬퍼**를 지나므로 두 봉투의 모양이 구조적으로 같다.
+        return _ok(entries=payload, counts=counts, libraries=engine.steam_libraries(),
+                   excluded=_excluded_rows(reg))
+
+    @route
+    def include_game(self, appid):
+        """감지 제외를 해제한다 — **한 버튼 한 쓰기**(A9의 재포함 경로).
+
+        ★ 재포함은 **등록이 아니다.** 여기서 하는 일은 제외 목록에서 내리는 것뿐이고, 그러면
+          그 게임이 탐지 목록에 후보로 다시 뜬다(설치돼 있고 설정 파일이 있을 때). 등록은
+          사용자가 감지 목록에서 다시 한다 — 한 버튼이 두 가지 쓰기를 하지 않는다.
+        ★ 제외돼 있지 않은 appid도 **정상 종료**다(멱등). "제외돼 있을 때만 부른다"는 조건을
+          호출부가 판단하면 화면과 백엔드가 언젠가 갈라진다 — 결과 상태만 계약한다.
+        """
+        reg = store.load_registry()
+        record = exclude.excluded_map(reg).get(str(appid))
+        name = record.get("name") if isinstance(record, dict) else ""
+        was_excluded = exclude.remove(reg, appid)
+        # ★ 감사 로그는 **`save_registry`보다 먼저** (QA R4).
+        decky.logger.info("include_game session=%s appid=%s name=%s was_excluded=%s",
+                          SESSION, appid, name, was_excluded)
+        store.save_registry(reg)
+        return _ok(excluded=_excluded_rows(reg))
 
     @route
     def register_confident(self):
@@ -691,6 +965,10 @@ class Plugin:
           사용자가 "무엇을 등록할지" 고르는 것은 화면의 필터일 뿐, 목록을 왕복시킬 이유가 없다.
 
         ★ 경로는 백엔드가 `best_candidate()`로 정한다 — **프론트가 경로를 만들지 않는다.**
+
+        ★ 감지 제외(A9)에 대해 **이 route는 아무것도 하지 않는다.** 제외분은 `_discover_entries`
+          필터가 구조적으로 배제하므로 여기 도달 자체가 불가능하고, 여기에 해제를 한 줄 더
+          두면 문이 둘이 된다(설계 §8-D "무변경" 명시 — 가드는 문 하나).
 
         ⚠️ `apply_all`과 같은 원칙: **하나가 실패해도 나머지는 계속**하고 봉투는 `ok:true`다.
           무엇이 안 됐는지는 `results[].outcome`/`code`로 전부 올라간다.
@@ -800,11 +1078,21 @@ class Plugin:
 
         # ── 2단계: 같은 문을 실제 registry에 통과시킨다 ─────────────────────────────
         entry = engine.add_game(reg, appid, config_path, name)
+        # ★ 등록하면 감지 제외도 **자동으로 풀린다**(A9). 사용자가 이 게임을 다시 쓰기로 한
+        #   마당에 "감지에서 숨김"이 남아 있으면, 나중에 등록을 해제했을 때 목록에 안 뜨는
+        #   이유를 아무도 설명할 수 없다. 제외는 탐지 표시 정책이라 엔진이 아니라 여기서 푼다.
+        was_excluded = exclude.remove(reg, appid)
+        # ★★ 봉투 재료는 **커밋(save_registry) 전에** 다 확보한다(P11 게이트 R3). 뒤에 두면
+        #   대피본 조회가 실패하는 순간 **등록은 영구화됐는데 봉투는 UNEXPECTED**가 되고,
+        #   사용자가 다시 누르면 `ALREADY_REGISTERED`라 화면이 영영 성공을 말하지 못한다.
+        #   (조회 자체는 listdir 1회이고, 안전하지 않은 경로는 0으로 접힌다.)
+        backups = restore.backup_count(appid)
         # ★ 등록은 registry를 바꾸는 동작이다. **`save_registry`보다 먼저** 남긴다 (QA R4).
         decky.logger.info(
-            "add_game session=%s appid=%s name=%s cloud=%s warnings=%s confirmed=%s path=%s",
+            "add_game session=%s appid=%s name=%s cloud=%s warnings=%s confirmed=%s "
+            "was_excluded=%s backups=%s path=%s",
             SESSION, appid, entry.get("name"), entry.get("cloud_synced"), warnings, need,
-            entry.get("config_path"))
+            was_excluded, backups, entry.get("config_path"))
         store.save_registry(reg)
         # 엔진 entry를 통째로 싣지 않는다 — 내부 필드(sticky_*)는 화면이 쓰지 않고,
         # 구조가 바뀔 때마다 봉투 계약이 같이 흔들린다.
@@ -814,6 +1102,10 @@ class Plugin:
             config_path=entry.get("config_path"),
             cloud_synced=bool(entry.get("cloud_synced")),
             warnings=warnings,
+            # ★ 재등록 직후의 대피본 안내(§9-③) — 등록을 해제해도 백업은 남으므로, 다시
+            #   등록한 순간 "복원할 것이 있다"를 화면이 말할 수 있어야 한다. 세는 것은
+            #   백엔드다(프론트 재계산 금지). **값은 커밋 전에 확보했다**(위 R3 주석).
+            backups=backups,
         )
 
     # ── 삭제 (P8) ────────────────────────────────────────────────────────────
@@ -843,10 +1135,14 @@ class Plugin:
                          confirm_token=_issue(str(appid), _DELETE_SCOPE, fp, ""),
                          **params)
         result = remove.delete_game_data(reg, appid)       # 대피 실패 시 BACKUP_FAILED
+        # ★ **삭제 = 등록 해제 + 감지 제외**다(A9). 삭제가 성공한 뒤에만 제외에 올린다 —
+        #   먼저 올리면 삭제가 실패했을 때 "등록도 돼 있는데 감지에서도 숨은" 상태가 남는다.
+        #   이름은 여기서 캡처한다: 이 시점 이후로는 registry에 그 게임의 이름이 없다.
+        exclude.add(reg, appid, result["name"])
         # ★ 감사 로그는 **`save_registry`보다 먼저** (QA R4). 뒤에 두면 저장이 실패해 예외가
         #   나가는 순간 **파일은 이미 지워졌는데 로그가 한 줄도 없는** 상태가 된다.
         decky.logger.info(
-            "delete_game session=%s appid=%s name=%s evacuated=%s backups=%s",
+            "delete_game session=%s appid=%s name=%s evacuated=%s backups=%s excluded=True",
             SESSION, result["appid"], result["name"], result["evacuated"], result["backups"])
         store.save_registry(reg)
         return _ok(**result)
@@ -881,6 +1177,10 @@ class Plugin:
                          #   지워진다.** 모르고 잃으면 안 되므로 확인창이 미리 말한다
                          #   (0이면 화면이 그 줄을 안 그린다 — 기존 문법).
                          named=labels.custom_count(reg),
+                         # ★ 초기화는 registry를 통째로 갈아 끼우므로 **감지 제외 목록도 같이
+                         #   지워진다**(A9 ④ — 지우는 코드가 따로 없다). 모르고 잃으면 안 되므로
+                         #   확인창이 미리 말한다(0이면 화면이 그 줄을 안 그린다 — 기존 문법).
+                         excluded=len(exclude.excluded_map(reg)),
                          challenge=_RESET_CHALLENGE)
 
         results = []

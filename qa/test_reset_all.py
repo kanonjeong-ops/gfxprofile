@@ -231,13 +231,26 @@ def main_test():                                                # noqa: C901  (�
             if not cfgs[appid].exists() or cfgs[appid].read_bytes() != cfg_bytes[appid]:
                 P("★게임 설정 파일 원본이 바뀌었다(%s) — 초기화는 툴 데이터만 지워야 한다" % appid)
 
+        # ★ 감지 제외 목록도 **같이 지워진다**(A9 ④ — 2026-08-11 P11). 지우는 코드는 없다:
+        #   초기화가 `default_registry()`를 통째로 갈아 끼우므로 구조적으로 사라진다.
+        #   그 구조가 깨지면(예: 제외를 games 밖 어딘가에 따로 보존하면) 여기서 걸린다.
+        reg = store.load_registry()
+        reg["settings"]["discover_excluded"] = {
+            "888": {"name": "제외한 게임", "excluded_at": "2026-08-11T09:00:00+0900"}}
+        store.save_registry(reg)
+
         # 재시도로 완결된다
         tok, params = ask()
         if params.get("games") != 1:
             P("재시도 확인창의 파괴 내역이 갱신되지 않았다 — %s" % params)
+        if params.get("excluded") != 1:
+            P("초기화 확인창이 제외 건수를 안 말한다 — 모르고 잃는다 (%s)" % params.get("excluded"))
         env = rpc(main, "reset_all", confirm_token=tok, confirm_text="delete")
         if not env.get("ok") or store.load_registry()["games"]:
             P("재시도가 완결되지 않았다 — %s" % env)
+        if store.load_registry()["settings"].get("discover_excluded"):
+            P("★ 전체 초기화가 감지 제외 목록을 안 지웠다 — A9 ④ (%s)"
+              % store.load_registry()["settings"].get("discover_excluded"))
 
         # ═══════════════════════════════════════════════════════════════════
         # ⑤ ★ 경로 탈출 봉쇄 (QA 반려 ① — 실피해가 재현됐던 자리)

@@ -753,6 +753,46 @@ def t5b_general_exception_isolated(mod, report=None):
     return bad
 
 
+# ── T7. 감지 제외 봉투 — 두 route가 같은 목록을 본다 (A9 · 설계 §8-C·§8-D) ──
+def t7_excluded_envelope():
+    """제외 필터는 `_discover_entries` **한 곳**이라, 화면 목록(`discover_games`)과 일괄 등록
+    (`register_confident`)이 구조적으로 같은 것을 본다. 두 곳에서 거르면 *"화면에 안 뜬 게임이
+    등록되는"* 어긋남이 언젠가 생긴다 — 여기서 그 한 곳이 두 route 모두에 듣는지 잰다.
+
+    (제외의 전 계약은 `qa/test_discover_exclude.py`가 잠근다. 이 절은 **P6 route 봉투**의 몫만.)
+    """
+    bad = []
+    entries = synth(4)
+    hidden = entries[0]["appid"]
+    reg = main.store.load_registry()
+    reg["settings"]["discover_excluded"] = {
+        hidden: {"name": "숨긴 게임", "excluded_at": "2026-08-11T09:00:00+0900"}}
+    main.store.save_registry(reg)
+    try:
+        with Patch(entries=entries) as p:
+            env = call(main.Plugin.discover_games)
+            seen = {e["appid"] for e in env["data"]["entries"]}
+            if hidden in seen:
+                bad.append(f"제외한 게임이 탐지 목록에 남았다 — {sorted(seen)}")
+            rows = env["data"].get("excluded")
+            if [r["appid"] for r in rows or []] != [hidden]:
+                bad.append(f"discover_games 봉투의 excluded가 제외분을 안 싣는다 — {rows}")
+            elif set(rows[0]) != {"appid", "name", "excluded_at_label"}:
+                bad.append(f"excluded 행의 키 집합이 계약과 다르다 — {sorted(rows[0])}")
+
+            env = call(main.Plugin.register_confident)
+            tried = {r["appid"] for r in env["data"]["results"]}
+            if hidden in tried:
+                bad.append(f"제외한 게임이 일괄 등록에 섞였다 — {sorted(tried)} ★두 route가 다른 것을 봤다")
+            if p.save_calls and hidden in p.save_calls[-1]["games"]:
+                bad.append("제외한 게임이 registry에 저장됐다")
+    finally:
+        reg = main.store.load_registry()
+        reg["settings"].pop("discover_excluded", None)
+        main.store.save_registry(reg)
+    return bad
+
+
 # ── §B. 반증 — 깨진 구현에서 실제로 FAIL하는가 ───────────────────────────────
 def falsify():
     """각 단언을 **고의로 깨뜨린 대조군**에 걸어 본다. 통과하면 그 검사는 거짓 검사다."""
@@ -915,6 +955,9 @@ def main_():
           f"(인스턴스화 불가로 건너뜀 {len(exc_report.get('skipped', []))}종"
           + (f": {', '.join(exc_report['skipped'][:6])}…" if exc_report.get("skipped") else "")
           + ")")
+
+    problems += t7_excluded_envelope()
+    print("T7 감지 제외 — 두 route가 같은 목록을 본다 · discover_games 봉투의 excluded 모양")
 
     # ★ 앵커가 사라지면 **크래시가 아니라 FAIL**이다. 크래시는 위에서 모은 problems를 못 찍고
     #   죽어서 "무엇이 걸렸는지"를 통째로 가린다 — 진단 가능성이 안전만큼 중요하다.

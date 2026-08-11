@@ -493,6 +493,7 @@ def apply_profile(reg, appid, profile):
 
     # ---- 체크인: 현재 디스크 상태를 직전 프로필로 되쓴다 (G3)
     previous = entry.get("last_applied")
+    if previous not in ("dock", "internal"): previous = None    # v2: 손상 값은 경로 조각이 된다
     state = disk_state(reg, appid)
     if state["exists"]:
         if not previous:

@@ -18,6 +18,9 @@ export const rpc = <A extends unknown[], T>(route: string) => callable<A, Env<T>
 
 // ⚠️ ok:false를 예외로 바꾸지 않는다. CONFIRM_REQUIRED처럼 **정상 흐름**인 코드가 있어서,
 //    던지면 호출부가 정상 경로를 try/catch로 다루게 된다. 호출부는 code로 분기한다.
+//
+// ⚠️ **실패 봉투의 `params`에도 값이 실릴 수 있다.** 적용 계열은 실패해도 `checked_in`/`checkin`을
+//    싣는다(F6 — 체크인은 적용 실패보다 먼저 일어날 수 있다). 표시 층만 이 값을 소비한다.
 
 export interface Hello {
   lang: string;
@@ -49,6 +52,20 @@ export interface OverviewGame {
    */
   backups: number;
   /**
+   * 그 게임의 설정 파일 경로 — **표시 전용**이다.
+   * ★ 프론트는 이 값으로 **경로 연산을 하지 않는다**(자르기·이어붙이기 금지). 백엔드가
+   *   손상 registry를 정규화해서 준다 — 문자열이 아니거나 그 게임의 데이터 경로가 제자리가
+   *   아니면 빈 문자열이고(등록 해제 확인창의 `config_path`와 **같은 판정**), **빈 값이면
+   *   화면이 그 줄을 그리지 않는다**(기존 "0이면 안 그림" 문법).
+   */
+  config_path: string;
+  /**
+   * 두 프로필의 내용이 같은가(H3) — "갈아끼워도 달라지는 게 없다"를 화면이 말할 때 쓴다.
+   * ★ **판정은 백엔드가 한다**(프론트 재계산 금지). 둘 다 적용 가능하고 두 meta sha가 비어
+   *   있지 않으며 서로 같을 때만 참이다 — 조회 실패끼리의 우연한 일치로 참이 되지 않는다.
+   */
+  profiles_identical: boolean;
+  /**
    * 슬롯별 **마지막 저장 시각의 표시값**(F5). 없으면 빈 문자열이다.
    * ★ 포맷은 **백엔드가 만든다** — 프론트가 날짜 문자열을 쪼개면 판정이 두 곳으로 갈린다.
    * ⚠️ 「저장」이지 **「적용」이 아니다.** 복원은 `last_applied`를 갱신하지 않으므로
@@ -68,6 +85,13 @@ export interface OverviewCounts {
   running: number;
   /** 두 프로필 중 하나라도 없는 게임 수. 0이면 그 줄을 그리지 않는다(설계 E8 파급 2). */
   incomplete: number;
+  /**
+   * 감지에서 제외한 게임 수(A9). 설정의 **[전체 초기화] 활성 조건**이 쓴다:
+   * `total > 0 || excluded > 0`. 마지막 게임을 등록 해제하면 `total=0`인데 제외 목록은
+   * 남으므로, total만 보면 그 목록을 지울 방법이 화면에서 사라진다.
+   * ⚠️ **원본 키 수**다 — 표시할 수 없어 격리된 손상 항목도 "초기화로 지울 것"에는 포함된다.
+   */
+  excluded: number;
 }
 
 export interface Overview {
@@ -84,10 +108,18 @@ export interface Overview {
 // 200게임에서 그 계산은 파일 크기에 좌우돼 예산을 예측할 수 없다(설계 §0-A·§9-F A-3).
 export const getOverview = rpc<[detail?: boolean], Overview>("get_overview");
 
-/** 게임 하나에 적용. 보조 동작이다(주 동작은 일괄 적용). */
-export const applyProfile = rpc<[appid: string, profile: Profile], { notes: string[]; sha1: string }>(
-  "apply_profile",
-);
+/**
+ * 게임 하나에 적용. 보조 동작이다(주 동작은 일괄 적용).
+ *
+ * ★ `checked_in` = 적용 **전에** 엔진이 현재 디스크를 되쓴 직전 프로필(F6). 없으면 `null`.
+ *   체크인은 조용한 덮어쓰기라(백업 링 1칸 소모) 화면이 그 사실을 말해야 한다.
+ * ⚠️ **실패 봉투(`params`)에도 실린다** — "적용은 실패했는데 프로필은 이미 바뀐" 상태가
+ *   실재한다(엔진은 체크인을 쓴 뒤에 백업·쓰기 실패로 거부할 수 있다). 실패 note에도 병기한다.
+ */
+export const applyProfile = rpc<
+  [appid: string, profile: Profile],
+  { notes: string[]; sha1: string; checked_in: Profile | null }
+>("apply_profile");
 
 // ── 저장 (덮어쓰기) ──────────────────────────────────────────────────────────
 /**
@@ -143,9 +175,23 @@ export interface ApplyRow {
   note: string;
 }
 
+/** 체크인이 일어난 게임 한 건(F6). `profile` = 현재 디스크가 되쓰인 **직전 프로필**이다. */
+export interface CheckinRow {
+  appid: string;
+  name: string;
+  profile: Profile;
+}
+
 export interface ApplyAllResult {
   results: ApplyRow[];
   counts: Partial<Record<Outcome, number>>;
+  /**
+   * 이번 일괄 적용에서 **체크인이 일어난 게임들**(F6). 없으면 빈 배열이다.
+   * ★ 결과 행(`results`)은 엔진 반환 그대로이고 이 값은 **별도 필드**다 — 행을 변형하면
+   *   route와 엔진 직접 호출의 동등성(G10)이 무너진다.
+   * ⚠️ `applyProfile`과 같이 **실패 봉투에도** 실릴 수 있다(`params.checkin`).
+   */
+  checkin: CheckinRow[];
 }
 
 // ⚠️ 게임별 실패가 있어도 **봉투는 ok:true**다. 봉투를 실패로 만들면
@@ -167,6 +213,12 @@ export interface ApplyAllConfirmParams {
   confirm_token: string;
   /** 미리보기를 만든 방향. 토큰이 이 값에 묶여 있어 다른 프로필에는 재생되지 않는다. */
   profile: Profile;
+  /**
+   * 등록된 게임 수 — **토큰 발급 시점의 스냅샷**이다. 확인창 본문은 **이 값만** 그린다:
+   * `getOverview`의 total은 다른 시점의 조회라 토큰이 지문 낸 대상과 어긋날 수 있다.
+   * 아래 5버킷의 합 = 이 값이 계약이다.
+   */
+  total: number;
   would_apply: number;
   already: number;
   no_profile: number;
@@ -226,12 +278,38 @@ export interface DiscoverCounts {
   confident_unregistered: number;
 }
 
+/**
+ * 감지에서 제외한 게임 한 건(A9). *"삭제 = 등록 해제 + 감지 제외"*의 결과가 여기 쌓인다.
+ * ★ `name`은 **제외 시점에 캡처한 값**이다 — 지운 뒤에는 registry에도 없고 미설치 게임은
+ *   탐지에도 안 나오므로, 화면이 그릴 이름이 이것 말고는 없다.
+ * ★ `excluded_at_label`은 **백엔드가 만든 표시값**(`YYYY-MM-DD HH:MM`)이다. 알 수 없으면 빈
+ *   문자열이고, 그때 화면은 그 자리를 그리지 않는다. 프론트가 날짜를 쪼개지 않는다.
+ */
+export interface ExcludedRow {
+  appid: string;
+  name: string;
+  excluded_at_label: string;
+}
+
+/**
+ * 감지 제외를 해제한다 — **한 버튼 한 쓰기**다. 재포함은 **등록이 아니다**:
+ * 이 호출 뒤 그 게임은 감지 목록에 후보로 다시 뜰 뿐이고, 등록은 사용자가 거기서 한다.
+ * ★ 제외돼 있지 않은 appid도 **정상 종료**(멱등)다 — 호출 조건을 화면이 판단하지 않는다.
+ * ★ 반환은 `discoverGames`의 `excluded`와 **같은 모양**이다(백엔드 공통 헬퍼).
+ */
+export const includeGame = rpc<[appid: string], { excluded: ExcludedRow[] }>("include_game");
+
 /** 탐지는 **인자가 없고 아무것도 쓰지 않는다**(순수 탐색). */
 export const discoverGames = rpc<
   [],
   {
     entries: DiscoverEntry[];
     counts: DiscoverCounts;
+    /**
+     * 감지에서 제외한 게임들(A9) — 「제외한 게임」 뷰의 재료다. 제외분은 `entries`에
+     * **구조적으로 없다**(백엔드가 탐지 목록을 만드는 한 곳에서 거른다).
+     */
+    excluded: ExcludedRow[];
     /**
      * Steam 라이브러리 루트들. **탐지 0건일 때 파일 선택기를 어디서 열지**가 여기서 나온다 —
      * `entries`가 비면 시작 위치를 만들 근거가 사라지고, 그러면 0건 안내가 가리키는
@@ -272,6 +350,12 @@ export interface AddGameResult {
    * 뜻이다 — 경고가 있는 등록은 확인 토큰 없이 여기까지 올 수 없기 때문이다(아래 2단계 계약).
    */
   warnings: string[];
+  /**
+   * 등록 직후 그 게임에 **남아 있는 백업 개수**. 등록을 해제해도 백업은 남으므로, 다시 등록한
+   * 순간 "복원할 것이 있다"를 안내할 수 있어야 한다(§9-③). **백엔드가 센다.**
+   * 0이면 그 안내를 그리지 않는다(기존 "0이면 안 그림" 문법).
+   */
+  backups: number;
 }
 
 /**
@@ -336,6 +420,13 @@ export interface DeleteConfirmParams {
   saved_at: Record<Profile, string>;
   /** 그 게임의 현재 백업 개수. 삭제해도 이 백업들은 남는다. */
   backups: number;
+  /**
+   * 그 게임의 설정 파일 경로 — 확인창의 *"설정 파일: {path}"* 한 줄이 쓴다(§9-②).
+   * 대피본에는 meta가 없어 원본 경로를 아는 곳이 삭제 **전**의 registry뿐이라, 지우기 직전이
+   * 그 경로를 보여줄 마지막 기회다.
+   * ⚠️ **빈 문자열일 수 있다**(경로가 정상 상태가 아닌 게임). 빈 값이면 그 줄을 그리지 않는다.
+   */
+  config_path: string;
 }
 
 export interface DeleteResult {
@@ -369,6 +460,11 @@ export interface ResetConfirmParams {
    * **전체 초기화에 같이 지워진다** — 모르고 잃지 않게 확인창이 미리 말한다. 0이면 안 그린다.
    */
   named: number;
+  /**
+   * 감지 제외 목록의 건수(A9 ④). 초기화는 registry를 통째로 갈아 끼우므로 **제외 목록도 같이
+   * 지워진다** — 모르고 잃지 않게 확인창이 미리 말한다. 0이면 그 줄을 그리지 않는다.
+   */
+  excluded: number;
   /**
    * 사용자가 그대로 입력해야 하는 확인 단어.
    * ★★ **번역하지 않는다.** i18n에 넣는 순간 화면이 보여주는 단어와 백엔드가 대조하는

@@ -245,7 +245,15 @@
  
      notes = []
      # 여기 있던 learn_sticky() 호출을 뺐다(2026-08-03). **오염의 가장 굵은 경로였다** —
-@@ -424,7 +529,7 @@
+@@ -388,6 +493,7 @@
+ 
+     # ---- 체크인: 현재 디스크 상태를 직전 프로필로 되쓴다 (G3)
+     previous = entry.get("last_applied")
++    if previous not in ("dock", "internal"): previous = None    # v2: 손상 값은 경로 조각이 된다
+     state = disk_state(reg, appid)
+     if state["exists"]:
+         if not previous:
+@@ -424,7 +530,7 @@
          try:
              store.make_backup(appid, disk_data, "disk", os.path.basename(path))
          except OSError as exc:                                   # G13
@@ -254,7 +262,7 @@
  
      # 권한과 소유자를 그대로 이어받는다. 소유자 보존은 Decky(백엔드가 root) 확장을 막지 않기 위함.
      mode = None
-@@ -456,7 +561,9 @@
+@@ -456,7 +562,9 @@
      게임에 들어가게 된다. 그래서 **중단하지 않고, 대신 무엇이 안 됐는지를 전부 돌려준다.**
      호출자는 이 목록을 **반드시 사용자에게 보여줘야 한다**(UI는 결과 창, CLI는 표 출력).
  
@@ -265,7 +273,7 @@
      등록 순서가 아니라 **appid 정렬 순서**로 돈다 — UI의 게임 목록과 같은 순서라야
      결과를 대조할 수 있다.
  
-@@ -466,7 +573,7 @@
+@@ -466,7 +574,7 @@
      for appid in sorted(reg["games"]):
          entry = reg["games"].get(appid) or {}
          row = {"appid": appid, "name": entry.get("name") or appid,
@@ -274,7 +282,7 @@
          results.append(row)
  
          # 게임 하나의 처리 전체를 감싼다 — 실패 지점이 어디든 **그 게임만** 실패해야 한다.
-@@ -498,6 +605,7 @@
+@@ -498,6 +606,7 @@
          except Refused as exc:
              row["outcome"] = "refused"
              row["note"] = str(exc).splitlines()[0]
@@ -282,7 +290,7 @@
          except Exception as exc:
              # **일부러 넓게 잡는다.** 이 함수의 존재 이유는 "하나가 실패해도 나머지는 계속
              # 간다"이고, 그 약속은 예외 **종류**에 따라 깨지면 안 된다. 좁게 잡았다가
-@@ -510,6 +618,7 @@
+@@ -510,6 +619,7 @@
              row["outcome"] = "error"
              row["note"] = ("이 게임의 등록 정보를 처리하지 못했습니다. 다시 등록해 보십시오. "
                             "(%s: %s)" % (type(exc).__name__, exc))
@@ -290,7 +298,7 @@
      return results
  
  
-@@ -586,10 +695,11 @@
+@@ -586,10 +696,11 @@
      entry = game_or_fail(reg, appid)
      path = entry["config_path"]
      check_path(appid, path)

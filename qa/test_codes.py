@@ -12,7 +12,8 @@
 가드를 둘 늘리자 기준이 통째로 깨졌다(설계 E2). 집합 기준은 코드가 늘거나 줄어도 안 깨진다.
 
 이 테스트가 있어야 raise에 code를 다는 작업을 기계적으로 해도 안전하다.
-검사 대상: py_modules/gfxp/{engine,store,remove,restore,confirm,labels}.py 의 `raise Refused(...)` / `raise RegistryError(...)`
+검사 대상: **`py_modules/gfxp/*.py` 전량**(아래 `SKIP` 명시 제외분만 뺀다)의
+`raise Refused(...)` / `raise RegistryError(...)`
 """
 import ast
 import pathlib
@@ -23,6 +24,10 @@ sys.path.insert(0, str(ROOT / "py_modules"))
 from gfxp import codes  # noqa: E402
 
 TARGETS = {"Refused", "RegistryError"}
+
+#: 스캔에서 뺄 파일 — **근거 주석 없이 늘리지 말 것.** 지금은 비어 있다(전 파일 통과 확인,
+#: 2026-08-11 P11). 여기에 이름을 올리는 것은 "이 파일의 `code=` 규율은 검사 밖"이라는 선언이다.
+SKIP = frozenset()
 
 
 def raises_in(path):
@@ -55,15 +60,20 @@ def main():
     used = set()
     total = 0
 
-    # ★ `remove.py`를 여기 넣지 않으면 그 파일의 `code=` 규율은 **검사 밖**이다
-    #   (DESIGN-DELETE 반증 채택 2 — "test_codes가 자동으로 잠근다"는 허구였다).
-    #   스캔 대상은 손으로 유지하는 목록이라 새 정책 파일을 만들 때마다 여기에 등재해야 한다.
-    #   ⚠️ `confirm.py`·`labels.py`는 **오늘은 `raise`가 0건이라 아무것도 안 잠근다**(2026-08-10
-    #     qa-lead 지적). 그래도 등재하는 이유는 대칭이다 — fence 밖 정책 파일 다섯이 같은 규율
-    #     아래 있어야, 그중 하나에 첫 `raise`가 생기는 날 **자동으로** 검사에 걸린다.
-    for fname in ("engine.py", "store.py", "remove.py", "restore.py",
-                  "confirm.py", "labels.py"):
-        path = ROOT / "py_modules" / "gfxp" / fname
+    # ★★ 스캔 대상은 **glob + 명시 제외**다 (2026-08-11 P11, Codex D-10).
+    #   예전에는 손으로 유지하는 파일 목록이었다. 그 방식은 새 정책 파일(`exclude.py` 같은)을
+    #   만들 때마다 등재를 기억해야 하고, **잊은 파일이 조용히 검사를 우회한다** —
+    #   `remove.py`가 실제로 그렇게 빠져 있었다(DESIGN-DELETE 반증 채택 2). 등재를 잊는 예외를
+    #   처리하는 대신, **그 예외가 생기지 않는 구조**로 바꾼다: 폴더 전량을 훑고, 빠지는 것만
+    #   근거와 함께 아래에 적는다.
+    #   ⚠️ `confirm.py`·`labels.py`·`exclude.py`처럼 **오늘은 `raise`가 0건인 파일도 대상이다**
+    #     (2026-08-10 qa-lead 지적). 그래야 그중 하나에 첫 `raise`가 생기는 날 자동으로 걸린다.
+    targets = sorted((ROOT / "py_modules" / "gfxp").glob("*.py"))
+    skipped = [p.name for p in targets if p.name in SKIP]
+    for path in targets:
+        if path.name in SKIP:
+            continue
+        fname = path.name
         for lineno, exc, const in raises_in(path):
             total += 1
             if const is None:
@@ -75,7 +85,8 @@ def main():
             else:
                 used.add(getattr(codes, const))
 
-    print(f"검사한 raise: {total}개 / 사용된 코드: {len(used)}종 / codes.py 정의: {len(known)}종")
+    print(f"검사 대상 {len(targets) - len(skipped)}파일(glob, 제외 {skipped or '없음'}) / "
+          f"검사한 raise: {total}개 / 사용된 코드: {len(used)}종 / codes.py 정의: {len(known)}종")
 
     unknown = used - known
     if unknown:

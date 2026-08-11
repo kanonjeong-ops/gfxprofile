@@ -181,9 +181,13 @@ def main_test():                                                # noqa: C901
         # ⑦ 화면이 그릴 값이 다 오는가
         p = params_of(env)
         for key in ("confirm_token", "profile", "would_apply", "already", "no_profile",
-                    "running_refused", "cannot_apply"):
+                    "running_refused", "cannot_apply", "total"):
             if key not in p:
                 P("⑦ 미리보기 params에 %s가 없다 — 화면이 그릴 수 없다" % key)
+        # ★ `total`은 **토큰 발급 시점의 등록 수 스냅샷**이다(D-06). 확인창 본문은 이 값만
+        #   그린다 — `get_overview`의 total을 쓰면 토큰이 지문 낸 대상과 화면 숫자가 어긋난다.
+        if p.get("total") != 3:
+            P("⑦ 미리보기 total이 등록 수(3)와 다르다 — %s" % p.get("total"))
         if p.get("profile") != "internal":
             P("⑦ params.profile이 요청 방향과 다르다 — %s" % p.get("profile"))
         if (p.get("would_apply"), p.get("no_profile")) != (2, 1):
@@ -263,6 +267,15 @@ def main_test():                                                # noqa: C901
         rows = data_of(env).get("results") or []
         if len(rows) != 3 or counts.get("applied") != 2 or counts.get("no_profile") != 1:
             P("⑥ 2차 실행 결과가 현행 apply_all과 다르다 — counts=%s rows=%d" % (counts, len(rows)))
+        # ★ 체크인 관측(F6)이 **기존 계약에 무해한가**: `checkin`은 별도 필드이고, 결과 행은
+        #   엔진 반환 그대로다(관측이 행을 변형하면 ⑥″의 G10 대조가 무너진다).
+        #   관측 자체의 정확성은 `qa/test_checkin_view.py`가 잰다.
+        if not isinstance(data_of(env).get("checkin"), list):
+            P("⑥ 봉투에 checkin 배열이 없다 — 체크인 고지를 화면이 그릴 수 없다 (%s)"
+              % data_of(env).get("checkin"))
+        for row in rows:
+            if set(row) != {"appid", "name", "outcome", "code", "note"}:
+                P("★⑥ 결과 행이 엔진 반환 모양과 다르다 — 관측이 행을 변형했다 (%s)" % sorted(row))
 
         # ═══════════════════════════════════════════════════════════════════
         # ② 토큰 우회 전종

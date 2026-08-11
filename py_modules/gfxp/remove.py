@@ -49,6 +49,33 @@ _META = "meta.json"
 _UNSAFE_FP = "unsafe"
 
 
+def _in_place(real_path, real_parent, name):
+    """심볼릭 링크를 다 푼 실경로가 **정확히 그 부모의 그 이름**인가.
+    (`..`·절대경로·경로 중간 링크·직접 링크·루트 안 남의 게임을 가리키는 링크를 한 번에 닫는다.)"""
+    return (os.path.dirname(real_path), os.path.basename(real_path)) == (real_parent, name)
+
+
+def slot_in_position(appid, profile):
+    """**읽기 전용 소비자를 위한 좁은 술어** — `profiles/<appid>/<profile>` 하나만 본다.
+
+    ★ 왜 넓은 `_paths_in_position`을 그대로 쓰면 안 되는가(2026-08-11 P11 게이트 R2):
+      그쪽은 `backups/<appid>`까지 요구한다 — **대피·prune이 그 경로를 만지기 때문**이다.
+      그런데 슬롯 meta만 읽는 소비자(`main._slot_view`·체크인 슬롯 지문)는 backups를 읽지
+      않는다. 넓은 술어를 쓰면 `backups/<appid>`만 링크인 **정상 게임**에서 화면이 슬롯을
+      "없음"으로 말하고 체크인 관측이 **침묵**한다 — 없는 사실을 만드는 쪽이다.
+      **술어는 그 소비자가 실제로 만지는 경로와 같아야 한다.**
+    ★ 기준점을 appid에서 파생시키지 않는다 — 고정 앵커(`profiles` 홈)에서 시작한다.
+    """
+    appid = str(appid)
+    real_root = os.path.realpath(store.profiles_root(appid))
+    home_prof = os.path.realpath(os.path.join(store.data_dir(), "profiles"))
+    if not _in_place(real_root, home_prof, appid):
+        return False
+    # 슬롯 검사는 root가 `profiles/<appid>`로 확정된 **뒤**라야 real_root를 기준점으로 재사용해도
+    # 안전하다(신뢰할 수 없는 값에서 기준점을 파생시키지 않는다는 위 원칙 그대로).
+    return _in_place(os.path.realpath(store.profile_dir(appid, profile)), real_root, str(profile))
+
+
 def _paths_in_position(appid):
     """이 appid가 **만지게 될 모든 경로**가 데이터 루트 안 제자리인가.
 
@@ -71,26 +98,14 @@ def _paths_in_position(appid):
       검사가 무력해진다. 기준점(`profiles`/`backups` 홈)은 appid와 무관한 고정 앵커다.
     """
     appid = str(appid)
-    data = store.data_dir()
-
-    def in_place(real_path, real_parent, name):
-        return (os.path.dirname(real_path), os.path.basename(real_path)) == (real_parent, name)
-
-    real_root = os.path.realpath(store.profiles_root(appid))
-    home_prof = os.path.realpath(os.path.join(data, "profiles"))
-    if not in_place(real_root, home_prof, appid):
-        return False
-    # 슬롯 검사는 root가 `profiles/<appid>`로 확정된 **뒤**라야 real_root를 기준점으로 재사용해도
-    # 안전하다(신뢰할 수 없는 값에서 기준점을 파생시키지 않는다는 위 원칙 그대로).
+    # 프로필 루트·두 슬롯 판정은 **좁은 술어 한 곳**에 있다(위 `slot_in_position`) —
+    # 같은 판정을 두 곳에 두면 언젠가 한쪽만 고쳐진다.
     for profile in PROFILES:
-        real_slot = os.path.realpath(store.profile_dir(appid, profile))
-        if not in_place(real_slot, real_root, profile):
+        if not slot_in_position(appid, profile):
             return False
     real_bk = os.path.realpath(store.backups_dir(appid))
-    home_bk = os.path.realpath(os.path.join(data, "backups"))
-    if not in_place(real_bk, home_bk, appid):
-        return False
-    return True
+    home_bk = os.path.realpath(os.path.join(store.data_dir(), "backups"))
+    return _in_place(real_bk, home_bk, appid)
 
 
 def _meta_or_none(appid, profile):
@@ -113,6 +128,11 @@ def delete_preview(reg, appid):
     판정 기준은 **meta 존재**다. `main._profile_ready`(meta ∧ 본체)와 일부러 다르다 —
     저쪽은 *"적용할 수 있는가"*를 재고 여기는 *"지울 것이 있는가"*를 잰다. 본체가 없어도
     meta가 있으면 지울 것이 있다.
+
+    ★ `config_path`(§9-②)는 확인창의 *"설정 파일: {path}"* 한 줄이 쓴다 — **표시 전용**이다.
+      대피본에는 meta가 없어(설계 §1-6) 원본 경로를 아는 곳이 삭제 **전**의 registry뿐이라,
+      지우기 직전 화면이 그 경로를 보여줄 마지막 기회가 여기다. str이 아니면 빈 문자열로
+      접는다 — 빈 값이면 화면이 그 줄을 안 그린다(기존 "0이면 안 그림" 문법).
     """
     appid = str(appid)
     entry = engine.game_or_fail(reg, appid)
@@ -120,9 +140,11 @@ def delete_preview(reg, appid):
     if not _paths_in_position(appid):
         # 안전하지 않은 키 — 외부를 **읽지 않는다**(Codex #2). "지울 프로필 없음"으로 보고하고,
         # 실제 삭제 문에서 escape로 남긴다. 확인창은 이 게임을 빈 것으로 표시한다.
+        # 경로도 **말하지 않는다**: 이 게임은 화면이 정상적으로 안내할 수 있는 상태가 아니다.
         return {"appid": appid, "name": name, "has_dock": False, "has_internal": False,
-                "saved_at": {p: "" for p in PROFILES}, "backups": 0}
+                "saved_at": {p: "" for p in PROFILES}, "backups": 0, "config_path": ""}
     metas = {p: _meta_or_none(appid, p) for p in PROFILES}
+    config_path = entry.get("config_path")
     return {
         "appid": appid,
         "name": name,
@@ -130,6 +152,7 @@ def delete_preview(reg, appid):
         "has_internal": bool(metas["internal"]),
         "saved_at": {p: (metas[p] or {}).get("saved_at") or "" for p in PROFILES},
         "backups": len(store.list_backups(appid)),
+        "config_path": config_path if isinstance(config_path, str) else "",
     }
 
 
