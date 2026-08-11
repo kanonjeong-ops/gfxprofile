@@ -1,3 +1,4 @@
+import { diskStateText } from "./confirmSpecs";
 import { ConfirmModal } from "./deckyui";
 import { t } from "./i18n";
 import { BACKUP_WARN_APPLIES } from "./limits";
@@ -16,21 +17,10 @@ import type { ConfirmParams, Profile } from "./rpc";
  */
 
 /**
- * 「덮어쓸 내용」이 지금 어떤 상태인지를 한 줄로 — 백엔드가 준 4분류를 그대로 쓴다.
- *
- * ★ M1은 화면 문구를 합쳤지만 **코드는 갈라 둔다**(설계 §2-E-0). 합치면 `"unknown"`이
- *   *"게임에서 조정함"*과 *"조회 실패"* 두 뜻을 갖게 되어 문구를 고를 수 없다.
+ * ⚠️ `diskStateText`는 **`confirmSpecs.tsx`로 옮겼다**(P12 §12 이식 맵). 저장·복원 확인창이
+ *   같은 관문을 쓰는 규칙은 그대로이고, 사는 자리만 spec 파일로 갔다 — 이 컴포넌트는
+ *   P15에서 spec으로 대체되어 사라진다.
  */
-export function diskStateText(p: { disk_state: ConfirmParams["disk_state"]; matched_profile?: Profile }): string {
-  if (p.disk_state === "other_profile" && p.matched_profile) {
-    return t("DISK_STATE_OTHER", {
-      profile: t(p.matched_profile === "dock" ? "PROFILE_DOCK" : "PROFILE_INTERNAL"),
-    });
-  }
-  if (p.disk_state === "unknown") return t("DISK_STATE_UNKNOWN");
-  if (p.disk_state === "missing") return t("DISK_STATE_MISSING");
-  return t("DISK_STATE_LOOKUP_FAILED");
-}
 
 export function SaveConfirmModal({
   params,

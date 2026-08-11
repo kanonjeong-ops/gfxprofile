@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
+import { diskStateText } from "./confirmSpecs";
 import { ConfirmModal, DialogButton, Focusable, ModalRoot, TextField, showModal } from "./deckyui";
 import { setProfileNames, t, tCode, tDefault, type StringKey } from "./i18n";
 import { PROFILE_NAME_MAX } from "./limits";
-import { SaveConfirmModal, diskStateText } from "./saveConfirm";
+import { SaveConfirmModal } from "./saveConfirm";
 import { slotSummary } from "./slots";
 import {
   deleteGame, getOverview, listBackups, resetAll, restoreBackup, saveProfile, setProfileName,

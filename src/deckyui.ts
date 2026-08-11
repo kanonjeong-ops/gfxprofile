@@ -11,7 +11,11 @@
 import {
   ButtonItem,
   ConfirmModal,
+  // ★ 팝업 골격의 구획(§4-A·§13). 타입은 `Dialog.d.ts:23,28`에 실재하고 lsfg-vk가 런타임에서
+  //   실제로 쓴다(dist:1652-1656). 못 얻어지면 `uicheckMissing`이 백엔드 로그로 보고한다.
+  DialogBody,
   DialogButton,
+  DialogHeader,
   Focusable,
   // ⚠️ `ModalRoot`는 **타입이 `any`다**(`@decky/ui` 4.11.0 `Modal.d.ts:47`) — 기존 관례대로
   //    여기에 명시해 둔다. 타입 검사가 이 컴포넌트에 대해서는 아무것도 보장하지 않는다.
@@ -23,6 +27,10 @@ import {
   //      **여기 올려 두는 것 자체가 관측 장치**이기도 하다 — self-check가 런타임에 실제로
   //      얻어지는지 보고, 못 얻으면 `uicheck_missing`으로 백엔드 로그에 남는다.
   ModalRoot,
+  // ★ 열 유지(§4-E ②)의 값은 **라이브러리 상수**로 쓴다 — 숫자 2를 박으면 라이브러리가 값을
+  //   바꾸는 날 조용히 다른 뜻이 된다(`FooterLegend.d.ts:33-36`). enum이라 값이 아니라 이름으로
+  //   결합한다. 런타임에 못 얻어지면 self-check가 보고한다.
+  NavEntryPositionPreferences,
   Navigation,
   PanelSection,
   PanelSectionRow,
@@ -35,9 +43,12 @@ import {
 export {
   ButtonItem,
   ConfirmModal,
+  DialogBody,
   DialogButton,
+  DialogHeader,
   Focusable,
   ModalRoot,
+  NavEntryPositionPreferences,
   Navigation,
   PanelSection,
   PanelSectionRow,
@@ -56,9 +67,12 @@ export {
 const REQUIRED: Record<string, unknown> = {
   ButtonItem,
   ConfirmModal,
+  DialogBody,
   DialogButton,
+  DialogHeader,
   Focusable,
   ModalRoot,
+  NavEntryPositionPreferences,
   Navigation,
   PanelSection,
   PanelSectionRow,
