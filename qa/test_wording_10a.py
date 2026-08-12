@@ -23,17 +23,19 @@ U-9 에러 문구 7키가 **미반영인 채 P11·P12·P13 세 단계를 통과�
   신호다(래칫: 한 번 맞춘 값은 다시 풀리지 않는다).
 
 ### 언어
-§10-A가 en 값까지 명시한 키만 en을 함께 잠근다(`SAVE_CONFIRM_BODY` + U-9 7키 = 8키).
+§10-A가 en 값까지 명시한 키만 en을 함께 잠근다(`SAVE_CONFIRM_BODY` + U-9 7키 + `UI_CHECK_FAILED` = 9키).
 나머지는 ko만 — 설계가 en 값을 확정하지 않은 자리에 이 검사가 값을 창작하면, 다음에
 설계가 확정할 때 **검사가 설계를 막는다.**
 
 ### §10-A 표에 **바이트 값이 없는** 행 (여기서 다루지 않는다 — 소관을 적어 둔다)
-- `RESET_OK` — "유지 + `RESET_LEFT_NOTE` 병기 규칙". 값이 아니라 **조합 규칙**이다(§7 소관).
 - `MANAGE_NAMES_HINT 등 "설정" 충돌 문구` → "프로필로 통일" — 대상 키를 열거하지 않은
   **어휘 규칙 행**. 기계 판정은 `test_wording_a5`의 A5 금칙 검사가 한다.
 - `POPUP_*_MODAL_FAILED` 3종 — "각 대상명 포함 문구". §10-C의 **잠정** 문구라 값 미확정.
-- `DELETE_CONFIRM_TITLE`·`DELETE_OK` 행은 어휘 규칙 행이지만 두 키에 예시 문자열이 붙어
-  있어 `PINNED`로 잠근다(실물은 이름에 「」를 두르는 관례를 지킨다 — 아래 note 참조).
+
+⚠️ **`UI_CHECK_FAILED`는 이 목록에서 나갔다**(2026-08-12 P16 게이트 C3): 8판은 U-9 규율만
+넓히고 값을 "구현 확정"으로 남겨 두었는데, 그러면 **같은 규율을 지키는 키 중 이 하나만
+안 잠긴다** — 옛 문구("— 로그를 확인하십시오")로 되돌려도 아무 검사가 말하지 않았다.
+9판이 §10-A에 ko/en 값을 등재했고(설계가 먼저), 그래서 아래 `LOCKED`로 편입한다(검사가 나중).
 
 ### §10-A 행이 늘거나 값이 바뀌면
 표에 키를 추가하고 `TOTAL_FIXED`를 **의식적으로** 갱신한다. 상수를 두는 이유는 C3와 같다 —
@@ -150,38 +152,49 @@ LOCKED = {
               "its graphics settings usually creates it. If it still doesn't appear, "
               "pick the file again from [Detect games].",
     },
+    # ── 8판(P16 문서 마감)에서 §10-A 셀이 실물로 정정되며 합류한 4키 ──────────────
+    #    셋(RESTORE_FOLLOWUP_MODAL_FAILED·DELETE_CONFIRM_TITLE·DELETE_OK)은 **구현이
+    #    설계 셀보다 앞서 있던** 자리다 — P13·P15에서 "되돌리지 말고 문서를 고친다"로
+    #    판정하고 P16 마감에 셀을 정정했다(설계 §10-A + 「」 관례 절). 이제 두 쪽이 같으므로
+    #    PINNED(다른 값으로 잠금)에 남을 이유가 없다 — 래칫대로 LOCKED로 옮긴다.
+    #    `RESET_OK`는 반대 방향이다: P16 E4로 **값 자체를 고쳤고**(0을 그리지 않는다),
+    #    §10-A 셀도 그 값으로 확정됐다. en은 §10-A가 확정하지 않아 ko만 잠근다.
+    "RESTORE_FOLLOWUP_MODAL_FAILED": {
+        "ko": "게임 설정 파일은 되돌렸습니다. 다만 프로필에도 저장할지 묻는 창을 표시하지 "
+              "못했습니다 — 이 게임의 프로필 저장으로 저장하십시오.",
+    },
+    "DELETE_CONFIRM_TITLE": {"ko": "「{name}」의 등록을 해제할까요?"},
+    "DELETE_OK": {"ko": "「{name}」의 등록을 해제했습니다"},
+    "RESET_OK": {"ko": "초기화 완료 — {deleted}개 삭제"},
+    # ── 9판에서 §10-A가 값을 확정하며 합류한 1키(P16 게이트 C3) ─────────────────
+    #    U-9 7키와 **같은 규율**을 지키는 문구인데 8판까지 값이 미확정이라 혼자 안 잠겨
+    #    있었다. en까지 §10-A가 명시하므로 두 언어를 함께 잠근다.
+    "UI_CHECK_FAILED": {
+        "ko": "화면 구성 요소를 찾지 못했습니다 ({missing}) — 플러그인을 껐다 켜서 다시 "
+              "시도해 보십시오. 계속되면 Decky 설정의 플러그인 로그에 원인이 남아 있습니다.",
+        "en": "Some UI components were not found ({missing}) — toggle the plugin off and on "
+              "to retry. If it persists, the cause is recorded in the plugin log under "
+              "Decky settings.",
+    },
 }
 
 #: 아직 §10-A 값이 아닌 키 — **현행 값으로 잠근다**. `converge`가 있으면 그 값에 도달하는
 #: 순간 실패한다(= LOCKED로 옮기라는 신호). 없으면 §10-A 셀 표기가 실물보다 낡았다는 뜻이고,
 #: 어느 쪽을 고칠지는 `note`가 가리키는 자리에서 판단한다.
-PINNED = {
-    # (QAM 4키는 **P15-C에서 합류해 LOCKED로 옮겼다**: `BULK_APPLY`·`APPLY_ALL_CONFIRM_TITLE`·
-    #  `APPLY_ALL_CONFIRM_BODY`·`APPLY_PROBLEM_REFUSED`. 감지 팝업 3키는 P14에서 합류했다 —
-    #  래칫: 한 번 맞춘 값은 다시 안 풀린다. 이로써 `converge` 대기는 **0**이다.)
-    # ── converge 없음: 실물이 설계 셀보다 **앞서 있다**(구현이 의도적으로 강화함) ──────
-    "RESTORE_FOLLOWUP_MODAL_FAILED": {
-        "ko": "게임 설정 파일은 되돌렸습니다. 다만 프로필에도 저장할지 묻는 창을 표시하지 "
-              "못했습니다 — 이 게임의 프로필 저장으로 저장하십시오.",
-        "note": "§10-A 셀은 '설정 파일은…'. 구현이 §5-C 어법대로 '게임 설정 파일'로 "
-                "명확히 했다(A5 강화) — 되돌리지 않는다. §10-A 셀 표기 정정은 P16 문서 마감",
-    },
-    "DELETE_CONFIRM_TITLE": {
-        "ko": "「{name}」의 등록을 해제할까요?",
-        "note": "§10-A 셀은 어휘 규칙 행이라 「」를 생략한 예시다. 「」 사용은 전역 관례가 아니라 "
-                "혼재다(사용 7키 / {name} 쓰며 미사용 3키 — DISCOVER_ADDED 등). 삭제 확인창 "
-                "계열은 「」를 쓴다 — P16 판단 근거는 이 실측(게이트 O1 정정)",
-    },
-    "DELETE_OK": {
-        "ko": "「{name}」의 등록을 해제했습니다",
-        "note": "DELETE_CONFIRM_TITLE과 같은 사유",
-    },
+PINNED: dict = {
+    # ⚠️ **지금은 비어 있다 — 래칫이 전부 합류했다**(P16 문서 마감).
+    #    이력: QAM 4키는 P15-C에서, 감지 팝업 3키는 P14에서 §10-A 값에 도달해 LOCKED로 옮겼고,
+    #    남아 있던 3키(RESTORE_FOLLOWUP_MODAL_FAILED·DELETE_CONFIRM_TITLE·DELETE_OK)는
+    #    **문서 쪽이 낡은 경우**라 8판에서 §10-A 셀을 실물로 정정하고 함께 LOCKED로 옮겼다.
+    #    비어 있음은 "잠글 것이 없다"가 아니라 **설계와 실물이 전부 붙었다**는 뜻이다.
+    #    다음에 설계 셀과 실물이 갈리는 키가 생기면 여기에 현행 값으로 못 박고(면제가 아니다)
+    #    `note`에 왜 다른지·어디서 합류하는지를 적는다.
 }
 
 #: 두 표의 합 — §10-A에서 바이트 값을 뽑아낼 수 있는 키의 전수. 표를 늘리거나 줄이면
 #: 이 숫자를 **의식적으로** 갱신하라. 하한(>=)이 아니라 등호인 이유: 한 줄이 조용히
 #: 사라져도 통과하는 검사는 검사가 아니다(P13 게이트 C3와 같은 판단).
-TOTAL_FIXED = 26
+TOTAL_FIXED = 28
 
 
 def diff_at(expected, actual):

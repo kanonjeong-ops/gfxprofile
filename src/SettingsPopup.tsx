@@ -81,7 +81,10 @@ export function SettingsPopup({
         if (res.ok) {
           const deleted = res.data.counts.deleted ?? 0;
           const left = res.data.results.length - deleted;
-          const ok = t("RESET_OK", { deleted, left });
+          // ★ `RESET_OK`는 **지운 것만** 말한다 — 남은 것은 `left > 0`일 때만 아래 줄이 말한다.
+          //   (P16 E4: 예전 문구는 다 지워졌을 때도 "0개 남음"을 그렸다 — 없던 일을 사건처럼
+          //    말하는 자리였고, 남은 게 있을 때는 같은 수를 두 번 말했다.)
+          const ok = t("RESET_OK", { deleted });
           setNote(left > 0 ? `${ok} ${t("RESET_LEFT_NOTE", { left })}` : ok);
           resetTyped.current = "";     // 성공했으면 보존할 입력도 없다
           return;

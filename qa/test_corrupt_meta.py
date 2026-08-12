@@ -72,6 +72,8 @@ def main_test():
                 fh.write(content)
 
             # ① 현황 탭 두 경로 — UNEXPECTED로 죽으면 안 된다.
+            # ⚠️ 이 상태에서 **화면은 빈 슬롯으로 보인다**(main.py:343이 비-dict meta를 적용 불가로
+            #    접는다) — 적용 버튼이 비활성이라 `PROFILE_CORRUPT`에는 도달하지 않는다(설계 §15-D E6).
             ov_f = rpc(main, "get_overview")
             if not ov_f.get("ok"):
                 P("[%s] get_overview(detail=false)가 손상 meta에 죽었다 — %s" % (kind, ov_f.get("code")))

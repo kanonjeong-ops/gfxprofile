@@ -473,9 +473,14 @@ export function GamesPopup({
             실패이지 0개가 아니다. 실패 문구는 위 note가 이미 그린다. */}
         {renderListTail()}
 
-        {/* ★ U-8: 제외된 게임이 있을 때만 한 줄. 0건이면 완전 미표시다(A6 간결·"0이면 안 그림"). */}
+        {/* ★ U-8: 제외된 게임이 있을 때만 한 줄. 0건이면 완전 미표시다(A6 간결·"0이면 안 그림").
+            ★★ **수를 말하지 않는다**(2026-08-12 P16 게이트 C1): 표시 조건에 쓰는 `counts.excluded`는
+              **원본 키 수**(raw)이고, 이 안내가 가리키는 제외 뷰는 **손상 항목을 격리한 뒤의 rows**를
+              보여 준다(설계 §15-D E5). 조건에 raw를 쓰는 것은 옳지만(A9 ④ 도달성), 같은 수를
+              *"거기서 볼 수 있습니다"*라는 약속에 재사용하면 그 약속이 어긋난다.
+              수를 아예 안 말하면 **어긋날 자리가 소멸한다** — 문구에 자리표시자가 없다. */}
         {counts && counts.excluded > 0 ? (
-          <div style={META_STYLE}>{t("GAMES_EXCLUDED_NOTE", { n: counts.excluded })}</div>
+          <div style={META_STYLE}>{t("GAMES_EXCLUDED_NOTE")}</div>
         ) : null}
       </div>
     );

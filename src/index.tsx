@@ -428,6 +428,19 @@ function Content() {
   const refresh = door.reload;
   /** **쓰는 왕복**이 도는 중인가 — 조회(재조회)는 "적용 중"이라 말하지 않는다(D14). */
   const busy = door.mutating;
+  /**
+   * **문이 잠겨 있는가** — 조회든 변이든 왕복이 하나라도 도는 중이면 참이다(§4-F ⓑ 문 하나).
+   *
+   * ★★ 왜 표시축(`busy`)과 갈라 두는가(2026-08-12 P16 게이트 C4): 두 축은 **묻는 것이 다르다.**
+   *   `busy`(=`mutating`)는 *"지금 화면이 무슨 일을 하고 있다고 말해야 하는가"*이고, 이쪽은
+   *   *"지금 쓰기를 시작해도 되는가"*다. 조회가 도는 중에 일괄 적용을 누르면 백엔드는 **방금
+   *   읽고 있던 것과 다른 현황 위에서** 쓰기를 시작한다 — 그 틈은 §4-F가 문을 하나로 합친
+   *   이유 그 자체다. 그래서 **버튼 잠금만** 이 축으로 옮긴다.
+   * ★ 반대로 상태박스·투명도는 `busy`를 그대로 쓴다: 조회 왕복에 "적용 중"이라 말하면 화면이
+   *   거짓을 말하고, 재조회는 사용자가 시킨 일이 아니라 **화면이 스스로 하는 일**이다(D14).
+   * ★ 팝업 진입 버튼은 **잠그지 않는다** — 팝업은 열리자마자 자기 조회를 하고 자기 문을 쓴다.
+   */
+  const locking = door.busy;
 
   // ★ mount 태그는 **useEffect에서** 찍는다. 컴포넌트 본문은 render 단계라, 거기서 찍으면
   //   뒤이은 자식 렌더가 실패해도 "mounted"가 남아 진단이 거짓말을 한다. useEffect는
@@ -711,7 +724,8 @@ function Content() {
             profile={profile}
             ready={(profile === "dock" ? counts?.dock_ready : counts?.internal_ready) ?? 0}
             hint={bulkHint(counts, profile)}
-            busy={busy}
+            /* 잠금은 **조회까지 포함한 문**으로 판단한다(위 `locking` 주석 — P16 C4). */
+            busy={locking}
             onApply={runApplyAll}
           />
         ))}

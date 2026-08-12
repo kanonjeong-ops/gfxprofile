@@ -23,8 +23,10 @@ QAM은 이 플러그인에서 **매 부팅 열리는 유일한 화면**이고, P
 E1(실행 중인 게임이 일괄 적용을 막지 않는가)은 `test_frontend_e1.py`의 소관이다. 여기서
 같은 것을 또 재면 두 검사가 서로를 믿다가 둘 다 낡는다.
 
-★ 이 테스트도 **자기 자신을 반증한다** — 알려진 위반 19종을 주입해 **그 판정이** 잡는지 본다
-  (기대 판정 지정: 다른 가드가 대신 잡아 주는 「이중 가드 위장」을 무효로 친다).
+★ 이 테스트도 **자기 자신을 반증한다** — 아래 `BYPASSES`에 적힌 알려진 위반을 **전량** 주입해
+  **그 판정이** 잡는지 본다(기대 판정 지정: 다른 가드가 대신 잡아 주는 「이중 가드 위장」을
+  무효로 친다). ⚠️ 여기에 **개수를 적지 않는다** — 표가 늘 때마다 문서만 낡는다(P16 E9:
+  실제로 "19종"이라 적힌 채 표는 23종이 됐다). 실행 로그가 검출 건을 한 줄씩 찍는다.
 
 ⚠️ 원리적 한계: 프로브는 node에서 컴포넌트를 직접 렌더한다 — 실제 Steam CEF·React·@decky/ui가
   아니다. "보인다·눌린다"·투명도의 실제 렌더는 실기(§16 ⑪)가 판정한다.
@@ -123,6 +125,10 @@ BYPASSES = [
      r"      // 옛 응답은 \*\*없던 일\*\*이다 — 화면은 이미 더 새 것을 알고 있다\.\n"
      r"      if \(mine !== generation\.current\) return;\n", "",
      "세대 가드가 없다"),
+    # ── C4: 잠금축을 표시축으로 되돌림(조회 중에 쓰기가 시작된다) ─────────────
+    ("일괄 버튼 잠금을 변이축으로 되돌림(조회 중에 쓰기가 시작된다)", "index.tsx",
+     r"            busy=\{locking\}", "            busy={busy}",
+     "조회가 도는 중인데 일괄 적용 버튼이 열려 있다"),
     ("확정 실행 **실패**에 재조회를 안 붙임 — QAM만 낡는다", "popup.tsx",
      r"if \(!writing \|\| isTokenIssue\(res\)\) return;", "if (!writing || !res.ok) return;",
      "현황을 다시 읽지 않았다"),
@@ -235,24 +241,35 @@ def violations(r):                                             # noqa: C901  (�
                    f"(소거 시점 = 다음 동작 시작 — §3-B 수명)")
 
     # ═══ ⑤ 확인창 게이트(§3-E) ═══════════════════════════════════════════════
+    # ⚠️ **필드가 없는 것**과 값이 틀린 것은 다른 사건이다. JSON은 `undefined`를 실어 나르지
+    #    않으므로, 버튼을 못 눌러 측정 자체가 없었던 회차에는 키가 통째로 빠져 온다. 예전에는
+    #    여기서 `KeyError: confirmFound`로 판정기가 죽었다(P16 E10) — 위반은 잡혔는데 사람이
+    #    받는 것은 진단이 아니라 스택 트레이스였다. 이제 **측정 없음**을 그렇게 말한다.
     cf = r["confirm"]
-    if cf["blocked"]:
-        out.append("⑤ 일괄 버튼을 누를 수 없었다 — 게이트를 잴 수 없다(검사 무효)")
-    if not cf["confirmFound"]:
-        out.append("★⑤ 확인창이 뜨지 않았다 — F8 마찰이 사라졌다")
-    if (cf["firstCall"] or {}).get("token") is not None:
-        out.append(f"★⑤ 1차 호출에 토큰이 실렸다: {cf['firstCall']} — 프론트가 토큰을 지어냈다")
-    if (cf["secondCall"] or {}).get("token") != "TOKEN-dock":
-        out.append(f"★⑤ 확정 시 받은 토큰 그대로 2차 호출이 나가지 않았다: {cf['secondCall']}")
-    body = [x for x in cf["confirmTexts"] if x.startswith("APPLY_ALL_CONFIRM_BODY")]
-    if not body:
-        out.append(f"⑤ 확인창 본문이 없다: {cf['confirmTexts']}")
-    elif "42" not in body[0]:
-        # 장면은 overview.total=9 · preview.total=42다. 9가 보이면 다른 시점의 조회를 그린 것이다.
-        out.append(f"★⑤ 확인창 본문의 total이 미리보기 봉투의 값이 아니다: {body[0]!r} "
-                   f"(preview.total=42 / overview.total=9 — 토큰이 지문 낸 대상과 어긋난다, D-06)")
-    if any(x.startswith("APPLY_ALL_CONFIRM_NOTE") for x in cf["confirmTexts"]):
-        out.append("⑤ 무정보 상시 줄(APPLY_ALL_CONFIRM_NOTE)이 남아 있다 — §3-E D04에서 삭제됐다")
+    if cf.get("blocked"):
+        out.append("⑤ 일괄 버튼을 누를 수 없었다 — 게이트를 잴 수 없다(검사 무효). "
+                   "확인창·토큰 판정은 **측정이 없어** 건너뛴다")
+    else:
+        for field in ("confirmFound", "firstCall", "secondCall", "confirmTexts"):
+            if field not in cf:
+                out.append(f"⑤ 프로브가 {field}를 싣지 않았다 — 측정이 이뤄지지 않았다"
+                           f"(검사 무효): {sorted(cf)}")
+        if not cf.get("confirmFound"):
+            out.append("★⑤ 확인창이 뜨지 않았다 — F8 마찰이 사라졌다")
+        if (cf.get("firstCall") or {}).get("token") is not None:
+            out.append(f"★⑤ 1차 호출에 토큰이 실렸다: {cf.get('firstCall')} — 프론트가 토큰을 지어냈다")
+        if (cf.get("secondCall") or {}).get("token") != "TOKEN-dock":
+            out.append(f"★⑤ 확정 시 받은 토큰 그대로 2차 호출이 나가지 않았다: {cf.get('secondCall')}")
+        confirm_texts = cf.get("confirmTexts") or []
+        body = [x for x in confirm_texts if x.startswith("APPLY_ALL_CONFIRM_BODY")]
+        if not body:
+            out.append(f"⑤ 확인창 본문이 없다: {confirm_texts}")
+        elif "42" not in body[0]:
+            # 장면은 overview.total=9 · preview.total=42다. 9가 보이면 다른 시점의 조회를 그린 것이다.
+            out.append(f"★⑤ 확인창 본문의 total이 미리보기 봉투의 값이 아니다: {body[0]!r} "
+                       f"(preview.total=42 / overview.total=9 — 토큰이 지문 낸 대상과 어긋난다, D-06)")
+        if any(x.startswith("APPLY_ALL_CONFIRM_NOTE") for x in confirm_texts):
+            out.append("⑤ 무정보 상시 줄(APPLY_ALL_CONFIRM_NOTE)이 남아 있다 — §3-E D04에서 삭제됐다")
 
     # ═══ ⑤⑥⑦ 결과 줄 ════════════════════════════════════════════════════════
     rp = r["resultProblem"]
@@ -388,6 +405,31 @@ def violations(r):                                             # noqa: C901  (�
     if keys(r["applyFailedCarried"]) != ["result", "why", "checkin"]:
         out.append(f"★R1 실패한 실행의 기록이 QAM 재개방을 못 넘는다: {r['applyFailedCarried']}")
 
+    # ═══ C4 조회 보류 중 — 잠금축(문)과 표시축(D14)은 다른 축이다 ═════════════
+    #
+    # `door.busy`(조회+변이)와 `door.mutating`(변이만)을 한 변수로 쓰면 둘 중 하나가 반드시
+    # 거짓말을 한다: `mutating`으로 잠그면 **조회가 도는 중에 쓰기가 시작되고**(방금 읽던 것과
+    # 다른 현황 위에서 쓴다 — §4-F가 문을 하나로 합친 이유), `busy`로 표시하면 재조회에까지
+    # "적용 중"이라 말한다(D14). 그래서 잠금은 문으로, 표시는 변이로 나눈다.
+    qp = r.get("queryPending") or {}
+    if qp.get("held") != 1:
+        out.append(f"C4 보류 조회를 만들지 못했다(held={qp.get('held')}) — 측정 대상에 못 닿았다"
+                   f"(검사 무효)")
+    else:
+        if qp.get("bulkDisabled") != [True, True]:
+            out.append(f"★C4 조회가 도는 중인데 일괄 적용 버튼이 열려 있다: "
+                       f"{qp.get('bulkDisabled')} — 지금 누르면 백엔드는 **방금 읽고 있던 것과 다른 "
+                       f"현황** 위에서 쓰기를 시작한다. 잠금은 `door.busy`(조회 포함)로 판단한다")
+        if qp.get("entryDisabled") != [False, False, False]:
+            out.append(f"★C4 조회 때문에 팝업 진입 버튼까지 잠겼다: {qp.get('entryDisabled')} — "
+                       f"팝업은 열리자마자 **자기 조회**를 하고 자기 문을 쓴다. QAM의 재조회가 "
+                       f"화면 전체를 막으면 사용자는 아무 데도 못 간다")
+        if "busy" in (qp.get("keys") or []):
+            out.append(f"★C4 조회 왕복인데 상태박스가 진행 중이라 말한다: {qp.get('texts')} — "
+                       f"재조회는 사용자가 시킨 일이 아니다. 표시축은 변이(`mutating`)뿐이다(D14)")
+        if qp.get("bulkAfter") != [False, False]:
+            out.append(f"C4 조회가 끝났는데 일괄 버튼이 잠긴 채다: {qp.get('bulkAfter')}")
+
     # ═══ R2 조회 **역순 도착** — 낡은 응답은 없던 일이다 ══════════════════════
     for name, snap in (("성공", r["staleOrder"]), ("실패", r["staleFailure"])):
         if snap["loads"] != 2:
@@ -440,9 +482,10 @@ def main():
           f"과거군 투명도 {r['previewing']['pastOpacity']}→{r['afterBusy']['pastOpacity']}")
     print(f"  배선: " + " · ".join(f"{w['label']}→{w['component']}" for w in r["wiring"])
           + f" · 통지 멱등(1→{r['idempotent']['onceCalls']} · 3→{r['idempotent']['thriceCalls']})")
-    print(f"  확인창: 1차 토큰={(r['confirm']['firstCall'] or {}).get('token')} · "
-          f"2차={(r['confirm']['secondCall'] or {}).get('token')} · "
-          f"본문={[x for x in r['confirm']['confirmTexts'] if x.startswith('APPLY_ALL_CONFIRM_BODY')]}")
+    # 요약 줄도 **측정이 없었던 회차**에 죽지 않는다 — 진단은 판정 목록이 말한다(E10).
+    print(f"  확인창: 1차 토큰={(r['confirm'].get('firstCall') or {}).get('token')} · "
+          f"2차={(r['confirm'].get('secondCall') or {}).get('token')} · "
+          f"본문={[x for x in (r['confirm'].get('confirmTexts') or []) if x.startswith('APPLY_ALL_CONFIRM_BODY')]}")
     if bad:
         print("\nFAIL")
         for b in bad:

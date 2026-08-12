@@ -107,6 +107,10 @@ BYPASSES = [
      '    return <div style={HINT_STYLE}>{t("FILTER_ALL_HAVE_PROFILES")}</div>;'),
     ("제외 안내를 0건에도 표시", "GamesPopup.tsx",
      r"counts && counts\.excluded > 0", "counts && counts.excluded >= 0"),
+    # ── C1: raw 수를 안내에 되싣는 갈래(개정 전 형태) ─────────────────────────
+    ("제외 안내에 raw 수를 되실음(가서 보면 다른 수다 — §15-D E5)", "GamesPopup.tsx",
+     r'<div style=\{META_STYLE\}>\{t\("GAMES_EXCLUDED_NOTE"\)\}</div>',
+     '<div style={META_STYLE}>{t("GAMES_EXCLUDED_NOTE", { n: counts.excluded })}</div>'),
     ("설정 파일 경로 줄을 빈 값에도 그림", "confirmSpecs.tsx",
      r"\{params\.config_path \? <div style=\{META_STYLE\}>\{t\(\"DELETE_CONFIRM_PATH\", \{ path: params\.config_path \}\)\}</div> : null\}",
      '<div style={META_STYLE}>{t("DELETE_CONFIRM_PATH", { path: params.config_path })}</div>'),
@@ -156,8 +160,35 @@ def violations(r):                                             # noqa: C901  (�
     if r.get("bulkExcludedNote"):
         out.append(f"③ 제외 0건인데 제외 안내를 그린다: {r.get('bulkExcludedNote')} "
                    f"(0이면 완전 미표시 — '0이면 안 그림' 문법)")
-    if r.get("excludedNote") != ["GAMES_EXCLUDED_NOTE 2"]:
-        out.append(f"제외 안내가 봉투의 수를 말하지 않는다: {r.get('excludedNote')}")
+    if r.get("excludedNote") != ["GAMES_EXCLUDED_NOTE"]:
+        out.append(f"U-8 제외 안내가 제외 1건 이상에서 **한 줄로** 뜨지 않는다: "
+                   f"{r.get('excludedNote')} (인자가 붙어 있으면 화면이 수를 말한 것이다 — "
+                   f"아래 C1 판정 참조)")
+
+    # ═══ U-8 제외 안내는 **수를 말하지 않는다** (P16 게이트 C1) ═══════════════
+    #
+    # `counts.excluded`(raw)는 **원본 키 수**이고 제외 뷰 rows는 **손상 항목 격리 후**다
+    # (설계 §15-D E5). 두 수는 각자 옳지만, raw를 *"거기서 볼 수 있습니다"* 약속에 실으면
+    # **가서 보면 다른 수**가 된다. 수를 아예 안 말하면 어긋날 자리가 소멸한다 —
+    # 그래서 판정도 "그 수가 맞는가"가 아니라 **"어떤 수도 말하지 않는가"**다.
+    skew = r.get("excludedSkew") or {}
+    note = skew.get("note")
+    if note is None:
+        out.append("C1 제외 안내 장면을 프로브가 싣지 않았다 — 측정이 이뤄지지 않았다(검사 무효)")
+    else:
+        if not skew.get("shown"):
+            out.append(f"C1 제외 3건인데 안내 줄이 아예 없다: {note} — 수를 뺀 것이지 "
+                       f"줄을 없앤 것이 아니다(표시 조건 excluded≥1은 그대로다)")
+        spoken = "".join(note)
+        if any(ch.isdigit() for ch in spoken):
+            out.append(f"★C1 제외 안내가 **수를 말한다**: {spoken!r} — 봉투 raw는 "
+                       f"{skew.get('raw')}이고 제외 뷰가 그리는 행은 {skew.get('rows')}다. "
+                       f"화면이 raw를 약속에 실으면 사용자가 [게임 감지]에 가서 본 수와 어긋난다"
+                       f"(§15-D E5). 팝업 D의 DISCOVER_EXCLUDED_OPEN({skew.get('rows')})과 "
+                       f"모순하지 않는 유일한 방법은 **수를 안 말하는 것**이다")
+        if note != ["GAMES_EXCLUDED_NOTE"]:
+            out.append(f"★C1 제외 안내에 인자가 실렸다: {note} — 목의 t()는 인자를 뒤에 붙여 "
+                       f"돌려주므로, 키만 나와야 자리표시자 0이 실증된다")
 
     # ═══ ④ 적용 무확인 · 저장 확인 ════════════════════════════════════════════
     if r.get("applyCall") != ["300", "internal"]:
@@ -348,6 +379,30 @@ def violations(r):                                             # noqa: C901  (�
     return out
 
 
+def wording_no_count():
+    """C1의 **값 쪽 절반** — 렌더로는 원리적으로 못 보는 자리.
+
+    프로브의 `t()` 목은 키를 돌려주므로 **값에 `{n}`이 남아 있어도** 렌더 결과가 같다. 그런데
+    실물 `t()`는 인자가 없으면 자리표시자를 **그대로 화면에 내보낸다** — 그러면 사용자는
+    "{n}개"라는 글자를 본다. *호출부에서 인자를 뺐다*와 *값에서 수를 뺐다*는 **둘 다 참이어야**
+    화면이 수를 말하지 않는다. 렌더로 잴 수 없는 절반은 값이 사는 곳에서 잰다.
+    """
+    out = []
+    for lang in ("ko", "en"):
+        table = json.loads((ROOT / "src" / "i18n" / f"{lang}.json").read_text(encoding="utf-8"))
+        value = table.get("GAMES_EXCLUDED_NOTE")
+        if value is None:
+            out.append(f"C1 {lang}.json에 GAMES_EXCLUDED_NOTE가 없다 — 안내 자체가 사라졌다")
+            continue
+        slots = re.findall(r"\{(\w+)\}", value)
+        if slots:
+            out.append(f"★C1 GAMES_EXCLUDED_NOTE({lang})에 자리표시자 {slots}가 남아 있다 — "
+                       f"호출부는 인자를 주지 않으므로 화면에 «{{{slots[0]}}}» 글자가 그대로 뜬다. "
+                       f"수를 말하지 않기로 한 값에 수의 자리가 남으면 더 나쁜 화면이 된다\n"
+                       f"      {value}")
+    return out
+
+
 def main():
     if not U1.is_file():
         # 판정 불가는 통과가 아니라 **거부**다(QA R7).
@@ -359,7 +414,7 @@ def main():
         print(f"FAIL — 프로브가 실행되지 않았다: {err}")
         return 1
 
-    bad = violations(result)
+    bad = violations(result) + wording_no_count()
     print("팝업 G 목록·상세 계약 (렌더+클릭으로 측정)")
     print(f"  ① 순서={result.get('listOrder')} · ② 필터={result.get('filteredOrder')} · "
           f"③ 200게임 카드={result.get('bulkCards')}")

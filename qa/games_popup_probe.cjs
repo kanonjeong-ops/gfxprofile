@@ -389,6 +389,29 @@ function applyFace(b) {
     out.bulkExcludedNote = texts(many.ui()).filter((x) => /^GAMES_EXCLUDED_NOTE/.test(x));
   }
 
+  // ═══ U-8 제외 안내 — **수를 말하지 않는다**(P16 게이트 C1) ═══════════════
+  //
+  // 장면: 제외 목록의 **원본 키 3개 중 1개가 손상**된 상태. `counts.excluded`(raw)는 3이고
+  // 팝업 D의 제외 뷰는 손상 항목을 격리해 **2행**을 그린다(설계 §15-D E5 — 두 수는 각자 옳다).
+  // 예전 문구는 raw를 그대로 *"…{n}개 — 거기서 볼 수 있습니다"*에 실었다: **가서 보면 2개인데
+  // 3개라고 약속**하는 갈래다. 표시 조건(excluded≥1)에 raw를 쓰는 것은 옳고, 틀린 것은
+  // **같은 수를 약속에 재사용한 것**이었다. 그래서 이 장면은 *"안내가 어떤 수도 말하지 않는가"*를
+  // 잰다 — 수를 안 말하면 D의 `DISCOVER_EXCLUDED_OPEN({n})`과 **모순할 자리 자체가 없다.**
+  SCENE.games = GAMES;
+  SCENE.counts = { total: 4, dock_ready: 3, internal_ready: 2, running: 1, incomplete: 2, excluded: 3 };
+  resetCalls();
+  {
+    const skewed = mount();
+    await settle();
+    out.excludedSkew = {
+      raw: SCENE.counts.excluded,          // 봉투가 준 수(원본 키) — 표시 조건이 쓰는 값
+      rows: 2,                             // 제외 뷰가 실제로 그릴 행 수(손상 1 격리 후)
+      note: texts(skewed.ui()).filter((x) => /^GAMES_EXCLUDED_NOTE/.test(x)),
+      // 조건은 그대로여야 한다(수를 뺀 것이지 줄을 없앤 것이 아니다).
+      shown: texts(skewed.ui()).some((x) => /^GAMES_EXCLUDED_NOTE/.test(x)),
+    };
+  }
+
   // ═══ R3 목록이 빈 **이유 3갈래** — 같은 문장으로 뭉치지 않는다 ═══════════
   //
   // 필터가 전부 걸러낸 상태는 **정상 운용의 종착점**이다(모든 게임이 두 프로필을 갖춘 상태).

@@ -380,7 +380,11 @@ export function DiscoverPopup({
           return;
         }
         const added = res.data.counts.added ?? 0;
-        setNote(t("DISCOVER_BULK_DONE", { added, failed: res.data.results.length - added }));
+        const failed = res.data.results.length - added;
+        // 실패가 **없으면 그 절을 그리지 않는다** — "0개는 추가하지 못했습니다"는 아무 일도
+        // 없었던 것을 사건처럼 말한다(§7 `RESET_OK`+`RESET_LEFT_NOTE`와 같은 문법).
+        const done = t("DISCOVER_BULK_DONE", { added });
+        setNote(failed > 0 ? `${done} ${t("DISCOVER_BULK_FAILED_NOTE", { failed })}` : done);
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],

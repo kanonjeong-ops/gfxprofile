@@ -15,7 +15,8 @@ import { ErrorBoundary } from "./ui/ErrorBoundary";
  *   확인창 생명주기가 세 벌**이 되고, 그중 하나가 틀린 날 그 화면만 조용히 다르게 동작한다.
  *   여기서 한 번 맞추면 나머지는 내용만 채운다.
  *
- * ★ 화면(P13·P14)은 아직 이 파일을 쓰지 않는다 — P12는 기반만 놓는다(신·구 공존).
+ * ★ 소비자는 **넷**이다: 팝업 G·D·S(P13·P14)와 QAM(P15-E — `useDataDoor`만 직접 쓴다).
+ *   P12에 기반만 놓였던 신·구 공존기는 P15-D 원자 제거로 끝났다.
  */
 
 const COLUMN_STYLE = { display: "flex", flexDirection: "column", gap: "10px" } as const;

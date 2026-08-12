@@ -255,7 +255,15 @@ const keysOf = (lines) => lines.map((l) => l.key);
 async function driveApply(scene, profile) {
   const s = await snapshot(scene);
   const btn = bulkOf(s.ui.ui()).find((b) => b.label.indexOf(profile === "dock" ? "PROFILE_DOCK" : "PROFILE_INTERNAL") > 0);
-  if (!btn || btn.disabled) return { s, blocked: true };
+  // ★ 못 눌러도 **모양은 그대로** 돌려준다: JSON은 `undefined`를 실어 나르지 않아, 여기서
+  //   필드를 빼면 판정기가 그 키에서 죽는다(P16 E10 — 검출은 됐는데 진단이 스택 트레이스였다).
+  //   "측정이 없었다"는 것도 값으로 말해야 판정기가 그렇게 읽는다.
+  if (!btn || btn.disabled) {
+    return {
+      s, blocked: true, firstCall: null, secondCall: null,
+      confirmFound: false, confirmTexts: [], afterLines: [], afterBox: null,
+    };
+  }
   btn.onClick();
   await settle();
   const modal = calls.modals[0] || null;
@@ -581,6 +589,41 @@ async function driveApply(scene, profile) {
     await settle();
     await settle();
     out.applyFailedCarried = boxLines(again.ui()).map((l) => ({ key: l.key, text: l.text }));
+  }
+
+  // ═══ C4 **조회 보류 중** — 잠금축과 표시축이 갈라져 있는가 ════════════════
+  //
+  // 두 축은 묻는 것이 다르다: 상태박스는 *"화면이 무슨 일을 한다고 말해야 하는가"*(변이만 —
+  // 재조회에 "적용 중"이라 말하면 거짓이다, D14)이고, 버튼 잠금은 *"지금 쓰기를 시작해도
+  // 되는가"*(조회 포함 — 읽는 중에 쓰기를 시작하면 방금 읽던 것과 다른 현황 위에서 쓴다)이다.
+  // 그리고 **팝업 진입은 어느 쪽도 아니다** — 팝업은 열리자마자 자기 조회를 하고 자기 문을 쓴다.
+  {
+    const s = await snapshot({
+      hang: false, holdApply: false, holdOverview: false, modalThrows: false,
+      overview: { ok: true, counts: counts() },
+    });
+    // 데이터는 이미 도착했다(대상 있음 = 평소라면 눌리는 상태). 여기서 **조회 하나를 붙잡는다.**
+    SCENE.holdOverview = true;
+    calls.modals.length = 0;
+    const entry = entriesOf(s.ui.ui())[0];
+    if (entry) entry.onClick();
+    await settle();
+    const popup = calls.modals[0] || null;
+    if (popup && popup.props.onMutate) popup.props.onMutate();   // 팝업 통지 → 재조회 1회(보류)
+    await settle();
+    out.queryPending = {
+      held: heldOverviews.length,
+      bulkDisabled: bulkOf(s.ui.ui()).map((b) => b.disabled),
+      entryDisabled: entriesOf(s.ui.ui()).map((b) => b.disabled),
+      keys: keysOf(boxLines(s.ui.ui())),
+      texts: boxLines(s.ui.ui()).map((l) => l.text),
+    };
+    // 보류를 풀어 다음 장면으로 새지 않게 한다 — 그리고 문이 **다시 열리는지**까지 본다.
+    heldOverviews.splice(0).forEach((resolve) => resolve(
+      overviewEnvelope({ ok: true, counts: counts() })));
+    await settle();
+    out.queryPending.bulkAfter = bulkOf(s.ui.ui()).map((b) => b.disabled);
+    SCENE.holdOverview = false;
   }
 
   // ═══ R2 조회 **역순 도착** — 낡은 응답이 새 화면을 덮는가 ═════════════════
