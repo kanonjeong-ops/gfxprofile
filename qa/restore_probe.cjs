@@ -1,229 +1,335 @@
 "use strict";
 /**
- * 「관리」 탭 백업/복원 UI를 **렌더+클릭으로** 잰다 (P9 · 상설화 P10).
+ * 백업 뷰·복원 흐름(설계 §5-C)을 **렌더+클릭으로** 잰다 — `qa/test_restore_ui.py`가 판정한다.
  *
- * 왜 렌더+클릭인가: `test_confirm_ui`와 같은 이유다 — 표면 문법(grep)으로는 계약을 강제할 수
- * 없고(별칭·헬퍼·파생 변수로 우회된다), 이 프로젝트에서 그 방식이 네 라운드 연속 뚫렸다.
- * **무엇을 하든 결과가 같으면 같다**는 판정만이 우회를 가리지 않는다.
+ * ★ P13 재작성: 대상이 「관리」 탭에서 **팝업 G의 상세 → 백업 뷰**로 옮겨졌다(§15-A 이식표).
+ *   흐름 자체(3-상태 계약·토큰·2단계 시맨틱)는 그대로이고, **복원 성공 뒤 재조회**(D-07)가
+ *   새로 붙었다 — 복원은 disk 대피본을 하나 만들므로 목록의 행 수·순서가 그 자리에서 바뀐다.
+ *   화면을 그대로 두면 **방금 사라진 백업의 [복원] 버튼**이 남는다.
  *
- * 실행: node qa/restore_probe.cjs [소스디렉터리]   (기본 = 이 저장소의 src)
- * 출력: JSON 한 줄.
- *  ① [백업 N] 라벨과 0건 비활성
- *  ② 클릭 → listBackups → 목록 모달(행 수·[복원] 버튼)
- *  ③ [복원] 클릭 → restoreBackup 무토큰 호출 → CONFIRM_REQUIRED → 확인창 → 토큰 그대로 재호출
- *  ④ restored(kind=profile_dock) → 후속 제안 모달 → OK → saveProfile 호출
+ * ★ **양 모드 주행**: 확인창을 중첩 모달로 띄우는 기본 모드와, `NESTED_CONFIRM=false` 폴백
+ *   모드를 각각 돌린다 — 폴백은 실기 실패 시의 탈출구인데, 안 돌리면 그날 처음 실행된다.
+ *
+ * ★ 실행: node qa/restore_probe.cjs [소스디렉터리]   (기본 = 이 저장소의 src)
  */
-const fs = require("fs");
 const path = require("path");
-const projectRoot = path.resolve(__dirname, "..");
-const srcDir = process.argv[2] ? path.resolve(process.argv[2]) : path.join(projectRoot, "src");
-const ts = require(path.join(projectRoot, "node_modules", "typescript"));
+const { makeHost, h, find, texts, buttons, makeLoader, react, settle } =
+  require(path.join(__dirname, "probe_kit.cjs"));
 
-globalThis.window = globalThis.window || { navigator: { userAgent: "probe" } };
+const srcDir = process.argv[2] ? path.resolve(process.argv[2]) : path.join(path.resolve(__dirname, ".."), "src");
 
-const GAMES = [
-  { appid: "100", name: "Has Backups", has_dock: true, has_internal: true, disk_matches: null,
-    backups: 3, last_applied: "dock", cloud_synced: false, running: false },
-  { appid: "200", name: "No Backups", has_dock: true, has_internal: false, disk_matches: null,
-    backups: 0, last_applied: null, cloud_synced: false, running: false },
-];
-const ROWS = [
-  { backup_id: "20260809-221532-profile_dock-video.ini", kind: "profile_dock",
-    stamp: "20260809-221532", stamp_label: "2026-08-09 22:15:32", filename: "video.ini", size: 46 },
-  { backup_id: "20260809-221530-disk-video.ini", kind: "disk",
-    stamp: "20260809-221530", stamp_label: "2026-08-09 22:15:30", filename: "video.ini", size: 46 },
-];
-const CONFIRM = {
-  ok: false, code: "CONFIRM_REQUIRED",
-  params: { confirm_token: "RESTORE-TOKEN", appid: "100",
-            backup_id: ROWS[0].backup_id, kind: "profile_dock", stamp: ROWS[0].stamp,
-            stamp_label: ROWS[0].stamp_label, filename: "video.ini", size: 46, disk_state: "unknown" },
+globalThis.window = globalThis.window || { navigator: { userAgent: "gfxprofile-probe" } };
+
+/** 백엔드의 링 상한(`store.BACKUP_KEEP`). "+1" 단순 기대는 포화 상태에서 거짓이다(N-04). */
+const BACKUP_KEEP = 10;
+
+const GAME = {
+  appid: "300", name: "Zeta", has_dock: true, has_internal: true, disk_matches: null,
+  backups: 3, config_path: "/cfg/zeta.ini", profiles_identical: false,
+  saved_at: { dock: "2026-08-10 09:00", internal: "" },
+  last_applied: "dock", cloud_synced: false, running: false,
 };
 
-const buttons = [];
-const modals = [];
-const notes = [];
-let restoreCalls = [], listCalls = [], saveCalls = [], renameCalls = [];
-let throwOnNextModal = false;          // 확인창을 **다음 한 번만** 못 띄우게 한다
-const nameSyncs = [];                  // load()가 표시명을 i18n에 반영했는가(R3)
+const row = (id, kind, stampLabel) => ({
+  backup_id: id, kind, stamp: id, stamp_label: stampLabel, filename: "video.ini", size: 46,
+});
 
-function h(type, props, ...children) {
-  if (typeof type === "function") return type({ ...(props || {}), children });
-  const node = { type, props: props || {}, children };
-  if (type && type.__kind === "DialogButton") {
-    const label = children.flat(9).filter((c) => typeof c === "string").join(" ");
-    buttons.push({ label, onClick: node.props.onClick, disabled: !!node.props.disabled, node });
-  }
-  return node;
-}
-function collect(node, acc) {
-  if (!node || typeof node !== "object") return acc;
-  if (Array.isArray(node)) { node.forEach((n) => collect(n, acc)); return acc; }
-  acc.push(node);
-  [].concat(node.children || [], node.props && node.props.strDescription ? [node.props.strDescription] : [])
-    .forEach((k) => collect(k, acc));
-  return acc;
+/** 기본 링 — 프로필 대피본 1 + disk 2. 종류가 섞여 있어야 문구 분기를 잴 수 있다. */
+const BASE_ROWS = () => [
+  row("20260810-090300", "profile_dock", "T-03"),
+  row("20260810-090200", "disk", "T-02"),
+  row("20260810-090100", "disk", "T-01"),
+];
+
+const SCENE = {
+  rows: BASE_ROWS(),
+  outcome: "restored",
+  noConfirm: false,          // 설정 파일이 없어 **묻지 않고** 복원하는 갈래
+  failCode: null,            // 조기 거부(GAME_RUNNING 등)
+  throwOnNextModal: false,   // 후속 제안 창만 실패시킨다
+};
+
+const calls = { overview: [], list: [], restore: [], save: [] };
+const shownModals = [];
+const mutations = [];
+
+function reset(rows) {
+  SCENE.rows = rows || BASE_ROWS();
+  SCENE.outcome = "restored";
+  SCENE.noConfirm = false;
+  SCENE.failCode = null;
+  SCENE.throwOnNextModal = false;
+  Object.values(calls).forEach((a) => { a.length = 0; });
+  shownModals.length = 0;
+  mutations.length = 0;
 }
 
-let hookSlot = 0;
-const state = [];
+/** 복원 1회가 링에 하는 일 — **disk 대피본 1개 추가 + 즉시 prune**(`store.py:307-313`). */
+function pushDiskBackup() {
+  SCENE.rows = [row("20260810-099999", "disk", "T-NEW"), ...SCENE.rows].slice(0, BACKUP_KEEP);
+}
+
 const modules = {
-  react: {
-    useCallback: (fn) => fn,
-    useEffect: () => {},
-    useState(initial) {
-      const slot = hookSlot++;
-      if (slot === 0) return [{ games: GAMES, counts: { total: 2, dock_ready: 2, internal_ready: 1, running: 0, incomplete: 1, } }, () => {}];
-      if (slot === 2) return [initial, (v) => { if (v) notes.push(String(v)); }];
-      return [state[slot] !== undefined ? state[slot] : initial, (v) => { state[slot] = v; }];
-    },
-  },
-  "./rpc": {
-    // load()가 부르는 조회 — **표시명이 실려 온다.** 이걸 i18n에 반영하지 않으면
-    // 전체 초기화 뒤에도 옛 이름이 화면에 남는다(2026-08-10 QA R3).
-    getOverview: () => Promise.resolve({
-      ok: true,
-      data: { games: GAMES, counts: { total: 2, dock_ready: 2, internal_ready: 1, running: 0, incomplete: 1 },
-              profile_names: { dock: "다시 읽은 이름", internal: "" } },
-    }),
-    deleteGame: () => new Promise(() => {}),
-    resetAll: () => new Promise(() => {}),
-    listBackups: (...a) => { listCalls.push(a); return Promise.resolve({ ok: true, data: { backups: ROWS } }); },
-    restoreBackup: (...a) => {
-      restoreCalls.push(a);
-      // ★ 실물처럼 **그 백업의 kind**를 돌려준다(R2: 문구가 kind로 갈린다).
-      const row = ROWS.find((r) => r.backup_id === a[1]) || ROWS[0];
-      const params = { ...CONFIRM.params, backup_id: row.backup_id, kind: row.kind,
-                       stamp: row.stamp, stamp_label: row.stamp_label };
-      return Promise.resolve(a[2]
-        ? { ok: true, data: { ...params, outcome: "restored", restored: "/x" } }
-        : { ...CONFIRM, params });
-    },
-    saveProfile: (...a) => { saveCalls.push(a); return Promise.resolve({ ok: true, data: { meta: {}, warning: null } }); },
-    // ★ F11 ①: 화면이 보내는 첫 인자는 **식별자**여야 한다(표시명이 아니다).
-    setProfileName: (...a) => {
-      renameCalls.push(a);
-      return Promise.resolve({ ok: true, data: { profile_names: { dock: a[1] || "", internal: "" } } });
+  react,
+  "./deckyui": {
+    ConfirmModal: { __kind: "ConfirmModal" },
+    DialogBody: { __kind: "DialogBody" },
+    DialogButton: { __kind: "DialogButton" },
+    DialogHeader: { __kind: "DialogHeader" },
+    Focusable: { __kind: "Focusable" },
+    ModalRoot: { __kind: "ModalRoot" },
+    NavEntryPositionPreferences: { MAINTAIN_X: 2 },
+    TextField: { __kind: "TextField" },
+    ToggleField: { __kind: "ToggleField" },
+    showModal: (node) => {
+      if (SCENE.throwOnNextModal) { SCENE.throwOnNextModal = false; throw new TypeError("showModal is not a function"); }
+      shownModals.push(node);
     },
   },
   "./i18n": {
     t: (k, p) => (p ? `${k} ${Object.values(p).join(" ")}` : String(k)),
-    tCode: (c) => String(c),
-    // P9/F11: i18n 목이 낡으면 렌더가 통째로 죽고 \"로직 FAIL\"처럼 보인다.
-    setProfileNames: (v) => { nameSyncs.push(v); },
+    tCode: (code, fallback) => `${code}/${fallback}`,
     tDefault: (k) => String(k),
-    isLangResolved: () => true, ensureLang: () => Promise.resolve(),
+    setProfileNames: () => {},
   },
-  "./deckyui": {
-    ConfirmModal: { __kind: "ConfirmModal" },
-    DialogButton: { __kind: "DialogButton" },
-    Focusable: { __kind: "Focusable" },
-    ModalRoot: { __kind: "ModalRoot" },
-    TextField: { __kind: "TextField" },
-    showModal: (node) => {
-      if (throwOnNextModal) { throwOnNextModal = false; throw new TypeError("showModal is not a function"); }
-      modals.push(node);
+  "./rpc": {
+    getOverview: (...a) => {
+      calls.overview.push(a);
+      return Promise.resolve({
+        ok: true,
+        data: {
+          games: [{ ...GAME, backups: SCENE.rows.length }],
+          counts: { total: 1, dock_ready: 1, internal_ready: 1, running: 0, incomplete: 0, excluded: 0 },
+          profile_names: { dock: "", internal: "" },
+        },
+      });
     },
+    listBackups: (...a) => { calls.list.push(a); return Promise.resolve({ ok: true, data: { backups: SCENE.rows } }); },
+    restoreBackup: (...a) => {
+      calls.restore.push(a);
+      if (SCENE.failCode) return Promise.resolve({ ok: false, code: SCENE.failCode, params: {} });
+      const hit = SCENE.rows.find((r) => r.backup_id === a[1]) || SCENE.rows[0];
+      const base = {
+        appid: "300", backup_id: hit.backup_id, kind: hit.kind, stamp: hit.stamp,
+        stamp_label: hit.stamp_label, filename: hit.filename, size: hit.size, disk_state: "unknown",
+      };
+      if (SCENE.outcome === "already") {
+        // ★ 무쓰기 갈래 — 링도 안 밀린다. 화면이 재조회하면 그게 결함이다.
+        return Promise.resolve({ ok: true, data: { ...base, outcome: "already" } });
+      }
+      if (!a[2] && !SCENE.noConfirm) {
+        return Promise.resolve({ ok: false, code: "CONFIRM_REQUIRED", params: { ...base, confirm_token: "RESTORE-TOKEN" } });
+      }
+      pushDiskBackup();
+      return Promise.resolve({ ok: true, data: { ...base, outcome: "restored", restored: "/x" } });
+    },
+    saveProfile: (...a) => { calls.save.push(a); return Promise.resolve({ ok: true, data: { meta: {}, warning: null } }); },
+    applyProfile: () => new Promise(() => {}),
+    deleteGame: () => new Promise(() => {}),
+    setProfileName: () => new Promise(() => {}),
+    resetAll: () => new Promise(() => {}),
   },
 };
 
-function load(rel) {
-  const file = path.join(srcDir, rel);
-  const compiled = ts.transpileModule(fs.readFileSync(file, "utf8"), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020,
-      jsx: ts.JsxEmit.React, jsxFactory: "h", jsxFragmentFactory: "Fragment", esModuleInterop: true },
-    fileName: file,
-  }).outputText;
-  const exports = {};
-  const req = (name) => {
-    if (modules[name]) return modules[name];
-    if (name.startsWith(".")) {
-      const base = name.replace(/^\.\//, "");
-      for (const ext of [".tsx", ".ts", ".json"]) {
-        const p = path.join(srcDir, base + ext);
-        if (fs.existsSync(p)) return ext === ".json" ? JSON.parse(fs.readFileSync(p, "utf8")) : load(base + ext);
-      }
-    }
-    throw new Error("unmocked: " + name);
-  };
-  const Fragment = { __kind: "Fragment" };
-  new Function("exports", "require", "module", "h", "Fragment", compiled)(exports, req, { exports }, h, Fragment);
-  return exports;
+// ── 두 모드 ──────────────────────────────────────────────────────────────────
+const baseLoad = makeLoader(srcDir, modules);
+const NESTED_ANCHOR = "export const NESTED_CONFIRM = true;";
+let anchorFound = true;
+const popupFallback = baseLoad("popup.tsx", (src) => {
+  if (!src.includes(NESTED_ANCHOR)) { anchorFound = false; return src; }
+  return src.replace(NESTED_ANCHOR, "export const NESTED_CONFIRM = false;");
+});
+const NestedPopup = baseLoad("GamesPopup.tsx").GamesPopup;
+// 폴백 사본 — `./popup`만 갈아 끼운 같은 화면이다(호출부는 한 줄도 안 바뀐다).
+const FallbackPopup = makeLoader(srcDir, { ...modules, "./popup": popupFallback })("GamesPopup.tsx").GamesPopup;
+
+const byPrefix = (root, re) => buttons(root).filter((b) => re.test(b.label));
+const restoreButtons = (ui) => byPrefix(ui(), /^BACKUP_RESTORE$/);
+const rowMetas = (ui) => texts(ui()).filter((x) => /^BACKUP_ROW_META/.test(x));
+
+/** 팝업을 띄우고 **백업 뷰까지** 간다: 목록 → › → [백업 복원 N]. */
+async function openBackupView(Impl) {
+  const host = makeHost(() => h(Impl, { onMutate: () => mutations.push(1) }));
+  host.render();
+  const ui = () => host.output;
+  await settle();
+  const chevron = byPrefix(ui(), /^$/)[0];
+  if (!chevron) return { ui, reached: false };
+  chevron.onClick();
+  const open = byPrefix(ui(), /^OPEN_BACKUPS\b/)[0];
+  if (!open || open.disabled) return { ui, reached: false };
+  open.onClick();
+  await settle();
+  return { ui, reached: restoreButtons(ui).length > 0 };
 }
 
-const { ManageTab } = load("ManageTab.tsx");
-hookSlot = 0;
-h(ManageTab, null);
-
-const settle = () => new Promise((r) => setTimeout(r, 0));
-const backupBtns = buttons.filter((b) => /^MANAGE_BACKUPS/.test(b.label));
+/** 지금 떠 있는 확인창(중첩=showModal 노드 / 폴백=팝업 안 오버레이)의 관측면. */
+function currentConfirm(ui, nested) {
+  if (nested) {
+    const node = shownModals[shownModals.length - 1] || null;
+    if (!node) return null;
+    const modal = find(node, "ConfirmModal");
+    return { texts: texts(node), ok: modal ? modal.node.props.onOK : null };
+  }
+  const overlay = find(ui(), "ConfirmOverlay");
+  if (!overlay) return null;
+  const okBtn = buttons(overlay.node)[0];
+  return { texts: texts(overlay.node), ok: okBtn ? okBtn.onClick : null };
+}
 
 (async () => {
-  const out = { backupButtons: backupBtns.map((b) => ({ label: b.label, disabled: b.disabled })) };
-  // ② 첫 게임의 [백업 3] 클릭
-  backupBtns[0] && backupBtns[0].onClick && backupBtns[0].onClick();
-  await settle();
-  out.listCalls = listCalls;
-  out.modal1 = modals[0] && modals[0].type && modals[0].type.__kind;
-  const restoreBtns = buttons.filter((b) => b.label === "BACKUP_RESTORE");
-  out.restoreButtons = restoreBtns.length;
-  // ③ 첫 [복원] 클릭
-  restoreBtns[0] && restoreBtns[0].onClick && restoreBtns[0].onClick();
-  await settle();
-  out.restoreCall1 = restoreCalls[0];
-  out.modal2 = modals[1] && modals[1].type && modals[1].type.__kind;
-  out.modal2Destructive = !!(modals[1] && modals[1].props && modals[1].props.bDestructiveWarning);
-  out.modal2Texts = collect(modals[1], []).flatMap((n) => (n.children || []).filter((c) => typeof c === "string"));
-  // 확인창 OK
-  const onOK = modals[1] && modals[1].props && modals[1].props.onOK;
-  if (typeof onOK === "function") { onOK(); await settle(); }
-  out.restoreCall2 = restoreCalls[1];
-  out.modal3 = modals[2] && modals[2].type && modals[2].type.__kind;
-  out.modal3Title = modals[2] && modals[2].props && modals[2].props.strTitle;
-  // ④ 후속 제안 OK → saveProfile
-  const onOK2 = modals[2] && modals[2].props && modals[2].props.onOK;
-  if (typeof onOK2 === "function") { onOK2(); await settle(); }
-  out.saveCalls = saveCalls;
-  // ⑤ 표시 이름 바꾸기 — 버튼 → 편집창 → 확정. **RPC의 첫 인자가 식별자여야 한다.**
-  const renameBtn = buttons.find((b) => b.label === "MANAGE_NAME_EDIT");
-  out.renameButtons = buttons.filter((b) => b.label === "MANAGE_NAME_EDIT").length;
-  if (renameBtn && renameBtn.onClick) renameBtn.onClick();
-  await settle();
-  const nameModal = modals[modals.length - 1];
-  out.nameModal = nameModal && nameModal.type && nameModal.type.__kind;
-  out.nameModalOkDisabled = !!(nameModal && nameModal.props && nameModal.props.bOKDisabled);
-  const onOK3 = nameModal && nameModal.props && nameModal.props.onOK;
-  if (typeof onOK3 === "function") { onOK3(); await settle(); }
-  out.renameCalls = renameCalls;
-  // ★ R3: load()(복원·이름변경 성공 뒤 갱신 경로)가 표시명을 i18n에 반영했는가.
-  out.nameSyncs = nameSyncs;
+  const out = { anchorFound };
 
-  // ★ R2 — `disk` 백업(실사용 다수)의 확인창은 **오지 않을 후속 제안을 약속하면 안 된다.**
-  //   목록을 다시 열고 두 번째 행(=`disk`)을 복원해 그 창의 문구를 본다.
-  const backupBtnAgain = buttons.filter((b) => /^MANAGE_BACKUPS/.test(b.label))[0];
-  if (backupBtnAgain && backupBtnAgain.onClick) backupBtnAgain.onClick();
-  await settle();
-  const restoreBtnsDisk = buttons.filter((b) => b.label === "BACKUP_RESTORE");
-  const diskBtn = restoreBtnsDisk[restoreBtnsDisk.length - 1];   // 마지막 렌더의 disk 행
-  if (diskBtn && diskBtn.onClick) diskBtn.onClick();
-  await settle();
-  const diskModal = modals[modals.length - 1];
-  out.diskConfirmKind = (restoreCalls[restoreCalls.length - 1] || [])[1];
-  out.diskConfirmTexts = collect(diskModal, []).flatMap((n) => (n.children || []).filter((c) => typeof c === "string"));
+  // ═══ ① 프로필 대피본 복원 — 3-상태·토큰·D-07 재조회·후속 제안 ════════════
+  {
+    reset();
+    const view = await openBackupView(NestedPopup);
+    const before = { rows: restoreButtons(view.ui).length, list: calls.list.length, overview: calls.overview.length };
+    restoreButtons(view.ui)[0].onClick();            // 맨 위 = 프로필 대피본
+    await settle();
+    const confirm = currentConfirm(view.ui, true);
+    const res = { reached: view.reached, call1: calls.restore[0], before,
+                  confirmTexts: confirm ? confirm.texts : [] };
+    if (confirm && confirm.ok) confirm.ok();
+    await settle();
+    res.call2 = calls.restore[1];
+    // ★ D-07: 복원은 disk 대피본을 하나 만든다 — 목록과 overview를 각각 다시 읽어야 한다.
+    res.listAfter = calls.list.length - before.list;
+    res.overviewAfter = calls.overview.length - before.overview;
+    res.rowsAfter = restoreButtons(view.ui).length;
+    res.metasAfter = rowMetas(view.ui);
+    res.stillOnBackupView = res.rowsAfter > 0;       // 연속 복원 시나리오 지원(화면은 머문다)
+    res.mutations = mutations.length;
+    const followUp = shownModals[shownModals.length - 1] || null;
+    res.followUpTexts = followUp ? texts(followUp) : [];
+    const okNode = followUp ? find(followUp, "ConfirmModal") : null;
+    if (okNode) okNode.node.props.onOK();
+    await settle();
+    res.saveCalls = calls.save.slice();
+    res.notes = texts(view.ui()).filter((x) => /RESTORE_|SAVE_OK/.test(x));
+    out.nested = res;
+  }
 
-  // ★ R1 시나리오 — **복원은 성공했는데 후속 제안 창만 못 뜬 경우.**
-  //   디스크는 이미 다시 쓰였고 백업 링도 1칸 소모됐다. 이때 화면이 "아무것도 지우지
-  //   않았습니다"라고 말하면 **마지막 말이 사실과 반대**가 된다(qa-lead 재현).
-  notes.length = 0;
-  const restoreBtns2 = buttons.filter((b) => b.label === "BACKUP_RESTORE");
-  if (restoreBtns2[0] && restoreBtns2[0].onClick) restoreBtns2[0].onClick();
-  await settle();
-  const confirm2 = modals[modals.length - 1];
-  const onOK4 = confirm2 && confirm2.props && confirm2.props.onOK;
-  throwOnNextModal = true;                    // 다음 창(=후속 제안)만 실패시킨다
-  if (typeof onOK4 === "function") { onOK4(); await settle(); }
-  throwOnNextModal = false;
-  out.notesAfterFollowUpModalFailure = notes.slice();
-  out.notes = notes;
+  // ═══ ①′ **폴백 모드**(`NESTED_CONFIRM=false`) 주행 ═══════════════════════
+  //
+  // 폴백은 실기에서 중첩이 실패할 때의 탈출구다 — 안 돌리면 그날 처음 실행된다.
+  // ⚠️ 여기서는 **첫 확인창까지**만 잰다. 후속 제안은 같은 자리에 오버레이가 연달아 뜨는
+  //   형태인데, 이 프로브의 미니 훅 런타임은 **언마운트 개념이 없어** 앞 오버레이의 상태를
+  //   뒤 오버레이가 물려받는다(실물 React는 그 사이의 `overlay===null` 렌더에서 언마운트한다).
+  //   하네스의 한계이지 제품의 한계가 아니므로, 여기서 재는 것을 **정직하게 좁힌다** —
+  //   후속 제안 체인은 위 중첩 모드가 덮는다.
+  {
+    reset();
+    const view = await openBackupView(FallbackPopup);
+    const modalsBefore = shownModals.length;
+    restoreButtons(view.ui)[0].onClick();
+    await settle();
+    const confirm = currentConfirm(view.ui, false);
+    out.fallback = {
+      reached: view.reached,
+      call1: calls.restore[0],
+      confirmTexts: confirm ? confirm.texts : [],
+      // ★ D-05 ⑤: 오버레이가 떠 있는 동안 원 콘텐츠는 **렌더되지 않는다**(숨김이 아니라 미렌더).
+      bodyHiddenDuringConfirm: restoreButtons(view.ui).length === 0,
+      modalsUsed: shownModals.length - modalsBefore,
+    };
+    if (confirm && confirm.ok) confirm.ok();
+    await settle();
+    out.fallback.call2 = calls.restore[1];
+    out.fallback.mutations = mutations.length;
+  }
+
+  // ═══ ② 링 포화 — 행 수는 min(old+1, 10)이고 최고령 행이 퇴출된다(N-04) ════
+  {
+    const full = Array.from({ length: BACKUP_KEEP }, (_, i) =>
+      row(`202608100${String(90 - i).padStart(4, "0")}`, i === 0 ? "profile_dock" : "disk", `F-${i}`));
+    reset(full);
+    const view = await openBackupView(NestedPopup);
+    const oldest = full[full.length - 1].stamp_label;
+    const beforeRows = restoreButtons(view.ui).length;
+    restoreButtons(view.ui)[0].onClick();
+    await settle();
+    const confirm = currentConfirm(view.ui, true);
+    if (confirm && confirm.ok) confirm.ok();
+    await settle();
+    out.ring = {
+      beforeRows,
+      afterRows: restoreButtons(view.ui).length,
+      newestFirst: (rowMetas(view.ui)[0] || "").includes("T-NEW"),
+      evictedGone: !rowMetas(view.ui).some((x) => x.includes(oldest)),
+    };
+  }
+
+  // ═══ ③ `already` — 무쓰기라 **재조회하지 않는다** ════════════════════════
+  {
+    reset();
+    SCENE.outcome = "already";
+    const view = await openBackupView(NestedPopup);
+    const before = { list: calls.list.length, overview: calls.overview.length };
+    restoreButtons(view.ui)[0].onClick();
+    await settle();
+    out.already = {
+      listAfter: calls.list.length - before.list,
+      overviewAfter: calls.overview.length - before.overview,
+      modals: shownModals.length,
+      notes: texts(view.ui()).filter((x) => /RESTORE_/.test(x)),
+      mutations: mutations.length,
+    };
+  }
+
+  // ═══ ④ disk 대피본 — 오지 않을 후속 제안을 약속하지 않는다(R2) ═══════════
+  {
+    reset();
+    const view = await openBackupView(NestedPopup);
+    restoreButtons(view.ui)[1].onClick();            // 두 번째 행 = disk
+    await settle();
+    const confirm = currentConfirm(view.ui, true);
+    out.disk = { confirmTexts: confirm ? confirm.texts : [] };
+    if (confirm && confirm.ok) confirm.ok();
+    await settle();
+    out.disk.modalsAfter = shownModals.length;       // 확인창 1개뿐(후속 제안 없음)
+    out.disk.notes = texts(view.ui()).filter((x) => /RESTORE_/.test(x));
+  }
+
+  // ═══ ⑤ 복원은 성공했는데 **후속 제안 창만** 못 뜬 경우(R1) ═══════════════
+  {
+    reset();
+    const view = await openBackupView(NestedPopup);
+    restoreButtons(view.ui)[0].onClick();
+    await settle();
+    const confirm = currentConfirm(view.ui, true);
+    SCENE.throwOnNextModal = true;                   // 다음 창(=후속 제안)만 실패시킨다
+    if (confirm && confirm.ok) confirm.ok();
+    await settle();
+    out.followUpFailed = {
+      notes: texts(view.ui()).filter((x) => /RESTORE_|MANAGE_MODAL_FAILED/.test(x)),
+      restoreCalls: calls.restore.length,
+    };
+  }
+
+  // ═══ ⑥ 조기 거부(GAME_RUNNING) — 확실히 거부될 확인을 시키지 않는다 ══════
+  {
+    reset();
+    SCENE.failCode = "GAME_RUNNING";
+    const view = await openBackupView(NestedPopup);
+    restoreButtons(view.ui)[0].onClick();
+    await settle();
+    out.refused = {
+      modals: shownModals.length,
+      notes: texts(view.ui()).filter((x) => /GAME_RUNNING|RESTORE_/.test(x)),
+    };
+  }
+
+  // ═══ ⑦ 백업 뷰의 안내 3줄(§5-C) ═════════════════════════════════════════
+  {
+    reset();
+    const view = await openBackupView(NestedPopup);
+    out.hints = texts(view.ui()).filter((x) => /^BACKUP_LIST_|^BACKUP_RING_/.test(x));
+    // 프로필 대피본이 없는 링에서는 "복원 뒤에 물어본다" 예고가 뜨지 않는다.
+    reset(BASE_ROWS().filter((r) => r.kind === "disk"));
+    const diskOnly = await openBackupView(NestedPopup);
+    out.hintsDiskOnly = texts(diskOnly.ui()).filter((x) => /^BACKUP_LIST_|^BACKUP_RING_/.test(x));
+  }
+
   console.log(JSON.stringify(out));
 })();

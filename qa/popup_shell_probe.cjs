@@ -8,189 +8,18 @@
  *
  * ★ 실행: node qa/popup_shell_probe.cjs   (u1-toolchain node — test가 절대경로로 부른다)
  */
-const fs = require("fs");
 const path = require("path");
+const {
+  makeHost, h, find, findAll, texts, buttons, makeLoader, react,
+} = require(path.join(__dirname, "probe_kit.cjs"));
 
-const projectRoot = path.resolve(__dirname, "..");
-const srcDir = path.join(projectRoot, "src");
-const ts = require(path.join(projectRoot, "node_modules", "typescript"));
+const srcDir = path.join(path.resolve(__dirname, ".."), "src");
 
 globalThis.window = globalThis.window || { navigator: { userAgent: "gfxprofile-probe" } };
 
-// ── 미니 React ───────────────────────────────────────────────────────────────
-//
-// 기존 프로브들의 목(슬롯 번호로 고정값을 돌려주는 useState)으로는 **입력에 따라 값이 바뀌는
-// 계약**(okDisabled 동적 평가 · 입력 보존)을 잴 수 없다. 그래서 재렌더·이펙트 정리까지 도는
-// 아주 작은 훅 런타임을 둔다 — 한 번에 **훅을 쓰는 컴포넌트 하나**만 호스팅한다.
-let host = null;
-
-class Component {
-  constructor(props) { this.props = props; this.state = {}; }
-  setState(s) { Object.assign(this.state, typeof s === "function" ? s(this.state) : s); }
-}
-
-const react = {
-  Component,
-  useState(initial) {
-    // ★ 세터는 **자기 호스트에 묶는다.** 전역 `host`를 나중에 읽으면 렌더가 끝난 뒤(=클릭·
-    //   onChange 시점)에는 null이라 죽는다 — 실제로 그렇게 죽었다.
-    const owner = host;
-    const slot = owner.slot();
-    if (!(slot in owner.hooks)) owner.hooks[slot] = typeof initial === "function" ? initial() : initial;
-    return [
-      owner.hooks[slot],
-      (v) => { owner.hooks[slot] = typeof v === "function" ? v(owner.hooks[slot]) : v; owner.render(); },
-    ];
-  },
-  useRef(initial) {
-    const owner = host;
-    const slot = owner.slot();
-    if (!(slot in owner.hooks)) owner.hooks[slot] = { current: initial };
-    return owner.hooks[slot];
-  },
-  useCallback(fn, deps) {
-    const owner = host;
-    const slot = owner.slot();
-    const prev = owner.hooks[slot];
-    if (!prev || !deps || !prev.deps || deps.some((d, i) => d !== prev.deps[i])) {
-      owner.hooks[slot] = { deps, fn };
-    }
-    return owner.hooks[slot].fn;
-  },
-  useEffect(fn, deps) {
-    const owner = host;
-    const slot = owner.slot();
-    const prev = owner.hooks[slot];
-    const changed = !prev || !deps || !prev.deps || deps.some((d, i) => d !== prev.deps[i]);
-    if (!changed) return;
-    owner.pending.push(() => {
-      if (prev && prev.cleanup) prev.cleanup();
-      // ★ 슬롯을 **먼저** 기록한다: 이펙트 본문이 동기적으로 setState를 부르면(실물 코드가
-      //   그런다 — `load()`의 `setBusy(true)`) 그 자리에서 재렌더가 돌고, 그때 이 슬롯이
-      //   비어 있으면 같은 이펙트가 다시 큐에 들어가 **무한 재귀**가 된다(실제로 그랬다).
-      owner.hooks[slot] = { deps, cleanup: null };
-      const cleanup = fn();
-      owner.hooks[slot].cleanup = typeof cleanup === "function" ? cleanup : null;
-    });
-  },
-};
-
-function makeHost(renderFn) {
-  const h0 = {
-    hooks: [],
-    pending: [],
-    index: 0,
-    output: null,
-    slot() { return this.index++; },
-    render() {
-      const prev = host;
-      host = h0;
-      h0.index = 0;
-      h0.pending = [];
-      try {
-        h0.output = renderFn();
-        const queued = h0.pending;
-        h0.pending = [];
-        queued.forEach((run) => run());
-      } finally {
-        host = prev;
-      }
-      return h0.output;
-    },
-    /** 언마운트 — 이펙트 정리를 실제로 돌린다(입력 스냅샷이 여기서 나간다). */
-    unmount() {
-      h0.hooks.forEach((slot) => { if (slot && slot.cleanup) slot.cleanup(); });
-    },
-  };
-  return h0;
-}
-
-// ── 미니 렌더러 ──────────────────────────────────────────────────────────────
-function isClassComponent(type) {
-  return typeof type === "function" && type.prototype && type.prototype instanceof Component;
-}
-
-function h(type, props, ...children) {
-  const flat = children.flat(9).filter((c) => c !== null && c !== undefined && c !== false);
-  const merged = { ...(props || {}) };
-  if (flat.length) merged.children = flat.length === 1 ? flat[0] : flat;
-  const node = { type, props: merged, children: flat, name: nameOf(type) };
-  if (typeof type === "function") node.rendered = renderComponent(type, merged);
-  return node;
-}
-
-/**
- * 컴포넌트를 그 자리에서 그린다.
- *
- * ⚠️ 실물 React는 `<X/>`를 **엘리먼트만 만들고** 나중에 그리지만 이 프로브는 즉시 그린다.
- *   그래서 렌더 밖(클릭 핸들러 안)에서 만들어지는 엘리먼트 — 예: `showModal(<SpecConfirmModal/>)` —
- *   도 여기로 온다. 그때 훅을 걸 호스트가 없으면 **컴포넌트가 죽고**, 그 죽음이 게이트의
- *   try/catch에 잡혀 *"모달을 못 띄웠다"*로 오독된다(실제로 그렇게 오독했다).
- *   → 호스트가 없으면 **임시 호스트**를 만들어 그 안에서 그린다.
- */
-function renderComponent(type, merged) {
-  const draw = () => (isClassComponent(type) ? new type(merged).render() : type(merged));
-  if (host) return draw();
-  return makeHost(draw).render();
-}
-
-const Fragment = { __kind: "Fragment" };
-
-function nameOf(type) {
-  if (typeof type === "string") return type;
-  if (type && type.__kind) return type.__kind;
-  if (typeof type === "function") return type.name || "anonymous";
-  return String(type);
-}
-
-/** 트리 전체(자식 + 컴포넌트 렌더 결과)를 훑는다. */
-function walk(node, visit, ancestors = []) {
-  if (node === null || node === undefined || typeof node !== "object") return;
-  if (Array.isArray(node)) { node.forEach((n) => walk(n, visit, ancestors)); return; }
-  if (!node.type) return;
-  visit(node, ancestors);
-  const next = ancestors.concat([node]);
-  node.children.forEach((c) => walk(c, visit, next));
-  // props로 넘어간 엘리먼트(strDescription 등)도 화면의 일부다
-  Object.entries(node.props).forEach(([key, value]) => {
-    if (key === "children") return;
-    if (value && typeof value === "object" && value.type) walk(value, visit, next);
-  });
-  if (node.rendered) walk(node.rendered, visit, next);
-}
-
-function find(root, name) {
-  let hit = null;
-  walk(root, (node, ancestors) => { if (!hit && node.name === name) hit = { node, ancestors }; });
-  return hit;
-}
-
-function findAll(root, name) {
-  const out = [];
-  walk(root, (node, ancestors) => { if (node.name === name) out.push({ node, ancestors }); });
-  return out;
-}
-
-/** 화면에 보이는 글자 전부 — 자식 문자열 + 가시 prop. 두 렌더러 대조의 기준값이다. */
-const VISIBLE_PROPS = ["strTitle", "strOKButtonText", "strCancelButtonText", "label", "title"];
-function texts(root) {
-  const out = [];
-  walk(root, (node) => {
-    node.children.forEach((c) => { if (typeof c === "string") out.push(c); });
-    VISIBLE_PROPS.forEach((key) => {
-      if (typeof node.props[key] === "string") out.push(node.props[key]);
-    });
-  });
-  return out;
-}
-
-function buttons(root) {
-  return findAll(root, "DialogButton").map(({ node }) => ({
-    label: node.children.filter((c) => typeof c === "string").join(" "),
-    onClick: node.props.onClick,
-    disabled: !!node.props.disabled,
-  }));
-}
+// ⚠️ 하네스(미니 React·렌더러·로더)는 **`qa/probe_kit.cjs` 한 곳**에 있다. P13에서 프로브가
+//   셋으로 늘면서, 하네스 사본이 프로브마다 있으면 그중 하나만 고쳐지는 날이 온다.
+//   이 파일이 재는 것은 하네스가 아니라 **팝업 공통 기반의 계약**이다.
 
 // ── 모듈 목 ──────────────────────────────────────────────────────────────────
 let modalThrows = false;
@@ -238,38 +67,7 @@ const modules = {
   },
 };
 
-const cache = new Map();
-function load(rel, patch) {
-  const key = rel + (patch ? "#patched" : "");
-  if (cache.has(key)) return cache.get(key);
-  const file = path.join(srcDir, rel);
-  let source = fs.readFileSync(file, "utf8");
-  if (patch) source = patch(source);
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020,
-      jsx: ts.JsxEmit.React, jsxFactory: "h", jsxFragmentFactory: "Fragment", esModuleInterop: true,
-    }, fileName: file,
-  }).outputText;
-  const exports = {};
-  cache.set(key, exports);
-  const req = (name) => {
-    if (modules[name]) return modules[name];
-    if (name.startsWith(".")) {
-      const base = name.replace(/^\.\//, "");
-      for (const ext of ["", ".tsx", ".ts"]) {
-        if (fs.existsSync(path.join(srcDir, base + ext)) &&
-            fs.statSync(path.join(srcDir, base + ext)).isFile()) {
-          return load(base + ext);
-        }
-      }
-    }
-    throw new Error("unmocked: " + name);
-  };
-  new Function("exports", "require", "module", "h", "Fragment", compiled)(
-    exports, req, { exports }, h, Fragment);
-  return exports;
-}
+const load = makeLoader(srcDir, modules);
 
 const popup = load("popup.tsx");
 // **폴백 모드**의 팝업 — `NESTED_CONFIRM` 한 줄만 뒤집은 사본이다(그 스위치가 실제로

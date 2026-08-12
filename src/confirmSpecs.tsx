@@ -17,10 +17,10 @@ import type {
  * ★ 여기는 **표시 전용**이다. "물어야 하는가"는 백엔드가 정하고(`CONFIRM_REQUIRED`),
  *   이 파일은 받은 `params`를 그릴 뿐이다 — 프론트가 조건을 다시 계산하지 않는다.
  *
- * ⚠️ 문구·정보량은 **현행 유지가 원칙**이다(P12 spec화 범위). 설계가 명시한 변경분
- *   (§9 등록 해제 안내 3종 · §7 초기화 제외 고지 · §5-C 백업 문구)은 그 화면을 만드는
- *   단계(P13)에서 이 파일에 반영한다 — 지금 섞으면 "spec화 전후 문구 동일성" 검사가
- *   무엇을 재는지 알 수 없게 된다.
+ * ⚠️ 문구·정보량은 P12에서 **현행 유지**였고, 설계가 명시한 변경분(§9 등록 해제 안내 ·
+ *   §7 초기화 경고 블록·제외 고지)은 그 화면을 만드는 **P13에서 얹었다.** 순서를 그렇게
+ *   가른 이유: 먼저 옮기고 나중에 더해야 "spec화 전후 문구 동일성" 검사가 *"옮기다 잃은 것"*
+ *   하나만 재게 된다(그 검사는 **손실만 실패**로 보므로 이 추가분에 눈감지 않는다).
  * ⚠️ `bDestructiveWarning`은 spec에 없다: 실측상 **시각 효과가 없고**(§1-10) A8이
  *   "위험색 차등 없음 — 초기화 확인창의 ⚠ 블록만"으로 확정했다. 경고는 `warnBlock`이 맡는다.
  */
@@ -112,6 +112,14 @@ export function makeDeleteConfirmSpec(
         {/* 대피가 선행한다는 사실을 말한다 — 삭제는 "빈 내용으로 덮어쓰기"이고, 이 툴의
             문법은 "어떤 쓰기든 그 전에 백업"이다(G13). 백업은 삭제 후에도 남는다. */}
         <div>{t("DELETE_CONFIRM_BACKUP", { n: params.backups })}</div>
+        {/* ★ §9-② 설정 파일 경로 — 대피본에는 meta가 없어(§1-6) 원본 경로를 아는 곳이
+            **삭제 전의 registry뿐**이다. 지우기 직전이 그 경로를 보여줄 마지막 기회다.
+            ⚠️ 빈 문자열이 올 수 있다(unsafe-key 분기는 entry를 읽지 않는다 — `remove.py:118-123`).
+              **빈 값이면 줄 자체를 그리지 않는다**(R-11 — 기존 "0이면 안 그림" 문법). */}
+        {params.config_path ? <div style={META_STYLE}>{t("DELETE_CONFIRM_PATH", { path: params.config_path })}</div> : null}
+        {/* ★ §9-① 재등록·복원 경로 예고 — "삭제 = 등록 해제 + 감지 제외"(A9)라 이 게임은
+            다음 감지 목록에서도 사라진다. 되돌아오는 길을 **지우기 전에** 말해 둔다. */}
+        <div>{t("DELETE_CONFIRM_REDISCOVER")}</div>
         {/* ★ F10(자기 설명) — 사용자가 가장 오해하기 쉬운 지점이라 **반드시** 노출한다. */}
         <div style={WARN_STYLE}>{t("MANAGE_KEEP_CONFIG")}</div>
       </div>
@@ -218,6 +226,11 @@ export function makeResetConfirmSpec(
   return {
     kind: "input",
     title: t("RESET_CONFIRM_TITLE"),
+    /* ★ A8이 인정한 **유일한** 위험색 강조다(버튼 색 차등 없음 — 이 블록 하나뿐).
+       ★ F23: "백업은 남습니다"만으로는 거짓에 가깝다 — 남은 백업을 쓰려면 **그 게임을 다시
+         등록해야** 하고, 그 전제를 안 적으면 사용자는 "언제든 되살릴 수 있다"로 읽는다.
+         재등록이 가능한 근거는 초기화가 감지 제외 목록까지 지운다는 사실이다(A9 ④). */
+    warnBlock: <div>{t("RESET_CONFIRM_WARN", { games: params.games, profiles: params.profiles })}</div>,
     body: (
       <div style={COLUMN_STYLE}>
         {/* 파괴 규모 고지는 **입력이 아니라 이 줄이 전담**한다 — challenge가 고정 단어라
@@ -227,6 +240,9 @@ export function makeResetConfirmSpec(
         {/* ★ F11 ①: 표시명은 registry settings에 살아 **이 초기화에 같이 지워진다.**
             모르고 잃으면 안 되므로 미리 말한다. 0이면 줄을 그리지 않는다(기존 문법). */}
         {params.named > 0 ? <div>{t("RESET_CONFIRM_NAMES", { n: params.named })}</div> : null}
+        {/* ★ A9 ④: 초기화는 registry를 통째로 갈아 끼우므로 **감지 제외 목록도 같이 지워진다.**
+            그 사실이 위 warnBlock의 "다시 등록해서 복원한다"를 참으로 만드는 근거이기도 하다. */}
+        {params.excluded > 0 ? <div>{t("RESET_CONFIRM_EXCLUDED", { n: params.excluded })}</div> : null}
         <div style={WARN_STYLE}>{t("MANAGE_KEEP_CONFIG")}</div>
         <div>{t("RESET_CONFIRM_TYPE", { word: params.challenge })}</div>
       </div>

@@ -27,14 +27,10 @@ I18N = ROOT / "src" / "i18n"
 #: 확인창 키군(접두). 새 키는 자동 포섭된다.
 GROUPS = ("APPLY_ALL_", "SAVE_", "RESTORE_", "DELETE_", "RESET_")
 
-#: §10-A가 **최종값으로 고정**한 문구(Codex D-09). 이 게이트의 기준점이라 값까지 잠근다 —
-#: 여기가 흔들리면 "무엇을 기준으로 금칙을 재는가"가 같이 흔들린다.
-FIXED_VALUES = {
-    "SAVE_CONFIRM_BODY": {
-        "ko": "이 프로필에 저장돼 있던 이전 내용을 덮어씁니다.",
-        "en": "This overwrites what was previously saved in this profile.",
-    },
-}
+#: ★ §10-A **확정값 고정은 `test_wording_10a.py`가 전담**한다(P13 게이트 C2에서 일원화).
+#:   여기에도 `SAVE_CONFIRM_BODY` 하나를 잠가 뒀었는데, 같은 값을 두 파일에서 관리하면
+#:   한쪽만 낡는 날이 온다. 이 파일의 소관은 **금칙어**(A5·A6)이고, 값의 정본은 저쪽이다.
+#:   저쪽은 §10-A가 값을 명시한 26키를 ko(+명시된 8키는 en까지) 바이트로 잠근다.
 
 #: **파일을 가리키는 용법은 허용**된다(A5가 명시한 예외). 이 조각을 지운 뒤 남는 "설정"만 본다.
 ALLOWED_PHRASES = {
@@ -48,13 +44,13 @@ MENU_VALUES = {"설정", "Settings"}
 
 #: ★ 키별 예외 — **근거 없이 늘리지 말 것.** 여기 이름을 올리는 것은 "이 문구의 A5 판정은
 #:   검사 밖"이라는 선언이다.
-EXEMPT = {
-    # "복원 전 현재 설정도 백업으로 보관합니다" — 여기서 '설정'은 **게임 원본 파일의 현재 내용**
-    # 이고(프로필이 아니다) A5가 허용하는 용법이다. 다만 뒤에 "파일"이 붙지 않아 기계적으로는
-    # 구별되지 않는다. 문구 자체를 "게임 설정 파일"로 바꾸는 것은 §5-C 개정(P13)의 몫이라,
-    # 그때 이 예외를 지우고 규칙으로 흡수한다.
-    "RESTORE_CONFIRM_BACKUP",
-}
+#:
+#: ⚠️ **지금은 비어 있다(P13에서 마지막 하나를 소거했다).** `RESTORE_CONFIRM_BACKUP`이
+#:   *"복원 전 현재 설정도 백업으로 보관합니다"*라 파일을 가리키는 '설정'인데도 뒤에 "파일"이
+#:   없어 기계적으로 구별되지 않았다 — 예고대로 §5-C 개정에서 **문구를 고쳐 규칙으로 흡수**했다
+#:   ("복원 전에 지금의 **게임 설정 파일**도 …"). 예외를 남겨 두는 대신 문구를 고치는 것이
+#:   이 게이트의 정상 처분이다.
+EXEMPT: set = set()
 
 #: 금칙 — A6("미완/미완성" 전면 제거). 영어는 그 대응어.
 FORBIDDEN = {"ko": ("미완",), "en": ("incomplete",)}
@@ -77,15 +73,6 @@ def main():
             print(f"FAIL: {path} 없음")
             return 1
         tables[lang] = json.loads(path.read_text(encoding="utf-8"))
-
-    # ── 고정값 대조 ──────────────────────────────────────────────────────────
-    for key, values in FIXED_VALUES.items():
-        for lang, expected in values.items():
-            actual = tables[lang].get(key)
-            if actual != expected:
-                problems.append(
-                    f"★{key}({lang})가 §10-A 확정값이 아니다\n"
-                    f"      기대: {expected}\n      실제: {actual}")
 
     # ── 금칙 검사 ────────────────────────────────────────────────────────────
     checked = 0
@@ -116,7 +103,7 @@ def main():
 
     print(f"A5·A6 문구 게이트 — 확인창 키군 {GROUPS} · 검사 {checked}건(ko+en) · "
           f"예외 {sorted(EXEMPT) or '없음'}")
-    print(f"  고정값 대조: {sorted(FIXED_VALUES)}")
+    print("  값 고정(§10-A)은 test_wording_10a.py 소관 — 여기는 금칙어만 본다")
     if problems:
         print("\nFAIL")
         for p in problems:

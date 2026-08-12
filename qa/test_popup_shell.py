@@ -166,9 +166,11 @@ def main():                                                    # noqa: C901  (�
     #   ⚠️ **처분 예고**: P15에서 legacy 확인창이 삭제되면 이 대조는 **은퇴한다**(비교 대상이
     #     사라진다) — 스냅샷 고정으로 전환하거나 삭제한다. P15의 결정 사항으로 넘긴다.
     parity_lost = {}
-    if len(r["parity"]) < 20:
-        P(f"③′ 대조 조합이 {len(r['parity'])}개뿐이다 — 분기를 흔들지 않으면 이 검사는 "
-          f"**한 갈래만 보고** 통과한다")
+    # 조합을 추가하면 이 상수를 의식적으로 갱신하라 — 하한 방식은 검사 범위가 조용히
+    # 줄어드는 경로였다(P13 게이트 C3). `<20`이던 시절엔 조합을 하나 지워도 통과했다.
+    if len(r["parity"]) != 26:
+        P(f"③′ 대조 조합이 {len(r['parity'])}개다(고정 26) — 분기를 흔들지 않으면 이 검사는 "
+          f"**한 갈래만 보고** 통과한다. 늘렸다면 이 상수를 함께 갱신하라")
     for case in r["parity"]:
         label, legacy, spec_face = case["label"], case["legacy"], case["spec"]
         if case.get("legacyCaptured") is False or legacy is None:
