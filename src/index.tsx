@@ -1,5 +1,5 @@
 import { definePlugin, routerHook, toaster, useQuickAccessVisible } from "@decky/api";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactElement, type ReactNode } from "react";
 import {
   applyAll,
   getOverview,
@@ -7,6 +7,7 @@ import {
   type ApplyRow,
   type Outcome,
   type Overview,
+  type OverviewCounts,
   type Profile,
 } from "./rpc";
 import { ensureLang, setProfileNames, t, tCode, type StringKey } from "./i18n";
@@ -14,10 +15,13 @@ import { PLUGIN_VERSION } from "./version";
 import { BulkApplyButton } from "./BulkApplyButton";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
 import { StatusPage } from "./StatusPage";
+import { GamesPopup } from "./GamesPopup";
+import { DiscoverPopup } from "./DiscoverPopup";
+import { SettingsPopup } from "./SettingsPopup";
+import { IconCheck, IconGear, IconList, IconSearch, IconWarn } from "./icons";
 import {
+  ButtonItem,
   ConfirmModal,
-  DialogButton,
-  Navigation,
   PanelSection,
   PanelSectionRow,
   showModal,
@@ -31,6 +35,8 @@ import {
 // 이 문자열들은 **의도적으로 번역하지 않는다** — 번역되면 진단 grep이 언어에 따라 깨진다.
 
 // 전체 화면 route. `onDismount`에서 반드시 제거한다 — 플러그인을 껐다 켜면 중복 등록된다.
+// ⚠️ P15-C 현재: QAM에는 **더 이상 이 route로 가는 입구가 없다**(§3-A 재편으로 제거됐다).
+//   route 자체·`StatusPage`·구 탭 파일은 P15-D에서 원자적으로 제거한다 — 죽은 코드로 공존한다.
 const ROUTE = "/gfxprofile";
 const FN = Math.random().toString(36).slice(2, 6);
 
@@ -41,7 +47,6 @@ const FN = Math.random().toString(36).slice(2, 6);
 //       플러그인별로 파일이 갈려 있어 부팅 세션을 구분할 필요조차 없다.
 //     · **백엔드에 닿지 못한 경우에만** console.error로 남긴다. 그건 실제로 오류이므로
 //       error 레벨이 의미상으로도 맞고, 그 상황에서 남길 곳이 cef_log뿐이다.
-//   이 구조는 "cef_log를 grep해 부팅 세션을 가려내는" 문제를 통째로 없앤다.
 function failTag(msg: string): void {
   console.error(`[gfxprofile] ${msg} fn=${FN}`);
 }
@@ -67,11 +72,33 @@ const PROFILE_KEY: Record<Profile, StringKey> = {
  */
 const CAP_NAMES = 3;
 
+/** 이름 나열 한 줄 — 넘치면 `NAMES_AND_MORE`로 접는다. 두 사유 줄이 **같은 규칙**을 쓴다. */
+function namesOf(rows: ApplyRow[]): string {
+  const shown = rows.slice(0, CAP_NAMES).map((r) => r.name).join(", ");
+  const more = rows.length - CAP_NAMES;
+  return more > 0 ? t("NAMES_AND_MORE", { names: shown, n: more }) : shown;
+}
+
+/**
+ * 직전 일괄 적용의 결과(§3-B 과거군). **수신 시각까지 여기 담는다** — 봉투에는 시각이 없고,
+ * 화면이 결과를 받은 순간이 곧 "언제 있었던 일인가"의 정본이다(D02·M9. 봉투 확장 0).
+ */
+interface ApplySummary {
+  headline: string;
+  hints: string[];
+  /** 문제 행이 하나라도 있었는가 — 제목 아이콘을 가른다(D05: 체크 / 주황 경고). */
+  problems: boolean;
+  /** 체크인이 일어난 게임 수(§5-E ⑦). 0이면 그 줄을 그리지 않는다. */
+  checkin: number;
+  at: number;
+}
+
 function buildSummary(
   profile: Profile,
   rows: ApplyRow[],
   counts: Partial<Record<Outcome, number>>,
-): { headline: string; hints: string[] } {
+  checkin: number,
+): ApplySummary {
   const running = rows.filter((r) => r.code === "GAME_RUNNING");
   // 조치가 게임마다 다른 것 = 코드가 있는데 GAME_RUNNING이 아닌 것 + 코드 없는 error
   const specific = rows.filter(
@@ -86,7 +113,9 @@ function buildSummary(
       : t("APPLY_SUMMARY", { profile: profileName, total: rows.length, applied });
 
   const hints: string[] = [];
-  if (running.length > 0) hints.push(t("APPLY_PROBLEM_REFUSED", { n: running.length }));
+  // ★ F16-ⓑ: **이름을 말한다.** "실행 중인 게임 3개"로는 어느 게임을 끄면 되는지 알 수 없어
+  //   사용자가 할 수 있는 일이 없다. 이름은 결과 행에 이미 실려 있다(봉투 확장 0).
+  if (running.length > 0) hints.push(t("APPLY_PROBLEM_REFUSED", { names: namesOf(running) }));
 
   // ★ P5: 사유를 **화면에** 낸다. 전까지는 *"사유는 로그를 확인하십시오"*였는데,
   //   Game Mode에는 터미널이 없어 사용자가 로그를 볼 방법이 사실상 없었다.
@@ -108,16 +137,22 @@ function buildSummary(
     (a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]),
   );
   for (const [code, group] of groups) {
-    const shown = group.slice(0, CAP_NAMES).map((r) => r.name).join(", ");
-    const more = group.length - CAP_NAMES;
-    const names = more > 0 ? t("NAMES_AND_MORE", { names: shown, n: more }) : shown;
-    hints.push(t("APPLY_PROBLEM_SPECIFIC", { names, reason: tCode(code, "APPLY_FAILED") }));
+    hints.push(t("APPLY_PROBLEM_SPECIFIC", {
+      names: namesOf(group),
+      reason: tCode(code, "APPLY_FAILED"),
+    }));
   }
-  return { headline, hints };
+  return {
+    headline,
+    hints,
+    problems: running.length > 0 || specific.length > 0,
+    checkin,
+    at: Date.now(),
+  };
 }
 
 /**
- * 일괄 적용 확인창 (F8) — **오발동을 막는 마찰**이다.
+ * 일괄 적용 확인창 (F8) — **오발동을 막는 마찰**이다. 명세 정본 = 설계 §3-E.
  *
  * ★★ 이 모달은 설계 정본 §9-E 모달 정당성 기준(파괴적 **그리고** 저빈도)의 **예외**다.
  *   일괄 적용은 주 동작이고 매 부팅 누르는 고빈도 버튼이며 파괴적이지도 않다(백업이 선행되는
@@ -125,12 +160,17 @@ function buildSummary(
  *   기준에 우선한다는 것이다. 전례가 실재한다: P2 실기에서 결과 목록을 드래그하다
  *   **의도하지 않은 일괄 적용이 실행됐다.**
  *
+ * ★★ 본문의 `{total}`은 **미리보기 봉투가 준 값**이다(§3-E · Codex D-06) — 토큰을 발급한
+ *   그 시점의 등록 수 스냅샷이다. `get_overview`의 total을 쓰면 *"토큰이 지문 낸 대상"*과
+ *   화면 숫자가 어긋난다(다른 시점의 조회). 버킷 5개의 합 = 이 값이 계약이다.
  * ★ 숫자는 **전부 백엔드가 센 값**이고 화면은 「예상」이라고 말한다 — 실행 결과의 정본은
  *   적용 후 요약과 백엔드 로그다. 0인 버킷 줄은 그리지 않는다(`counts.incomplete`의 기존 규칙).
  * ★ `bDestructiveWarning`은 **붙이지 않는다**(세션 잠정 확정) — 일괄 적용은 파괴가 아니라
  *   주 동작이고, 붙이면 "저장 덮어쓰기·삭제 급"과 시각 언어가 뭉개진다. C 묶음 재검토 등재분.
  * ★ **OK는 항상 활성**이다. `running_refused`는 고지 줄에만 쓰이고 활성 조건에 절대 들어가지
  *   않는다 — 조건이 되는 순간 E1(실행 중 게임이 일괄 적용을 막지 않는다)이 모달 층에서 뒤집힌다.
+ * ★ 무정보 상시 줄(`APPLY_ALL_CONFIRM_NOTE`)은 §3-E D04로 **삭제**됐다 — 「예상:」 접두가
+ *   이미 같은 말을 한다. (키 자체의 제거는 P15-D 일괄 정리 소관이다.)
  */
 function ApplyAllConfirm({
   params,
@@ -160,9 +200,8 @@ function ApplyAllConfirm({
       strTitle={t("APPLY_ALL_CONFIRM_TITLE", { profile: profileName })}
       strDescription={
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          <div>{t("APPLY_ALL_CONFIRM_BODY", { profile: profileName })}</div>
+          <div>{t("APPLY_ALL_CONFIRM_BODY", { total: params.total, profile: profileName })}</div>
           {parts.length > 0 ? <div>{t("APPLY_ALL_CONFIRM_EXPECT", { list: parts.join(" · ") })}</div> : null}
-          <div style={HINT_STYLE}>{t("APPLY_ALL_CONFIRM_NOTE")}</div>
         </div>
       }
       strOKButtonText={t("APPLY_ALL_CONFIRM_OK")}
@@ -173,12 +212,104 @@ function ApplyAllConfirm({
   );
 }
 
+/** 화면이 실패를 **받은 시각까지** 들고 있는다 — 언제 있었던 일인지가 사유만큼 중요하다. */
+interface Failure {
+  key: StringKey;
+  code: string;
+  at: number;
+}
+
 // ★ 마지막 일괄 적용 요약은 **컴포넌트 밖**에 둔다.
 //   QAM을 닫으면 패널이 언마운트되므로(실측: 다시 열면 요약 줄이 사라졌다) 상태에만 두면
 //   "무슨 일이 있었는지"가 창을 닫는 순간 없어진다. 결과는 화면 수명보다 오래 남아야 한다.
-let lastSummary: { title: string; body: string } | null = null;
+let lastSummary: ApplySummary | null = null;
+
+// ★★ 실패도 **같은 수명**이다(F20 — §3-B 수명 규칙). 예전에는 성공만 모듈 변수로 살아남고
+//   실패는 QAM을 닫는 순간 사라졌다 — *"뭔가 안 됐다"*는 사실이 성공보다 짧게 사는 비대칭이다.
+//   소거 시점은 **다음 동작 시작**(새 일괄 적용 / 새 로드 성공)뿐이다.
+let lastFailure: Failure | null = null;
 
 const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
+
+const MUTED_COLOR = "#9aa0a6";
+/** 주의색은 **주황 하나**다 — 빨강은 쓰지 않는다(A8). */
+const WARN_COLOR = "#ffb454";
+
+/** 상태박스(§3-B) — 시각 박스는 **한 개**이고, 내용이 0줄이면 아예 그리지 않는다. */
+const BOX_STYLE = {
+  border: "1px solid rgba(255,255,255,0.15)",
+  borderRadius: "4px",
+  padding: "8px 10px",
+  fontSize: "12px",
+  display: "flex",
+  flexDirection: "column",
+} as const;
+
+const GROUP_STYLE = { display: "flex", flexDirection: "column", gap: "6px" } as const;
+
+/** 결과 제목 줄 — 아이콘과 글이 같은 줄에 선다. */
+const RESULT_ROW_STYLE = { display: "flex", alignItems: "center", gap: "6px" } as const;
+
+/**
+ * 결과·실패를 **받은 시각**. 당일이면 `14:32`, 다른 날이면 `08-10 14:32`(D02·M9).
+ *
+ * ★ 번역하지 않는다: 숫자와 구분 기호뿐이라 언어에 따라 달라질 글자가 없다.
+ *   (달라져야 하는 것은 12/24시간 표기인데, Steam 설정을 프론트가 읽을 방법이 없다 —
+ *    지어내는 대신 24시간 고정으로 **한 가지 뜻만** 갖게 한다.)
+ */
+function stampOf(at: number): string {
+  const two = (n: number) => String(n).padStart(2, "0");
+  const d = new Date(at);
+  const hm = `${two(d.getHours())}:${two(d.getMinutes())}`;
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  return sameDay ? hm : `${two(d.getMonth() + 1)}-${two(d.getDate())} ${hm}`;
+}
+
+/**
+ * 일괄 버튼 아래 **사유 한 줄**(§3-A ⓑ · M1). `ButtonItem`의 `description` 슬롯으로 그린다.
+ *
+ * ★★ 이 식에는 **`running`이 들어가지 않는다.** 파생 재료는 `total`·`ready`뿐이다 —
+ *   실행 중인 게임은 일괄 적용을 막지 않으므로(E1) *"왜 못 누르는가"*의 사유가 될 수 없고,
+ *   여기서 한 번 running을 읽으면 그 값이 활성 조건으로 새어 들어갈 길이 생긴다.
+ * ★ `counts`가 아직 없으면 **아무 말도 하지 않는다**(D01) — 등록 수를 모르는 동안
+ *   "등록된 게임이 없습니다"라고 말하면 화면이 거짓을 말한다.
+ */
+function bulkHint(counts: OverviewCounts | undefined, profile: Profile): string | undefined {
+  if (!counts) return undefined;
+  if (counts.total === 0) return t("NO_GAMES");
+  const ready = profile === "dock" ? counts.dock_ready : counts.internal_ready;
+  return ready === 0 ? t("BULK_NO_PROFILES") : undefined;
+}
+
+/**
+ * QAM의 팝업 진입 버튼 하나(§3-A 6~8) — 아이콘 + 라벨 + 설명 한 줄.
+ *
+ * ★ 설명(`description`)은 *"거기서 무엇을 하는가"*를 말한다(M10): 진입 안내를 상단 설명 영역에
+ *   몰아 넣으면 그 문단이 매번 읽히는 소음이 되고, 정작 버튼 옆은 비어 있다.
+ */
+function EntryButton({
+  icon,
+  label,
+  desc,
+  onOpen,
+}: {
+  icon: ReactNode;
+  label: string;
+  desc: string;
+  onOpen: () => void;
+}) {
+  return (
+    <PanelSectionRow>
+      <ButtonItem layout="below" icon={icon} description={desc} onClick={onOpen}>
+        {label}
+      </ButtonItem>
+    </PanelSectionRow>
+  );
+}
 
 function Content() {
   const missing = uicheckMissing();
@@ -189,12 +320,27 @@ function Content() {
   // 폴백 문구를 나중에 갈아끼우는 처리를 만드는 대신 그 상황 자체를 없앴다.
   const [langReady, setLangReady] = useState(false);
   const [overview, setOverview] = useState<Overview | null>(null);
-  const [failure, setFailure] = useState<{ key: StringKey; code: string } | null>(null);
+  // 초기값을 모듈 변수에서 받으므로 QAM을 닫았다 열어도 남아 있다(요약·실패 모두 — F20).
+  const [failure, setFailureState] = useState(lastFailure);
   const [busy, setBusy] = useState(false);
-  // 마지막 일괄 적용의 요약. 한 줄이라 스크롤을 만들지 않는다(긴 목록은 모달에 있다).
-  // 초기값을 모듈 변수에서 받으므로 QAM을 닫았다 열어도 남아 있다.
+  /** busy 중 **무엇을 하는 중인가**(§3-B ①): 무토큰 1차 = 확인 중 / 토큰 재호출 = 적용 중. */
+  const [previewing, setPreviewing] = useState(false);
   const [summary, setSummary] = useState(lastSummary);
 
+  /** 실패는 **모듈 변수와 상태를 함께** 움직인다 — 두 곳에 각자 쓰면 언젠가 갈린다. */
+  const setFailure = useCallback((next: Failure | null) => {
+    lastFailure = next;
+    setFailureState(next);
+  }, []);
+
+  /**
+   * 현황 재조회 — **멱등이다.** 몇 번을 불러도 같은 봉투를 다시 읽어 덮어쓸 뿐이고,
+   * 세거나 쌓는 것이 없다.
+   *
+   * ★★ 그래야 하는 이유(P15-B 인계 ①): 팝업의 `onMutate`는 **거부·실패에도 발화한다**
+   *   (엔진은 쓴 뒤에 거부할 수 있으므로 "실패했으니 안 읽는다"가 틀린 규칙이다).
+   *   즉 이 핸들러는 한 동작에 여러 번 올 수 있고, 그때마다 다른 일을 하면 화면이 흔들린다.
+   */
   const refresh = useCallback(() => {
     getOverview().then(
       (res) => {
@@ -202,18 +348,19 @@ function Content() {
           // 표시명(F11 ①)을 먼저 반영한다 — 라벨이 그려지기 전이어야 이름이 안 깜빡인다.
           setProfileNames(res.data.profile_names);
           setOverview(res.data);
+          // 새 로드 성공 = 다음 동작의 시작이다 — 승계해 온 실패를 여기서 거둔다(§3-B 수명).
           setFailure(null);
         } else {
-          setFailure({ key: "LOAD_FAILED", code: res.code });
+          setFailure({ key: "LOAD_FAILED", code: res.code, at: Date.now() });
         }
       },
       (err) => {
         // 백엔드에 닿지 못한 경우다 — 남길 곳이 cef_log뿐이라 여기만 console.error다.
         failTag(`overview-failed err=${String(err)}`);
-        setFailure({ key: "LOAD_FAILED", code: "UNEXPECTED" });
+        setFailure({ key: "LOAD_FAILED", code: "UNEXPECTED", at: Date.now() });
       },
     );
-  }, []);
+  }, [setFailure]);
 
   // ★ mount 태그는 **useEffect에서** 찍는다. 컴포넌트 본문은 render 단계라, 거기서 찍으면
   //   뒤이은 자식 렌더가 실패해도 "mounted"가 남아 진단이 거짓말을 한다. useEffect는
@@ -259,6 +406,9 @@ function Content() {
   const runApplyAll = useCallback(
     (profile: Profile, token?: string) => {
       setBusy(true);
+      setPreviewing(!token);
+      // 새 동작의 시작 — 승계해 온 실패는 여기서 거둔다(§3-B 수명). 과거군(요약)은 남는다.
+      setFailure(null);
       applyAll(profile, token)
         .then(
           (res) => {
@@ -280,22 +430,25 @@ function Content() {
                 //   그 문구를 이긴다**(단일 관문의 정의). 그러면 "예기치 못한 오류"가 떠서
                 //   *확인창이 안 떴다*는 진짜 사유가 사라진다. 등재되지 않은 코드를 줘야
                 //   fallback(=아래 키)이 화면에 나온다.
-                setFailure({ key: "APPLY_CONFIRM_MODAL_FAILED", code: "MODAL" });
+                setFailure({ key: "APPLY_CONFIRM_MODAL_FAILED", code: "MODAL", at: Date.now() });
               }
               return;
             }
             if (res.ok) {
-              const { headline, hints } = buildSummary(profile, res.data.results, res.data.counts);
-
               // ★ 결과의 **정본은 이 상태**다. 모달은 없앴고(2026-08-06 사용자 결정),
               //   토스트는 QAM이 닫혀 있어도 도달하는 부가 채널일 뿐이다 —
               //   토스트가 실패해도 아래 요약 줄은 이미 붙잡혀 있다.
-              lastSummary = { title: headline, body: hints.join(" · ") };
+              lastSummary = buildSummary(
+                profile,
+                res.data.results,
+                res.data.counts,
+                res.data.checkin.length,
+              );
               setSummary(lastSummary);
               setFailure(null);
 
               try {
-                toaster.toast({ title: headline, body: hints.join(" · ") });
+                toaster.toast({ title: lastSummary.headline, body: lastSummary.hints.join(" · ") });
               } catch (err) {
                 failTag(`toast-failed err=${String(err)}`);
               }
@@ -303,17 +456,37 @@ function Content() {
             } else {
               // ⚠️ 게임별 실패는 여기 오지 않는다. 봉투가 ok:false인 것은
               //    일괄 적용 자체가 시작도 못 한 경우뿐이다.
-              setFailure({ key: "APPLY_FAILED", code: res.code });
+              setFailure({ key: "APPLY_FAILED", code: res.code, at: Date.now() });
             }
           },
           (err) => {
             failTag(`apply-all-failed err=${String(err)}`);
-            setFailure({ key: "APPLY_FAILED", code: "UNEXPECTED" });
+            setFailure({ key: "APPLY_FAILED", code: "UNEXPECTED", at: Date.now() });
           },
         )
         .finally(() => setBusy(false));
     },
-    [refresh],
+    [refresh, setFailure],
+  );
+
+  /**
+   * 팝업 하나를 연다(§3-A 6~8 · §4-A).
+   *
+   * ★ 엘리먼트를 **함수로 받는다**: 여기서 미리 만들면 `showModal`이 없는 상황에서도 팝업이
+   *   한 번 그려진다. 열지 못할 화면을 먼저 그릴 이유가 없다.
+   * ★ 실패는 **대상 이름을 포함해** 말한다(F21) — "화면을 못 띄웠다"만으로는 어느 화면인지
+   *   알 수 없다. `code`에 등재되지 않은 값을 주어 `tCode`가 그 키로 떨어지게 한다(위 참조).
+   */
+  const openPopup = useCallback(
+    (make: () => ReactElement, failKey: StringKey) => {
+      try {
+        showModal(make());
+      } catch (err) {
+        failTag(`popup-modal-failed key=${failKey} err=${String(err)}`);
+        setFailure({ key: failKey, code: "MODAL", at: Date.now() });
+      }
+    },
+    [setFailure],
   );
 
   // ★ 실패 안내를 **검사 대상 컴포넌트로 그리지 않는다.**
@@ -347,80 +520,182 @@ function Content() {
   // e1-display-only
   const runningNote = counts?.running ? t("BULK_RUNNING_NOTE", { n: counts.running }) : null;
 
+  /**
+   * **시작 안내 조건**(§3-B ④ · §3-D ② — H2). 두 줄이 이 하나의 식을 공유한다:
+   * 조건을 각자 두면 프로필이 처음 생긴 날 한 줄만 사라진다.
+   * 프로필이 하나라도 생기면 영구히 거짓이 된다.
+   */
+  const noProfilesYet =
+    !!counts && counts.total > 0 && counts.dock_ready + counts.internal_ready === 0;
+
+  /** 카운트 줄(§3-C). 조회 전에는 **빈 자리**다 — 모르는 것을 0으로 말하지 않는다(D01). */
+  const countText = !counts
+    ? ""
+    : counts.total === 0
+      ? t("NO_GAMES")
+      : t("COUNT_SUMMARY", {
+          dock: t("PROFILE_DOCK"),
+          dock_ready: counts.dock_ready,
+          total: counts.total,
+          internal: t("PROFILE_INTERNAL"),
+          internal_ready: counts.internal_ready,
+        });
+
+  /**
+   * 상태박스(§3-B) — **위=지금 / 아래=직전 결과**로 나뉜 한 개의 박스(D06).
+   * 두 군 모두 비면 박스 자체를 그리지 않는다.
+   */
+  function renderStatusBox(): ReactNode {
+    const now: ReactNode[] = [];
+    // ⓪ 아직 아무것도 모른다. 실패가 있으면 그쪽이 더 정확한 말을 하므로 이 줄은 물러난다.
+    if (!overview && !failure) {
+      now.push(<div key="loading" style={{ color: MUTED_COLOR }}>{t("LOADING")}</div>);
+    }
+    // ① 진행 중 — 확인 중(무쓰기 왕복)과 적용 중(실제 쓰기)은 다른 말이다(D14).
+    if (busy) {
+      now.push(
+        <div key="busy" style={{ color: MUTED_COLOR }}>
+          {previewing ? t("APPLY_PREVIEWING") : t("APPLYING")}
+        </div>,
+      );
+    }
+    // ② 실행 중 게임 고지 — **표시 전용**이다(E1). 활성 조건이 아니다.
+    if (runningNote) {
+      now.push(<div key="running" style={{ color: MUTED_COLOR }}>{runningNote}</div>);
+    }
+    // ③ 실패 — 사유(tCode 단일 관문)와 **받은 시각**을 함께.
+    if (failure) {
+      now.push(
+        <div key="failure" style={{ color: WARN_COLOR }}>
+          {tCode(failure.code, failure.key)}
+          <span>{" · "}{stampOf(failure.at)}</span>
+        </div>,
+      );
+    }
+    // ④ 시작 안내(H2) — 특정 게임을 겨냥하지 않으므로 A6(재촉 금지)에 저촉되지 않는다.
+    if (noProfilesYet) {
+      now.push(<div key="start" style={{ color: MUTED_COLOR }}>{t("NO_PROFILES_YET")}</div>);
+    }
+
+    const past: ReactNode[] = [];
+    if (summary) {
+      // ⑤ 결과 제목 — 아이콘이 성패를 먼저 말하고(D05), 시각이 "언제 것인지"를 말한다.
+      past.push(
+        <div key="result" style={{ ...RESULT_ROW_STYLE, color: MUTED_COLOR }}>
+          <span style={{ display: "inline-flex", color: summary.problems ? WARN_COLOR : MUTED_COLOR }}>
+            {summary.problems ? <IconWarn /> : <IconCheck />}
+          </span>
+          <span>{summary.headline}</span>
+          <span>{" · "}{stampOf(summary.at)}</span>
+        </div>,
+      );
+      // ⑥ 사유 — 이름과 조치가 여기 있다. 색은 주황 하나뿐이다(A8).
+      if (summary.hints.length > 0) {
+        past.push(
+          <div key="why" style={{ color: WARN_COLOR }}>{summary.hints.join(" · ")}</div>,
+        );
+      }
+      // ⑦ 체크인 고지(§5-E) — 사실 진술이므로 회색이다. 0건이면 줄을 만들지 않는다.
+      if (summary.checkin > 0) {
+        past.push(
+          <div key="checkin" style={{ color: MUTED_COLOR }}>
+            {t("CHECKIN_MANY", { n: summary.checkin })}
+          </div>,
+        );
+      }
+    }
+
+    if (now.length === 0 && past.length === 0) return null;
+    return (
+      <PanelSectionRow>
+        <div style={BOX_STYLE}>
+          {now.length > 0 ? <div style={GROUP_STYLE}>{now}</div> : null}
+          {past.length > 0 ? (
+            /* busy 동안 과거군은 흐려진다 — *"지금 것이 아니다"*를 숨기지 않고 말하는 방법이다(D02-ⓑ). */
+            <div
+              style={{
+                ...GROUP_STYLE,
+                marginTop: now.length > 0 ? "8px" : "0",
+                opacity: busy ? 0.4 : 1,
+              }}
+            >
+              {past}
+            </div>
+          ) : null}
+        </div>
+      </PanelSectionRow>
+    );
+  }
+
   return (
     <>
-      {/* i18n-exempt: 플러그인 이름(고유명사) */}
-      <PanelSection title="eGPU Game Config Swap">
+      {/*
+        ★ 제목을 두지 않는다(§3-A) — QAM 헤더의 `titleView`가 이미 플러그인 이름을 말한다.
+      */}
+      <PanelSection>
         {/*
           ★ 활성 조건은 **「그 프로필을 실제로 가진 게임 수 ≥ 1」 하나뿐**이다(설계 E1).
             실행 중인 게임 수는 여기 절대 들어가지 않는다 — 들어가면 게임 하나가 켜져 있다는
             이유로 아무것도 적용되지 않고, 그건 M1 불변식("하나만 거부하고 나머지는 적용")의
-            정면 위반이다. running은 아래 고지 한 줄에서 **표시로만** 쓴다.
+            정면 위반이다. running은 상태박스 고지 한 줄에서 **표시로만** 쓴다.
         */}
         {(["dock", "internal"] as const).map((profile) => (
           <BulkApplyButton
             key={profile}
             profile={profile}
             ready={(profile === "dock" ? counts?.dock_ready : counts?.internal_ready) ?? 0}
+            hint={bulkHint(counts, profile)}
             busy={busy}
             onApply={runApplyAll}
           />
         ))}
 
-        {busy && (
-          <PanelSectionRow>
-            <div style={HINT_STYLE}>{t("APPLYING")}</div>
-          </PanelSectionRow>
-        )}
-
-        {runningNote && (
-          <PanelSectionRow>
-            <div style={HINT_STYLE}>{runningNote}</div>
-          </PanelSectionRow>
-        )}
-
-        {!!counts?.incomplete && (
-          <PanelSectionRow>
-            <div style={HINT_STYLE}>{t("PROFILE_INCOMPLETE", { n: counts.incomplete })}</div>
-          </PanelSectionRow>
-        )}
-
-        {counts?.total === 0 && (
-          <PanelSectionRow>
-            <div style={HINT_STYLE}>{t("NO_GAMES")}</div>
-          </PanelSectionRow>
-        )}
-
-        {summary && (
-          <PanelSectionRow>
-            <div style={HINT_STYLE}>{summary.title}</div>
-          </PanelSectionRow>
-        )}
-
-        {summary?.body ? (
-          <PanelSectionRow>
-            <div style={{ ...HINT_STYLE, color: "#ffb454" }}>{summary.body}</div>
-          </PanelSectionRow>
-        ) : null}
-
+        {/* 설명 영역(§3-D) — ①은 상시, ②는 시작 안내와 **같은 조건**에서만 뜬다(U-5). */}
         <PanelSectionRow>
-          {/*
-            전체 화면으로 가는 유일한 입구. QAM(496px)에는 목록이 안 들어가므로
-            현황·개별 조작은 저기서 한다(설계 §3 프론트 2층).
-          */}
-          <DialogButton onClick={() => Navigation.Navigate(ROUTE)}>
-            {t("OPEN_FULL_SCREEN")}
-          </DialogButton>
+          <div style={HINT_STYLE}>{t("QAM_ABOUT")}</div>
         </PanelSectionRow>
-
-        {failure && (
+        {noProfilesYet && (
           <PanelSectionRow>
-            <div style={{ ...HINT_STYLE, color: "#ffb454" }}>
-              {/* 원시 코드 식별자를 그대로 보이지 않는다 — tCode가 단일 관문이다(P5). */}
-              {tCode(failure.code, failure.key)}
+            <div style={HINT_STYLE}>
+              {t("QAM_ABOUT_GUIDE", { dock: t("PROFILE_DOCK"), internal: t("PROFILE_INTERNAL") })}
             </div>
           </PanelSectionRow>
         )}
+
+        {renderStatusBox()}
+
+        {/* 카운트 줄은 조회 전에도 **자리를 지킨다** — 값이 도착할 때 화면이 튀지 않는다. */}
+        <PanelSectionRow>
+          <div style={{ ...HINT_STYLE, minHeight: "16px" }}>{countText}</div>
+        </PanelSectionRow>
+
+        <EntryButton
+          icon={<IconSearch />}
+          label={t("OPEN_DISCOVER")}
+          desc={t("OPEN_DISCOVER_DESC")}
+          onOpen={() => openPopup(
+            () => <DiscoverPopup onMutate={refresh} />,
+            "POPUP_DISCOVER_MODAL_FAILED",
+          )}
+        />
+        <EntryButton
+          icon={<IconList />}
+          label={t("OPEN_GAMES")}
+          desc={t("OPEN_GAMES_DESC")}
+          onOpen={() => openPopup(
+            () => <GamesPopup onMutate={refresh} />,
+            "POPUP_GAMES_MODAL_FAILED",
+          )}
+        />
+        <EntryButton
+          icon={<IconGear />}
+          label={t("OPEN_SETTINGS")}
+          desc={t("OPEN_SETTINGS_DESC")}
+          onOpen={() => openPopup(
+            () => <SettingsPopup onMutate={refresh} />,
+            "POPUP_SETTINGS_MODAL_FAILED",
+          )}
+        />
       </PanelSection>
     </>
   );
@@ -429,6 +704,8 @@ function Content() {
 /**
  * 전체 화면 route를 경계로 감싼 것 (설계 E13).
  * `routerHook.addRoute`는 **컴포넌트**를 받으므로 인라인 JSX가 아니라 이 래퍼가 필요하다.
+ *
+ * ⚠️ P15-C 현재 QAM에는 이 화면으로 가는 입구가 없다 — 제거는 P15-D 소관이다.
  */
 function RoutedStatusPage() {
   return (

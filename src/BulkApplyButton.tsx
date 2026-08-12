@@ -1,4 +1,5 @@
 import { ButtonItem, PanelSectionRow } from "./deckyui";
+import { IconBolt, IconChip } from "./icons";
 import { t } from "./i18n";
 import type { Profile } from "./rpc";
 
@@ -23,12 +24,22 @@ import type { Profile } from "./rpc";
 export function BulkApplyButton({
   profile,
   ready,
+  hint,
   busy,
   onApply,
 }: {
   profile: Profile;
   /** 그 프로필을 **실제로 가진** 게임 수. 등록 수가 아니다 — 등록 수를 쓰면 라벨이 거짓말을 한다. */
   ready: number;
+  /**
+   * 비활성일 때의 **사유 한 줄**(§3-A ⓑ · M1) — `description` 슬롯에 그린다.
+   *
+   * ★★ 호출부(`index.tsx`의 `bulkHint`)가 **`ready`·`total`만으로** 만든다. `running`은 그 식에
+   *   들어가지 않는다 — 실행 중인 게임은 일괄 적용을 막지 않으므로(E1) 못 누르는 사유가 될 수
+   *   없고, 사유 문구가 running을 읽기 시작하면 그 값이 활성 조건으로 새는 길이 생긴다.
+   *   이 컴포넌트가 `running`을 **못 보는 구조**(위 참조)를 hint가 우회해서는 안 된다.
+   */
+  hint?: string;
   busy: boolean;
   onApply: (profile: Profile) => void;
 }) {
@@ -36,6 +47,8 @@ export function BulkApplyButton({
     <PanelSectionRow>
       <ButtonItem
         layout="below"
+        icon={profile === "dock" ? <IconBolt /> : <IconChip />}
+        description={hint}
         disabled={ready === 0 || busy}
         onClick={() => onApply(profile)}
       >

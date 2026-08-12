@@ -108,7 +108,11 @@ bad += stale_on_screen()
 
 # ★ QA R2 지적 ⑩: `total == 0`만 보면 **마커를 하나씩 지울 때 조용히 줄어든다**(5자리→4자리 PASS).
 #   지금 실물이 몇 자리인지를 하한으로 박는다 — 줄어들면 그 자체가 신호다.
-MIN_SITES = 5
+#   ⚠️ 2026-08-12 P15-C: 5 → **4**. QAM 본체 `PanelSection`의 `title`이 설계 §3-A("PanelSection
+#     title 없음")로 사라졌다 — QAM 헤더의 `titleView`가 이미 같은 이름을 말하고 있어 중복이었다.
+#     **자리가 줄어드는 것은 의식적 갱신으로만 허용한다**(TOTAL_FIXED와 같은 문법): 이 숫자를
+#     고치지 않으면 fail-closed로 막힌다.
+MIN_SITES = 4
 if total < MIN_SITES:
     sys.exit(f"FAIL 검사 대상이 {total}자리뿐이다(하한 {MIN_SITES}) — "
              f"표시 마커가 지워졌거나 규칙이 바뀌었다 (fail-closed)")

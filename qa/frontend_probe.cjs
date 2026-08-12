@@ -31,7 +31,7 @@ const COUNTS = { total: 9, dock_ready: 9, internal_ready: 8, running: 1, incompl
 globalThis.window = globalThis.window || { navigator: { userAgent: "gfxprofile-probe" } };
 globalThis.document = globalThis.document || { title: "gfxprofile-probe" };
 
-const buttons = [];
+const allButtons = [];
 const applyCalls = [];
 //: P10 — `applyAll`에 실제로 들어간 인자 전량(프로필 + 토큰). `applyCalls`는 E1이 쓰던
 //: "눌렀더니 호출은 나갔는가"의 지표라 **모양을 바꾸지 않는다**(바꾸면 그 판정이 조용히 깨진다).
@@ -53,7 +53,7 @@ function h(type, props, ...children) {
     return type({ ...(props || {}), children });
   }
   const node = { type, props: props || {}, children };
-  if (type && type.__kind === "ButtonItem") buttons.push(node);
+  if (type && type.__kind === "ButtonItem") allButtons.push(node);
   return node;
 }
 
@@ -106,13 +106,17 @@ const modules = {
           ok: false,
           code: "CONFIRM_REQUIRED",
           params: {
+            // ★ P15-C: 확인창 본문이 쓰는 `total`은 **미리보기 봉투가 준 값**이다(§3-E).
+            //   버킷 5개의 합과 같아야 한다는 계약도 여기서 지킨다(8+0+1+1+0 = 10).
             confirm_token: TOKEN_FOR(profile),
             profile,
+            total: 10,
             would_apply: 8, already: 0, no_profile: 1, running_refused: 1, cannot_apply: 0,
           },
         });
       }
-      return Promise.resolve({ ok: true, data: { results: [], counts: {} } });
+      // `checkin`은 P11에서 봉투에 추가됐다(§5-E) — 목이 낡으면 화면이 TypeError로 죽는다.
+      return Promise.resolve({ ok: true, data: { results: [], counts: {}, checkin: [] } });
     },
     getOverview: () => Promise.resolve({ ok: true, data: { games: [], counts: COUNTS } }),
     uiHello: () => Promise.resolve({ ok: true, data: { lang: "en" } }),
@@ -148,6 +152,12 @@ const modules = {
     titleClass: () => undefined,
     uicheckMissing: () => missing,
   },
+  // ★ P15-C 배선: QAM이 팝업 3종을 **엘리먼트로** 연다. 이 프로브의 소관은 E1(일괄 적용)
+  //   하나이므로 팝업 본체는 목으로 세운다 — 실물을 끌어오면 이 프로브가 팝업 내부 변화에
+  //   따라 깨지고, 그때 "E1이 깨졌다"로 오독된다. 팝업 배선의 판정은 `qam_probe.cjs`다.
+  "./GamesPopup": { GamesPopup: { __kind: "GamesPopup" } },
+  "./DiscoverPopup": { DiscoverPopup: { __kind: "DiscoverPopup" } },
+  "./SettingsPopup": { SettingsPopup: { __kind: "SettingsPopup" } },
 };
 
 function loadModule(relPath) {
@@ -205,7 +215,18 @@ function findBlocked(node, blocked) {
   return kids.some((k) => findBlocked(k, nowBlocked));
 }
 
+// ★ P15-C: QAM에는 이제 `ButtonItem`이 5개다(일괄 2 + 팝업 진입 3). **E1의 대상은 일괄 2개**이고,
+//   진입 버튼은 `qam_probe.cjs`가 잰다. 라벨로 가른다 — i18n 목이 키를 그대로 돌려주므로
+//   일괄 버튼의 라벨은 `BULK_APPLY …`로 시작한다.
+//   ⚠️ 골라내기가 실패하면(라벨 키가 바뀌면) 아래 `buttons`가 0개가 되고 호출부가 FAIL한다 —
+//     조용히 다른 것을 재지 않는다.
+const buttons = allButtons.filter((b) => textOf(b.children).trim().startsWith("BULK_APPLY"));
 const labels = buttons.map((b) => textOf(b.children).trim());
+// hint(§3-A ⓑ)는 `description` 슬롯으로 온다 — **`running`이 새어 들었는지**를 여기서 관측한다.
+const hints = buttons.map((b) => {
+  const d = b.props.description;
+  return d === undefined || d === null ? "" : String(d);
+});
 // ★ 눌러 본다. `disabled=false`인데 아무 일도 안 하는 버튼은 **눌리지 않는 것과 같다.**
 buttons.forEach((b) => {
   try {
@@ -247,6 +268,11 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
   console.log(
     JSON.stringify({
       buttons: buttons.map((b, i) => ({ label: labels[i], disabled: !!b.props.disabled })),
+      // 화면에 있는 ButtonItem 전량(일괄 2 + 진입 3). 골라내기가 헛돌면 여기서 드러난다.
+      allButtonLabels: allButtons.map((b) => textOf(b.children).trim()),
+      // ★ §15-A: hint가 `running`을 만지지 않는가 — 주입 현황은 running=1·ready>0이므로
+      //   두 hint는 **비어 있어야** 한다(사유가 없다). 채워지면 running이 새어 든 것이다.
+      hints,
       langReady: true,
       missing,
       // ★ 측정 경로에 닿았는지 — 주입한 dock_ready(9)가 라벨에 보이는가.

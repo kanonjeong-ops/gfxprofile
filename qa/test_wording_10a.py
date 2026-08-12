@@ -68,6 +68,20 @@ LOCKED = {
     # §10-A: `BACKUP_KIND_PROFILE` / `BACKUP_KIND_DISK` (F2)
     "BACKUP_KIND_PROFILE": {"ko": "{profile} 프로필에서 밀려난 이전 내용"},
     "BACKUP_KIND_DISK": {"ko": "적용·복원 직전 자동 백업(게임 설정 파일)"},
+    # ── QAM 재편(P15-C에서 합류) ──────────────────────────────────────────────
+    #    §10-A: `BULK_APPLY`(A5) · `APPLY_ALL_CONFIRM_TITLE`(M8) ·
+    #    `APPLY_ALL_CONFIRM_BODY`(§3-E — `{total}`은 preview params 단독 출처) ·
+    #    `APPLY_PROBLEM_REFUSED`(F16-ⓑ — `{names}`+NAMES_AND_MORE CAP).
+    #    en 값은 §10-A가 확정하지 않아 ko만 잠근다.
+    "BULK_APPLY": {"ko": "{profile} 프로필 적용"},
+    "APPLY_ALL_CONFIRM_TITLE": {"ko": "「{profile}」 프로필로 일괄 적용할까요?"},
+    "APPLY_ALL_CONFIRM_BODY": {
+        "ko": "등록된 게임 {total}개를 대상으로 게임 설정 파일을 「{profile}」 "
+              "프로필로 갈아끼웁니다.",
+    },
+    "APPLY_PROBLEM_REFUSED": {
+        "ko": "{names} 실행 중이라 적용되지 않았습니다 — 종료 후 다시 눌러 주세요",
+    },
     # ── 감지 팝업(P14에서 합류) ────────────────────────────────────────────────
     #    §10-A: `DISCOVER_RESCAN`(L2) · `DISCOVER_ADD_CONFIDENT`·`DISCOVER_BADGE_CONFIDENT`(M3 —
     #    "확신"이라는 내부 용어를 화면에서 걷어낸다). en 값은 §10-A가 확정하지 않아 ko만 잠근다.
@@ -142,30 +156,9 @@ LOCKED = {
 #: 순간 실패한다(= LOCKED로 옮기라는 신호). 없으면 §10-A 셀 표기가 실물보다 낡았다는 뜻이고,
 #: 어느 쪽을 고칠지는 `note`가 가리키는 자리에서 판단한다.
 PINNED = {
-    # QAM 재편(P15) 소관 — 일괄 버튼 라벨.
-    "BULK_APPLY": {
-        "ko": "전부 {profile}(으)로",
-        "converge": "{profile} 프로필 적용",
-        "note": "P15 QAM 재편에서 교체. 지금 바꾸면 QAM 배선과 어긋난다",
-    },
-    "APPLY_ALL_CONFIRM_TITLE": {
-        "ko": "「{profile}」로 일괄 적용할까요?",
-        "converge": "「{profile}」 프로필로 일괄 적용할까요?",
-        "note": "M8(「모든 게임에」 제거)은 반영됨. '프로필로' 어휘는 BODY와 함께 P15",
-    },
-    "APPLY_ALL_CONFIRM_BODY": {
-        "ko": "등록된 게임의 설정 파일을 「{profile}」 프로필로 갈아끼웁니다.",
-        "converge": "등록된 게임 {total}개를 대상으로 게임 설정 파일을 「{profile}」 "
-                    "프로필로 갈아끼웁니다.",
-        "note": "{total}은 preview params 소비가 전제 — QA 이월 대장 #5(P15). "
-                "자리표시자가 늘어 en도 같이 바뀌어야 한다(test_i18n_sets)",
-    },
-    "APPLY_PROBLEM_REFUSED": {
-        "ko": "실행 중인 게임 {n}개는 적용되지 않았습니다 — 종료 후 다시 눌러 주세요",
-        "converge": "{names} 실행 중이라 적용되지 않았습니다 — 종료 후 다시 눌러 주세요",
-        "note": "F16-ⓑ. {names}+NAMES_AND_MORE CAP은 결과 봉투가 이름을 실어야 성립 — P15",
-    },
-    # (감지 팝업 3키는 **P14에서 합류해 LOCKED로 옮겼다** — 래칫: 한 번 맞춘 값은 다시 안 풀린다.)
+    # (QAM 4키는 **P15-C에서 합류해 LOCKED로 옮겼다**: `BULK_APPLY`·`APPLY_ALL_CONFIRM_TITLE`·
+    #  `APPLY_ALL_CONFIRM_BODY`·`APPLY_PROBLEM_REFUSED`. 감지 팝업 3키는 P14에서 합류했다 —
+    #  래칫: 한 번 맞춘 값은 다시 안 풀린다. 이로써 `converge` 대기는 **0**이다.)
     # ── converge 없음: 실물이 설계 셀보다 **앞서 있다**(구현이 의도적으로 강화함) ──────
     "RESTORE_FOLLOWUP_MODAL_FAILED": {
         "ko": "게임 설정 파일은 되돌렸습니다. 다만 프로필에도 저장할지 묻는 창을 표시하지 "
