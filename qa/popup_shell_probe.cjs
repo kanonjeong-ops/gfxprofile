@@ -290,6 +290,29 @@ const lifecycle = (() => {
     buttons(fbBoom.node)[0].onClick();
   } catch (err) { /* 위와 같다 */ }
 
+  // (d) **취소** — 닫기는 정확히 1회이고 `onOK`는 **한 번도** 안 나간다(단일 종료의 반대쪽).
+  //     취소 뒤의 OK·이중 탭까지 눌러 본다: 계약이 한쪽 방향으로만 성립하면 그건 우연이다.
+  let cancelCloses = 0;
+  const cancelFired = [];
+  const cancelSpec = { ...plainSpec, onOK: () => cancelFired.push(1) };
+  const hostD = makeHost(() => h(popup.SpecConfirmModal,
+    { spec: cancelSpec, closeModal: () => { cancelCloses += 1; } }));
+  hostD.render();
+  const modalD = () => find(hostD.output, "ConfirmModal").node.props;
+  modalD().onCancel();                 // 취소
+  modalD().closeModal();               // 실물 ConfirmModal이 자기 경로로 또 닫는다
+  modalD().onCancel();                 // 이중 탭
+  modalD().onOK();                     // 취소 뒤의 확인 — 없던 일이어야 한다
+
+  // (e) **폴백 렌더러의 B(취소 배선)** — 같은 계약이 다른 렌더러에서도 성립하는가.
+  let overlayCancelCloses = 0;
+  const overlayFired = [];
+  const fbCancel = renderFallback({ ...plainSpec, onOK: () => overlayFired.push(1) },
+    () => { overlayCancelCloses += 1; });
+  const overlayCancel = find(fbCancel.node, "Focusable").node.props.onCancelButton;
+  if (overlayCancel) { overlayCancel(); overlayCancel(); }
+  buttons(fbCancel.node)[0].onClick();  // 취소 뒤 OK 버튼
+
   return {
     nestedCloses,
     okFiredOnce: fired.length,
@@ -299,6 +322,11 @@ const lifecycle = (() => {
     throwClosedNested: throwCloses,
     throwClosedFallback: overlayThrowCloses,
     throwPropagated: threw,
+    cancelCloses,
+    cancelOkFired: cancelFired.length,
+    overlayCancelWired: !!overlayCancel,
+    overlayCancelCloses,
+    overlayCancelOkFired: overlayFired.length,
   };
 })();
 
@@ -409,7 +437,7 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
   envelope = { ok: false, code: "REGISTRY_UNREADABLE", params: {} };
   dataHost.output.reload();
   await settle();
-  dataReport.noteOnFail = dataHost.output.note;
+  dataReport.noteOnFail = dataHost.output.noteText;
 
   // ── ⑥ 입력값 보존 (GP#9) ───────────────────────────────────────────────────
   // 언마운트 시 스냅샷이 나가고, 그 값을 initial로 되돌리면 화면이 복원된다.
@@ -464,7 +492,7 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
     loads: genSink.length,
     afterNew: genMid ? genMid.tag : null,
     afterStale: genHost.output.data ? genHost.output.data.tag : null,
-    staleNote: genHost.output.note,
+    staleNote: genHost.output.noteText,
   };
 
   // ⓐ′ 낡은 **실패** 응답도 버린다 — 아니면 성공한 화면 밑에 옛 실패 사유가 뜬다.
@@ -477,7 +505,7 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
   await settle();
   genSink2[0]({ ok: false, code: "REGISTRY_UNREADABLE", params: {} });
   await settle();
-  generationReport.staleFailNote = genHost2.output.note;
+  generationReport.staleFailNote = genHost2.output.noteText;
   generationReport.staleFailData = genHost2.output.data ? genHost2.output.data.tag : null;
 
   // ⓑ busy — 마운트 조회 중에 이미 켜져 있고, 겹친 왕복이 **다 끝나야** 열린다.
@@ -528,12 +556,71 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
         reloads: loads.length - 1,           // 마운트 1회는 뺀다
         mutations: mutations.length,
         results: seen,                        // 거절이면 onResult는 안 불린다
-        note: host.output.note,
+        note: host.output.noteText,
       };
     }
   }
 
+  // ── ⑦ R4: **변이 성공 + 재조회 실패는 둘 다 참**이다 ──────────────────────
+  //
+  // 예전에는 재조회 실패가 성공 note와 **같은 자리**를 덮어써서, 후속 조치 안내
+  // (`RESTORE_OK_MANUAL`·`DELETE_FAILED`·`SAVE_OK`+warning·`RESET_LEFT_NOTE`)가 통째로
+  // 사라졌다 — 사용자는 *"복원했으니 이 게임의 프로필로 저장하라"*는 다음 걸음을 잃는다.
+  const bothNotes = await (async () => {
+    let loads = 0;
+    let loadOk = true;
+    const host = makeHost(() => popup.usePopupData(() => {
+      loads += 1;
+      return Promise.resolve(loadOk
+        ? { ok: true, data: { tag: "BASE" } }
+        : { ok: false, code: "REGISTRY_UNREADABLE", params: {} });
+    }, "LOAD_FAILED"));
+    host.render();
+    await settle();
+    loadOk = false;                                   // 이제부터 재조회가 실패한다
+    await host.output.runMutation(
+      () => Promise.resolve({ ok: true, data: {} }),
+      "ACT_FAILED",
+      () => { host.output.setNote("RESTORE_OK_MANUAL"); },
+    );
+    await settle();
+    await settle();
+    return {
+      loads,
+      texts: texts(host.output.noteView),
+      noteText: host.output.noteText,
+      // 재조회가 실패했으니 **데이터는 옛것 그대로**여야 한다(모르는 값으로 덮지 않는다).
+      data: host.output.data ? host.output.data.tag : null,
+    };
+  })();
+
+  // ── ⑧ R8: 호출이 **동기적으로 던져도** 문은 닫힌다 ────────────────────────
+  //
+  // `begin()` 뒤에 `.finally(end)`를 이어 붙이는 구조에서는, `call`이 그 자리에서 던지면
+  // `.finally`가 **부착되기 전에** 스택을 빠져나가 busy가 영구히 잠긴다(아무 버튼도 안 듣는 팝업).
+  const syncThrow = await (async () => {
+    const host = makeHost(() => popup.usePopupData(
+      () => Promise.resolve({ ok: true, data: { tag: "BASE" } }), "LOAD_FAILED"));
+    host.render();
+    await settle();
+    let propagated = false;
+    try {
+      void host.output.runMutation(
+        () => { throw new TypeError("callable is not a function"); },
+        "ACT_FAILED",
+        () => {},
+      );
+    } catch (err) {
+      propagated = true;      // 클릭 핸들러 밖으로 새어 나갔다 — 화면은 아무 말도 못 한다
+    }
+    await settle();
+    await settle();
+    return { propagated, busy: host.output.busy, note: host.output.noteText };
+  })();
+
   console.log(JSON.stringify({
+    bothNotes,
+    syncThrow,
     skeleton: skeletonReport,
     views: viewReport,
     gate: gateReport,

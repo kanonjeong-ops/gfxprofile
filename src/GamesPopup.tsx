@@ -8,7 +8,7 @@ import {
 } from "./icons";
 import { t, tCode } from "./i18n";
 import {
-  CARD_INNER_STYLE, CARD_STYLE, GfxPopup, PopupNote, PopupScrollList, PopupSubView,
+  CARD_INNER_STYLE, CARD_STYLE, GfxPopup, PopupScrollList, PopupSubView,
   listRowNavProps, subViewKey, usePopupData, usePopupGate, type GView,
 } from "./popup";
 import { slotSummary } from "./slots";
@@ -225,20 +225,31 @@ export function GamesPopup({
 
   const load = useCallback(() => getOverview(true), []);
   /* ★ 변이 통지·재조회·busy는 **훅 한 곳**을 지난다(§4-F 개정) — 이 파일에는 그 배선이 없다. */
-  const { data, note, setNote, busy, reload, runMutation, runQuery } =
+  const { data, noteText, setNote, setReloadNote, noteView, busy, reload, runMutation, runQuery } =
     usePopupData<Overview>(load, "LOAD_FAILED", onMutate);
   const { gate, renderBody } = usePopupGate();
 
   const games = data?.games ?? [];
   const counts = data?.counts;
 
-  /** 백업 뷰의 목록을 **다시 읽는다**(D-07 ⓐ). 실패해도 화면은 남는다 — note가 말한다. */
+  /**
+   * 백업 뷰의 목록을 **다시 읽는다**(D-07 ⓐ). 실패해도 화면은 남는다 — 둘째 줄이 말한다.
+   *
+   * ★★ 실패 사유를 `setNote`로 쓰면 **방금 한 동작의 결과를 덮는다**(P15-E R4의 같은 사고):
+   *   복원은 성공했는데 목록 재조회가 실패하면 *"이 내용은 지금 게임 설정 파일에만 있습니다 —
+   *   계속 쓰려면 프로필로 저장하십시오"*라는 **후속 조치 안내가 통째로 사라졌다.**
+   *   두 사실은 서로 다르고 둘 다 참이라, 자리를 갈라 둘 다 말한다.
+   */
   const refreshBackups = useCallback(
     (appid: string) => {
       // 읽기 전용이다 — busy만 같이 쓰고 재조회·통지는 붙지 않는다.
       void runQuery(() => listBackups(appid), "BACKUP_LIST_FAILED", (res) => {
-        if (res.ok) setBackups(res.data.backups);
-        else setNote(tCode(res.code, "BACKUP_LIST_FAILED"));
+        if (res.ok) {
+          setBackups(res.data.backups);
+          setReloadNote(null);
+          return;
+        }
+        setReloadNote(tCode(res.code, "BACKUP_LIST_FAILED"));
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -443,7 +454,7 @@ export function GamesPopup({
           </DialogButton>
         </Focusable>
 
-        <PopupNote note={note} />
+        {noteView}
 
         <PopupScrollList>
           {shown.map((game, index) => (
@@ -470,13 +481,24 @@ export function GamesPopup({
     );
   }
 
+  /**
+   * 목록이 비었을 때의 한 줄 — **왜 비었는지가 세 갈래**다(P15-E R3).
+   *
+   * ★★ 예전에는 필터를 적용한 뒤의 `shown.length`만 보고 언제나 "등록된 게임이 없습니다 —
+   *   [게임 감지]에서 추가할 수 있습니다"라고 말했다. 그런데 **필터가 전부 걸러낸 상태**는
+   *   정상 운용의 종착점이다(모든 게임이 두 프로필을 다 가진 상태) — 그 화면에서 등록이 0이라
+   *   말하는 것은 **거짓**이고, 처방(게임 감지로 가라)까지 틀린다. 실제로 할 일은 필터를 끄는
+   *   것뿐이다. 그래서 **원본 0**과 **필터 0**을 가른다.
+   */
   function renderListTail() {
     if (data === null) {
-      if (note) return null;
+      if (noteText) return null;
       return <div style={HINT_STYLE}>{t("LOADING")}</div>;
     }
     if (shown.length > 0) return null;
-    return <div style={HINT_STYLE}>{t("NO_GAMES")}</div>;
+    // 등록 자체가 0 — 여기서만 "추가하러 가라"가 참이다.
+    if (sorted.length === 0) return <div style={HINT_STYLE}>{t("NO_GAMES")}</div>;
+    return <div style={HINT_STYLE}>{t("FILTER_ALL_HAVE_PROFILES")}</div>;
   }
 
   // ── 게임 상세 뷰 (§5-B) ────────────────────────────────────────────────────
@@ -595,7 +617,7 @@ export function GamesPopup({
           ))}
         </PopupScrollList>
         {rows.length === 0 ? <div style={HINT_STYLE}>{t("BACKUP_LIST_EMPTY")}</div> : null}
-        <PopupNote note={note} />
+        {noteView}
       </div>
     );
   }
@@ -611,7 +633,7 @@ export function GamesPopup({
       // 조회가 아직 안 왔거나 그 사이 사라진 게임이다 — 지어내지 않고 돌아갈 길만 남긴다.
       return (
         <PopupSubView key={subViewKey(view)} onBack={() => setView({ kind: "list" })}>
-          <div style={HINT_STYLE}>{note ?? t("LOADING")}</div>
+          <div style={HINT_STYLE}>{noteText ?? t("LOADING")}</div>
         </PopupSubView>
       );
     }
@@ -625,7 +647,7 @@ export function GamesPopup({
     return (
       <PopupSubView key={subViewKey(view)} onBack={() => setView({ kind: "list" })}>
         {renderDetail(game)}
-        <PopupNote note={note} />
+        {noteView}
       </PopupSubView>
     );
   }

@@ -20,6 +20,11 @@ import { ErrorBoundary } from "./ui/ErrorBoundary";
 
 const COLUMN_STYLE = { display: "flex", flexDirection: "column", gap: "10px" } as const;
 const NOTE_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
+/**
+ * 동작 note 아래에 붙는 **보조 줄**(P15-E R4) — 지금은 "다시 읽지 못했다" 한 종류다.
+ * 한 단계 작은 글자라 *"방금 한 일"*과 *"화면이 낡았을 수 있다"*가 시각적으로 갈린다.
+ */
+const SUB_NOTE_STYLE = { fontSize: "11px", color: "#9aa0a6" } as const;
 
 /** 아이콘이 제목과 같은 줄에 설 때의 자리. 색은 주변을 따라간다(아이콘은 currentColor다). */
 const HEADER_ICON_STYLE = { display: "inline-flex", marginRight: "6px", verticalAlign: "-0.1em" } as const;
@@ -485,127 +490,180 @@ function isTokenIssue(res: { ok: boolean; code?: string }): boolean {
 }
 
 /**
- * 팝업 하나의 데이터 수명 — **마운트 시 자기 RPC**를 부르고, 변이 뒤 **자기가 다시 조회**한다.
+ * 왕복 하나 — `begin`/`end`를 **구조적으로** 짝짓는다(P15-E R8).
  *
- * ★★ `profile_names` 선반영(R-6): 봉투에 그 필드가 있으면 **상태 반영보다 먼저** i18n에
- *   태운다. 소비자마다 손으로 챙기던 시절에 한 곳이 빠져 *"초기화 뒤에도 옛 표시명이 남는"*
- *   사고가 났다(2026-08-10 QA R3) — 여기서 **구조적으로** 태우면 빠뜨릴 자리가 없다.
- * ★★ 왜 팝업이 자기 재조회를 하는가(§4-F): QAM `Content`는 팝업이 떠 있는 동안 언마운트일 수
- *   있어 `onMutate`만으로는 **열려 있는 팝업 화면이 낡는다.** 통지(onMutate)와 자기 갱신은
- *   다른 일이다.
- *
- * ★★ **세대 가드**(§4-F ① 개정): 재조회는 겹칠 수 있고(연타·변이 뒤 자동 재조회), 먼저 나간
- *   응답이 나중에 도착하면 **낡은 값이 새 값을 덮는다.** 응답마다 자기 세대를 들고 와서
- *   최신 세대만 반영한다 — 빗장은 **상태가 아니라 ref**다(P12 `useCloseOnce`의 교훈:
- *   상태로 막으면 재렌더 전에 도착한 두 번째가 낡은 값을 보고 그대로 통과한다).
- * ★★ **busy는 문이 하나다**(§4-F ② 개정): 조회도 변이도 이 훅을 지나므로 여기서만 켜고 끈다.
- *   예전에는 `reload()`가 busy를 안 켜서 [다시 검색] 연타가 **조회에는 무방비**였다(P14 O1).
- *   왕복이 겹칠 수 있으니 불리언이 아니라 **진행 수**로 센다 — 하나가 끝났다고 남은 왕복 중에
- *   화면이 열리면, 그 열린 틈이 곧 예전 버그다.
+ * ★★ `call()`이 **동기적으로 던져도** 여기서는 거절이 된다. 예전에는 `begin()` 뒤에
+ *   `call().then(…).finally(end)`를 이어 붙였는데, `call`이 그 자리에서 던지면 `.finally`가
+ *   **부착되기 전에** 스택을 빠져나가 `end`가 영영 안 돌았다 — busy가 영구히 잠겨 아무 버튼도
+ *   안 듣는 팝업이다. 도달성(런타임에 RPC가 동기적으로 던지는가)은 미확정이지만, 가드를
+ *   **문 하나**로 모으는 편이 예외 갈래를 세는 것보다 싸다.
+ * ★ 동기 throw와 비동기 거절이 **같은 자리(`onSettle`의 err)**로 온다 — 두 갈래를 따로 두면
+ *   한쪽만 고쳐지는 날이 온다.
+ * ★ `end`는 `onSettle`보다 **뒤에** 돈다: 화면 문구가 정해지기 전에 문이 열리면, 그 틈에
+ *   낡은 화면이 조작 가능해진다.
  */
-export function usePopupData<T>(
-  load: PopupLoader<T>,
-  failKey: StringKey,
-  /** 변이 통지 — 확정 실행이 끝나면 이 훅이 부른다(팝업이 각자 부르지 않는다). */
-  onMutate?: () => void,
-): {
-  data: T | null;
-  note: string | null;
-  setNote: (v: string | null) => void;
+function inDoor<R>(
+  begin: () => void,
+  end: () => void,
+  call: PopupCall<R>,
+  onSettle: (res: Env<R> | null, err: unknown) => void,
+): Promise<void> {
+  begin();
+  // ★ 호출 자체는 **동기로** 나간다(마이크로태스크로 미루지 않는다) — 누른 그 자리에서 왕복이
+  //   시작한다는 관측 가능한 순서를 바꾸지 않기 위해서다. 바꾸는 것은 **죽는 방식**뿐이다.
+  let started: Promise<Env<R>>;
+  try {
+    started = call();
+  } catch (err) {
+    started = Promise.reject(err);
+  }
+  return started
+    .then(
+      (res) => { onSettle(res, null); },
+      (err) => { onSettle(null, err); },
+    )
+    .finally(end);
+}
+
+/**
+ * 문을 지나는 왕복이 **화면에 닿는 자리**. 소비자(팝업 3종·QAM)가 채운다.
+ *
+ * ★ 문구를 문이 정하지 않는 이유: 같은 실패라도 팝업은 note 한 줄이고 QAM은 상태박스의
+ *   실패 슬롯(+받은 시각)이다. 공유해야 하는 것은 **규칙**(무엇을 언제 다시 읽는가)이지
+ *   문장이 아니다.
+ */
+export interface DoorSink<T> {
+  /** 최신 세대의 조회가 성공했다 — 봉투의 payload. */
+  onData: (data: T) => void;
+  /**
+   * 조회가 실패했다. `code`는 봉투의 코드이고, 왕복 자체가 죽었으면 `"UNEXPECTED"`와 함께
+   * 그 오류가 온다(진단 태그를 남길 곳이 필요한 소비자가 있다).
+   */
+  onLoadFail: (code: string, err?: unknown) => void;
+  /** 변이·조회 **왕복이 죽었다**(봉투가 없다) — 호출부가 준 failKey와 함께. */
+  onCallFail: (key: StringKey, err: unknown) => void;
+}
+
+/** 문이 돌려주는 것 — 상태 표시 2종과 호출 3종. */
+export interface DataDoor {
+  /** 왕복이 하나라도 진행 중인가(조회·변이 공용). */
   busy: boolean;
+  /** **쓸 수 있는 왕복**이 진행 중인가 — "적용 중"처럼 조회와 갈라 말해야 하는 화면이 쓴다. */
+  mutating: boolean;
   reload: () => void;
   /** **확정 실행**(쓸 수 있는 호출). 응답이 토큰 발급이 아니면 재조회 + 변경 통지가 따라온다. */
   runMutation: PopupRunner;
   /** **조회**(읽기 전용 호출). busy만 같이 쓰고 재조회·통지는 하지 않는다. */
   runQuery: PopupRunner;
-} {
-  const [data, setData] = useState<T | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+}
+
+/**
+ * 조회·변이가 지나는 **문 하나**(§4-F 개정) — 세 보증이 여기 한 곳에 있다.
+ *
+ *   ① **세대 가드**: 재조회는 겹칠 수 있고(연타·변이 뒤 자동 재조회), 먼저 나간 응답이 나중에
+ *      도착하면 **낡은 값이 새 값을 덮는다.** 응답마다 자기 세대를 들고 와서 최신 세대만
+ *      반영한다 — 빗장은 **상태가 아니라 ref**다(P12 `useCloseOnce`의 교훈: 상태로 막으면
+ *      재렌더 전에 도착한 두 번째가 낡은 값을 보고 그대로 통과한다).
+ *   ② **busy 문 하나**: 조회도 변이도 이 문을 지나므로 여기서만 켜고 끈다. 예전에는
+ *      `reload()`가 busy를 안 켜서 [다시 검색] 연타가 **조회에는 무방비**였다(P14 O1).
+ *      왕복이 겹칠 수 있으니 불리언이 아니라 **진행 수**로 센다.
+ *   ③ **확정 실행은 성공·실패를 가리지 않고 다시 읽는다**: 엔진은 **쓴 뒤에** 거부할 수 있어
+ *      (체크인·부분 삭제) *"실패했는데 디스크는 바뀐"* 상태가 실재한다. 무쓰기가 보장된 응답은
+ *      `CONFIRM_REQUIRED` 하나뿐이다.
+ *
+ * ★★ **왜 훅에서 한 겹 더 갈랐는가**(P15-E): 팝업 3종은 `usePopupData`로 이 문을 상속받는데
+ *   **QAM은 네 번째 소비자**이면서 자기 조회·변이를 손으로 배선하고 있었다 — 그래서 세 보증이
+ *   QAM에만 없었고, 낡은 응답이 카운트를 되돌리고 실패 봉투가 침묵했다(P15-E R1·R2).
+ *   QAM은 화면 표현(상태박스·시각·승계)이 팝업과 다르므로 `usePopupData`를 통째로 쓸 수 없다 —
+ *   **화면 처리는 sink로 내주고 규칙만 공유한다.** 규칙이 한 곳이면 소비자가 늘어도 상속된다.
+ */
+export function useDataDoor<T>(
+  load: PopupLoader<T>,
+  sink: DoorSink<T>,
+  /** 변이 통지 — 확정 실행이 끝나면 이 문이 부른다(소비자가 각자 부르지 않는다). */
+  onMutate?: () => void,
+): DataDoor {
   const [busy, setBusy] = useState(false);
-  /** 진행 중인 왕복 수(조회·변이 공용). */
+  const [mutating, setMutating] = useState(false);
+  /** 진행 중인 왕복 수(조회·변이 공용) / 그중 쓸 수 있는 것의 수. */
   const inFlight = useRef(0);
+  const writes = useRef(0);
   /** 조회 세대 — `reload`마다 오르고, 그보다 낡은 응답은 버린다. */
   const generation = useRef(0);
   /**
-   * 통지 대상은 **ref로** 든다 — 그래야 아래 문들이 **언제 만들어졌든 같게 동작**한다.
+   * 통지·화면 처리는 **ref로** 든다 — 그래야 아래 문들이 **언제 만들어졌든 같게 동작**한다.
    * (문을 매 렌더 새로 만들면서 prop을 클로저로 잡으면, 확인창 안에 갇힌 옛 문이 옛 통지를
    * 부르게 된다. 호출부가 deps를 정확히 적어야만 옳은 구조는 언젠가 틀린다.)
    */
   const notify = useRef(onMutate);
   notify.current = onMutate;
+  const to = useRef(sink);
+  to.current = sink;
 
-  const begin = useCallback(() => {
+  const begin = useCallback((writing: boolean) => {
     inFlight.current += 1;
     setBusy(true);
+    if (!writing) return;
+    writes.current += 1;
+    setMutating(true);
   }, []);
 
-  const end = useCallback(() => {
+  const end = useCallback((writing: boolean) => {
     inFlight.current -= 1;
     if (inFlight.current <= 0) {
       inFlight.current = 0;
       setBusy(false);
+    }
+    if (!writing) return;
+    writes.current -= 1;
+    if (writes.current <= 0) {
+      writes.current = 0;
+      setMutating(false);
     }
   }, []);
 
   const reload = useCallback(() => {
     generation.current += 1;
     const mine = generation.current;
-    begin();
-    return load()
-      .then(
-        (res) => {
-          // 옛 응답은 **없던 일**이다 — 화면은 이미 더 새 것을 알고 있다.
-          if (mine !== generation.current) return;
-          if (!res.ok) {
-            setNote(tCode(res.code, failKey));
-            return;
-          }
-          // ★ 상태 반영보다 **먼저** — 아래 setData로 다시 그려질 때 이미 새 이름이어야 한다.
-          const payload = res.data as { profile_names?: { dock?: string; internal?: string } };
-          if (payload && payload.profile_names) setProfileNames(payload.profile_names);
-          setData(res.data);
-        },
-        () => {
-          if (mine !== generation.current) return;
-          setNote(tCode("UNEXPECTED", failKey));
-        },
-      )
-      .finally(end);
+    return inDoor(() => begin(false), () => end(false), load, (res, err) => {
+      // 옛 응답은 **없던 일**이다 — 화면은 이미 더 새 것을 알고 있다.
+      if (mine !== generation.current) return;
+      if (!res) {
+        to.current.onLoadFail("UNEXPECTED", err);
+        return;
+      }
+      if (!res.ok) {
+        to.current.onLoadFail(res.code);
+        return;
+      }
+      to.current.onData(res.data);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [load, failKey, begin, end]);
+  }, [load, begin, end]);
 
   /**
    * 두 문이 공유하는 한 벌 — `mutating`만 다르다.
    *
    * ★ note는 **즉시** 뜬다(§4-F ④): 재조회 응답을 기다리지 않는다. 순서를 기다릴 이유였던
    *   *"낡은 데이터가 새 note와 어긋난다"*는 세대 가드가 구조적으로 막는다.
-   * ★ 실패(거절·예외)에도 확정 실행이면 재조회한다 — 엔진은 **쓴 뒤에** 거부할 수 있어
-   *   (체크인·부분 삭제) *"실패했는데 디스크는 바뀐"* 상태가 실재한다. 안 읽으면 화면이 그
-   *   상태에 침묵한다.
    */
   function runWith<R>(
-    mutating: boolean,
+    writing: boolean,
     call: PopupCall<R>,
     key: StringKey,
     onResult: PopupResult<R>,
   ): Promise<void> {
-    begin();
-    return call()
-      .then(
-        (res) => {
-          onResult(res);
-          if (!mutating || isTokenIssue(res)) return;
-          reload();
-          notify.current?.();
-        },
-        () => {
-          setNote(tCode("UNEXPECTED", key));
-          if (!mutating) return;
-          reload();
-          notify.current?.();
-        },
-      )
-      .finally(end);
+    return inDoor(() => begin(writing), () => end(writing), call, (res, err) => {
+      if (res) {
+        onResult(res);
+        if (!writing || isTokenIssue(res)) return;
+      } else {
+        to.current.onCallFail(key, err);
+        if (!writing) return;
+      }
+      reload();
+      notify.current?.();
+    });
   }
 
   function runMutation<R>(
@@ -624,16 +682,119 @@ export function usePopupData<T>(
     return runWith(false, call, key, onResult);
   }
 
+  return { busy, mutating, reload, runMutation, runQuery };
+}
+
+/**
+ * 팝업 하나의 데이터 수명 — **마운트 시 자기 RPC**를 부르고, 변이 뒤 **자기가 다시 조회**한다.
+ * 규칙은 전부 `useDataDoor`가 들고, 여기는 **팝업의 화면 처리**(데이터·note)만 얹는다.
+ *
+ * ★★ `profile_names` 선반영(R-6): 봉투에 그 필드가 있으면 **상태 반영보다 먼저** i18n에
+ *   태운다. 소비자마다 손으로 챙기던 시절에 한 곳이 빠져 *"초기화 뒤에도 옛 표시명이 남는"*
+ *   사고가 났다(2026-08-10 QA R3) — 여기서 **구조적으로** 태우면 빠뜨릴 자리가 없다.
+ * ★★ 왜 팝업이 자기 재조회를 하는가(§4-F): QAM `Content`는 팝업이 떠 있는 동안 언마운트일 수
+ *   있어 `onMutate`만으로는 **열려 있는 팝업 화면이 낡는다.** 통지(onMutate)와 자기 갱신은
+ *   다른 일이다.
+ *
+ * ★★ **note는 두 줄이다**(P15-E R4): 동작이 남긴 말(`setNote`)과 **재조회 실패**는 서로 다른
+ *   사실이고 **둘 다 참일 수 있다** — 복원은 성공했는데 목록을 다시 못 읽은 상태가 그렇다.
+ *   예전에는 재조회 실패가 같은 자리를 덮어써서 *"되돌렸습니다 — 계속 쓰려면 저장하십시오"*
+ *   같은 **후속 조치 안내가 통째로 사라졌다.** 자리를 갈라 두면 덮어쓸 수가 없다.
+ */
+export function usePopupData<T>(
+  load: PopupLoader<T>,
+  failKey: StringKey,
+  /** 변이 통지 — 확정 실행이 끝나면 이 훅이 부른다(팝업이 각자 부르지 않는다). */
+  onMutate?: () => void,
+): {
+  data: T | null;
+  /**
+   * 화면이 지금 **무언가 말하고 있는가**를 판정할 때 쓰는 값(동작 note가 있으면 그것,
+   * 없으면 재조회 실패 사유). 그리는 것은 `noteView`가 한다.
+   */
+  noteText: string | null;
+  setNote: (v: string | null) => void;
+  /**
+   * **뒤따르는 재조회**의 결과를 쓰는 자리(둘째 줄) — 실패면 사유, 성공이면 `null`.
+   *
+   * ★ 팝업이 자기 하위 목록을 다시 읽는 경우(복원 뒤 백업 목록)가 이 자리다. 그 실패를
+   *   `setNote`로 쓰면 **방금 한 동작의 결과와 후속 조치 안내를 덮는다** — 훅의 재조회가
+   *   덮던 것과 같은 사고이고, 같은 해소(자리를 가른다)를 쓴다.
+   */
+  setReloadNote: (v: string | null) => void;
+  /** note 자리 — **두 줄을 함께** 그린다. 팝업이 한 줄만 그릴 방법을 두지 않는다. */
+  noteView: ReactNode;
+  busy: boolean;
+  reload: () => void;
+  runMutation: PopupRunner;
+  runQuery: PopupRunner;
+} {
+  const [data, setData] = useState<T | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  /** **재조회**만 쓰는 자리 — 동작 note를 덮지 않는다(둘째 줄). */
+  const [loadNote, setLoadNoteState] = useState<string | null>(null);
+  /**
+   * 지금 둘째 줄에 있는 말이 **이 훅의 재조회**에서 온 것인가.
+   *
+   * ★ 팝업이 스스로 부르는 뒤따르는 재조회(예: 복원 뒤 백업 목록 다시 읽기)도 같은 줄을 쓴다.
+   *   그때까지 훅의 조회 성공이 그 줄을 거두면, *"백업 목록은 여전히 못 읽었다"*는 사실이
+   *   **무관한 조회 하나가 성공했다는 이유로** 사라진다. 출처를 함께 들어 자기 것만 거둔다.
+   */
+  const ownLoadNote = useRef(false);
+
+  const setReloadNote = useCallback((value: string | null) => {
+    ownLoadNote.current = false;
+    setLoadNoteState(value);
+  }, []);
+
+  const door = useDataDoor<T>(
+    load,
+    {
+      onData: (payload) => {
+        // ★ 상태 반영보다 **먼저** — 아래 setData로 다시 그려질 때 이미 새 이름이어야 한다.
+        const named = payload as { profile_names?: { dock?: string; internal?: string } };
+        if (named && named.profile_names) setProfileNames(named.profile_names);
+        setData(payload);
+        if (ownLoadNote.current) setLoadNoteState(null);
+      },
+      onLoadFail: (code) => {
+        ownLoadNote.current = true;
+        setLoadNoteState(tCode(code, failKey));
+      },
+      onCallFail: (key) => setNote(tCode("UNEXPECTED", key)),
+    },
+    onMutate,
+  );
+
   useEffect(() => {
-    reload();
+    door.reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { data, note, setNote, busy, reload, runMutation, runQuery };
+  return {
+    data,
+    noteText: note ?? loadNote,
+    setNote,
+    setReloadNote,
+    noteView: <PopupNotes note={note} loadNote={loadNote} />,
+    busy: door.busy,
+    reload: door.reload,
+    runMutation: door.runMutation,
+    runQuery: door.runQuery,
+  };
 }
 
-/** 팝업 하단 note 한 줄 — 없으면 자리도 만들지 않는다(기존 "0이면 안 그림" 문법). */
-export function PopupNote({ note }: { note: string | null }) {
-  if (!note) return null;
-  return <div style={NOTE_STYLE}>{note}</div>;
+/**
+ * 팝업 하단 note **자리** — 없는 줄은 자리도 만들지 않는다(기존 "0이면 안 그림" 문법).
+ *
+ * ★ 내보내지 않는다(P15-E R4): 밖에서 그릴 수 있으면 재조회 실패 줄을 빠뜨린 자리가 언젠가
+ *   생긴다. 그리는 방법은 `usePopupData().noteView` 하나뿐이다 — 문이 하나면 빠질 자리가 없다.
+ */
+function PopupNotes({ note, loadNote }: { note: string | null; loadNote: string | null }) {
+  return (
+    <>
+      {note ? <div style={NOTE_STYLE}>{note}</div> : null}
+      {loadNote ? <div style={SUB_NOTE_STYLE}>{loadNote}</div> : null}
+    </>
+  );
 }

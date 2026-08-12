@@ -5,7 +5,7 @@ import { pickConfigFile } from "./filepicker";
 import { IconRefresh, IconRestore, IconSearch } from "./icons";
 import { t, tCode } from "./i18n";
 import {
-  CARD_INNER_STYLE, CARD_STYLE, GfxPopup, PopupNote, PopupScrollList, PopupSubView,
+  CARD_INNER_STYLE, CARD_STYLE, GfxPopup, PopupScrollList, PopupSubView,
   listRowNavProps, subViewKey, usePopupData, usePopupGate, type DView,
 } from "./popup";
 import {
@@ -259,7 +259,7 @@ export function DiscoverPopup({
 
   const load = useCallback(() => discoverGames(), []);
   /* ★ busy·재조회·변경 통지는 **훅 한 곳**을 지난다(§4-F 개정). */
-  const { data, note, setNote, busy, reload, runMutation } =
+  const { data, noteText, setNote, noteView, busy, reload, runMutation, runQuery } =
     usePopupData<DiscoverData>(load, "LOAD_FAILED", onMutate);
   const { gate, renderBody } = usePopupGate();
 
@@ -326,13 +326,15 @@ export function DiscoverPopup({
    *   화면에는 「전부 이미 등록돼 있습니다」만 뜨고 **진입점이 어디에도 없었다**(2026-08-07 실기).
    *   그런데 그것이 자동 스캔이 놓친 Proton 게임을 등록할 유일한 길이다.
    *   → 조건을 없앤다. 조건이 없으면 어긋날 조건도 없다.
-   * ★ 시작 위치는 백엔드가 준 라이브러리 경로다 — 프론트가 경로를 지어내지 않는다.
+   * ★★ 시작 위치는 **봉투가 준 라이브러리 경로뿐**이다(P15-E R6ⓐ). 예전 코드는 바로 이 줄에
+   *   *"프론트가 경로를 지어내지 않는다"*고 적어 두고, 바로 아래에서 조회 전·조회 실패에
+   *   `"/"`를 지어냈다 — 파일 시스템 루트는 이 도메인의 시작점이 아니고(게임 prefix는 열 단계
+   *   아래다), **주석과 코드가 서로 다른 말을 하는 자리**는 다음 사람이 둘 중 하나를 믿다가
+   *   틀린다. 근거가 없으면 지어내는 대신 **그 자리에서 다시 읽는다** — 그 응답이 곧 시작점이다.
    */
-  const pickManual = useCallback(
-    () => {
-      const root = data && data.libraries.length > 0 ? data.libraries[0] : "";
-      const start = root ? `${root}/steamapps/compatdata` : "/";
-      return pickConfigFile(start).then((path) => {
+  const openManual = useCallback(
+    (root: string) =>
+      pickConfigFile(`${root}/steamapps/compatdata`).then((path) => {
         if (!path) return;                       // 취소 — 조용히 끝난다.
         const found = COMPAT_APPID.exec(path);
         if (!found) {
@@ -341,10 +343,32 @@ export function DiscoverPopup({
         }
         // 이름은 넘기지 않는다 — 아는 이름이 없다. 엔진이 appid로 채우고 화면은 그 값을 쓴다.
         return register(found[1], path);
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [register],
+  );
+
+  const pickManual = useCallback(
+    () => {
+      const known = data && data.libraries.length > 0 ? data.libraries[0] : "";
+      if (known) return openManual(known);
+      // 아직·또는 다시 모르는 상태다. 조회는 **읽기 전용**이라 재조회·통지가 붙지 않는다.
+      return runQuery(load, "LOAD_FAILED", (res) => {
+        if (!res.ok) {
+          setNote(tCode(res.code, "LOAD_FAILED"));
+          return;
+        }
+        const root = res.data.libraries.length > 0 ? res.data.libraries[0] : "";
+        // 라이브러리를 못 찾은 것은 **모르는 상태**다 — 아무 데서나 열지 않고 그 사실을 말한다.
+        if (!root) {
+          setNote(t("DISCOVER_NO_LIBRARY"));
+          return;
+        }
+        void openManual(root);
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data, register],
+    [data, openManual],
   );
 
   /** 확신 후보 일괄 등록 — 대상 수는 **봉투가 준 값**이고 프론트가 다시 세지 않는다. */
@@ -407,7 +431,7 @@ export function DiscoverPopup({
     if (counts) {
       return t("DISCOVER_SUMMARY", { total: counts.total, unregistered: counts.unregistered });
     }
-    return note ? "" : t("DISCOVER_SCANNING");
+    return noteText ? "" : t("DISCOVER_SCANNING");
   }
 
   function renderTail() {
@@ -469,7 +493,7 @@ export function DiscoverPopup({
           </DialogButton>
         </Focusable>
 
-        <PopupNote note={note} />
+        {noteView}
 
         <PopupScrollList>
           {shown.map((entry, index) => (
@@ -509,7 +533,7 @@ export function DiscoverPopup({
         {/* F12·M15 통일 문구 — 「등록 해제」 어휘와 정합이고, 다시 포함하면 무엇이 되는지를
             **조건까지** 말한다(동어반복 "다시 포함하면 제외가 해제됩니다"는 폐기). */}
         <div style={HINT_STYLE}>{t("DISCOVER_EXCLUDED_HINT")}</div>
-        <PopupNote note={note} />
+        {noteView}
 
         <PopupScrollList>
           {excluded.map((row) => (

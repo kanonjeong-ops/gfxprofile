@@ -149,10 +149,17 @@ src = re.sub(r'//[^\n]*', '', src)
 #   전부 모아서 합집합으로 본다.
 imports = re.findall(r'(?:import|export)\s*\{([^}]*)\}\s*from\s*["\']@decky/ui["\']', src)   # 재수출도 바인딩을 만든다
 m_req = re.search(r'\bconst\s+REQUIRED\b[^=]*=\s*\{([^}]*)\}', src)   # \b앵커: REQUIRED_SNAPSHOT 같은 미끼에 안 걸린다
-if not (imports and m_req):
-    sys.exit('U19 검사 불가 — import 또는 REQUIRED 블록을 찾지 못했다 (형식이 바뀌었나?)')
+# ★ P15-E R7: **로컬 재수출 목록도 본다.** 이 파일은 `import {…} from "@decky/ui"` 로 받아
+#   `export {…};` 로 내보내는데, 예전 검사는 앞의 둘(import·REQUIRED)만 대조했다.
+#   그래서 **재수출에서 한 종을 빼도 EXIT=0**이었다 — 그러면 그 컴포넌트를 쓰는 화면이
+#   빌드 단계에서 죽거나(다행) 다른 것으로 갈아치워지는데(불행) 검사는 초록불이다.
+#   세 목록을 **동시에** 강제하면 "검사가 있는데 보지 않는" 자리가 남지 않는다.
+reexports = re.findall(r'\bexport\s*\{([^}]*)\}\s*;', src)      # `… } from "…"` 는 `;`가 아니라 from이 온다
+if not (imports and m_req and reexports):
+    sys.exit('U19 검사 불가 — import·REQUIRED·재수출 블록 중 하나를 찾지 못했다 (형식이 바뀌었나?)')
 
 imported = {n.strip() for block in imports for n in block.replace('\n', ' ').split(',') if n.strip()}
+exported = {n.strip() for block in reexports for n in block.replace('\n', ' ').split(',') if n.strip()}
 
 # ★ 키만 보지 않는다 (QA R6). `ButtonItem: 딴것` 처럼 값이 어긋나면 self-check가 **엉뚱한 것을**
 #   감시하게 되는데 이름만 비교하면 통과한다. 축약 표기(`{ButtonItem}`)만 허용하고,
@@ -169,11 +176,17 @@ for item in m_req.group(1).replace('\n', ' ').split(','):
         required.add(key)
     else:
         required.add(item)
-print(f"U19 self-check 목록 항등: import {len(imported)}종 / REQUIRED {len(required)}종")
+print(f"U19 self-check 목록 항등: import {len(imported)}종 / REQUIRED {len(required)}종 / "
+      f"재수출 {len(exported)}종")
 if imported != required:
     print(f"  import에만: {sorted(imported - required)}")
     print(f"  REQUIRED에만: {sorted(required - imported)}")
     sys.exit("불변식 위반 — @decky/ui import와 self-check 목록이 다르다")
+if imported != exported:
+    print(f"  import에만: {sorted(imported - exported)}")
+    print(f"  재수출에만: {sorted(exported - imported)}")
+    sys.exit("불변식 위반 — @decky/ui import와 재수출 목록이 다르다 "
+             "(빠진 것은 화면이 못 얻고, 남는 것은 감시 밖이다)")
 PY
 
   # ② decky.migrate_* 는 원본을 rm -rf 한다. 호출도, decky에서 그 이름을 가져오는 것도 금지.

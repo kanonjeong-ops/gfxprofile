@@ -61,7 +61,7 @@ BYPASSES = [
      r"    lastFailure = next;\n", "",
      "실패가 승계되지 않는다"),
     ("실패 소거 누락(로드가 성공했는데 옛 실패가 남는다)", "index.tsx",
-     r"          // 새 로드 성공 = 다음 동작의 시작이다 — 승계해 온 실패를 여기서 거둔다\(§3-B 수명\)\.\n          setFailure\(null\);\n",
+     r"      // 새 로드 성공 = 다음 동작의 시작이다 — 승계해 온 실패를 여기서 거둔다\(§3-B 수명\)\.\n      setFailure\(null\);\n",
      "",
      "새 로드가 성공했는데"),
     ("H2 조건 붕괴(프로필이 생겨도 시작 안내가 남는다)", "index.tsx",
@@ -83,7 +83,8 @@ BYPASSES = [
      't("APPLY_ALL_CONFIRM_BODY", { total: 9, profile: profileName })',
      "확인창 본문의 total"),
     ("1차 호출에 토큰을 지어냄(무쓰기 미리보기 계약 붕괴)", "index.tsx",
-     r"      applyAll\(profile, token\)", '      applyAll(profile, token ?? "MADE-UP-TOKEN")',
+     r"applyAll\(profile, token\)\.catch\(deadApply\)",
+     'applyAll(profile, token ?? "MADE-UP-TOKEN").catch(deadApply)',
      "1차 호출에 토큰"),
     ("진입 버튼이 다른 팝업을 연다", "index.tsx",
      r"            \(\) => <GamesPopup onMutate=\{refresh\} />,",
@@ -110,6 +111,21 @@ BYPASSES = [
     ("결과 아이콘이 언제나 체크(문제가 있었는데 성공처럼 보인다)", "index.tsx",
      r"\{summary\.problems \? <IconWarn /> : <IconCheck />\}", "{<IconCheck />}",
      "문제가 있는 결과"),
+    # ── P15-E R1·R2: 뿌리(공용 문)와 표시층을 각각 겨눈다 ────────────────────
+    ("실패 봉투의 체크인을 안 읽음(직전 프로필이 조용히 바뀐다)", "index.tsx",
+     r"checkinCount\(res\.params\)", "0",
+     "체크인이 침묵한다"),
+    ("실패 봉투를 직전 결과에 안 남김(P15-E 이전의 침묵 갈래로 되돌림)", "index.tsx",
+     r"keepSummary\(stoppedSummary\(profile, res\.code, checkinCount\(res\.params\)\)\);",
+     'setFailure({ key: "APPLY_FAILED", code: res.code, at: Date.now() });',
+     "직전 결과에 아무 기록이 없다"),
+    ("세대 가드를 뺌 — QAM이 공용 문의 보증을 못 받는다", "popup.tsx",
+     r"      // 옛 응답은 \*\*없던 일\*\*이다 — 화면은 이미 더 새 것을 알고 있다\.\n"
+     r"      if \(mine !== generation\.current\) return;\n", "",
+     "세대 가드가 없다"),
+    ("확정 실행 **실패**에 재조회를 안 붙임 — QAM만 낡는다", "popup.tsx",
+     r"if \(!writing \|\| isTokenIssue\(res\)\) return;", "if (!writing || !res.ok) return;",
+     "현황을 다시 읽지 않았다"),
 ]
 
 
@@ -332,6 +348,62 @@ def violations(r):                                             # noqa: C901  (�
         out.append(f"★④ 통지가 쓰기(applyAll)를 불렀다: {idem['applyCalls']}회")
     if idem["boxKeys"]:
         out.append(f"④ 통지만 했는데 상태박스에 줄이 생겼다: {idem['boxKeys']}")
+
+    # ═══ R1 일괄 적용 **실패 봉투** — 침묵하지 않는다 ═════════════════════════
+    #
+    # 백엔드는 설정 파일을 다 바꾼 **뒤** `save_registry`가 실패하면
+    # `Refused(code=UNEXPECTED, checkin=관측값)`을 낸다(main.py:861-862 · D-02).
+    # 예전 화면은 *"봉투가 ok:false인 것은 시작도 못 한 경우뿐"*이라는 **거짓 전제** 아래
+    # 실패 줄 하나만 세우고 체크인을 통째로 버렸다 — 개별 적용(팝업 G)은 같은 갈래를 이미
+    # 정확히 읽고 있었으므로, 같은 사실이 화면마다 다르게 취급되던 자리다.
+    af = r["applyFailed"]
+    if af["blocked"]:
+        out.append("R1 일괄 버튼을 누를 수 없었다 — 실패 봉투 갈래를 잴 수 없다(검사 무효)")
+    af_by = {l["key"]: l for l in af["lines"]}
+    if "result" not in af_by:
+        out.append(f"★R1 일괄 적용이 실패했는데 **직전 결과에 아무 기록이 없다**: "
+                   f"{keys(af['lines'])} — 확정 실행은 실패해도 곧바로 다시 읽으므로(§4-F ③) "
+                   f"현재군의 실패 줄은 다음 조회 성공에 거둬진다(§3-B 수명). 오래 사는 자리는 "
+                   f"과거군뿐이고, 거기가 비면 *무슨 일이 있었는지*가 화면에서 사라진다")
+    elif not af_by["result"]["text"].startswith("APPLY_ALL_STOPPED"):
+        out.append(f"★R1 실패한 실행의 결과 줄이 「도중에 멈췄다」고 말하지 않는다: "
+                   f"{af_by['result']['text']!r}")
+    if "checkin" not in af_by or not af_by["checkin"]["text"].startswith("CHECKIN_MANY"):
+        out.append(f"★R1 실패 봉투의 **체크인이 침묵한다**: {keys(af['lines'])} — 봉투에 실려 온 "
+                   f"체크인 2건은 *직전 프로필이 조용히 바뀐* 사실이다(§5-E)")
+    if "why" not in af_by or "UNEXPECTED" not in af_by["why"]["text"]:
+        out.append(f"★R1 멈춘 **사유**가 화면에 없다: {keys(af['lines'])} — 코드→문구 단일 관문을 "
+                   f"지난 사유가 없으면 사용자가 할 수 있는 일이 없다")
+    if af_by.get("result", {}).get("icons") != ["IconWarn"]:
+        out.append(f"★R1 실패한 실행인데 결과 아이콘이 경고가 아니다: "
+                   f"{af_by.get('result', {}).get('icons')} (D05)")
+    if not af_by.get("result", {}).get("stamped"):
+        out.append(f"R1 실패한 실행의 결과 줄에 시각이 없다: {af_by.get('result', {}).get('text')!r}")
+    if af["overviewCalls"] < 2:
+        out.append(f"★R1 일괄 적용이 실패했는데 **현황을 다시 읽지 않았다**(조회 {af['overviewCalls']}회) — "
+                   f"엔진은 쓴 뒤에 거부할 수 있어 화면이 낡은 채로 남는다(§4-F ③ 개정)")
+    if af["toasts"] != 1:
+        out.append(f"R1 실패 결과의 토스트가 {af['toasts']}회다(1회여야 한다) — 성공만 부가 채널로 "
+                   f"알리면 *실패가 성공보다 조용한* 비대칭이 생긴다(F20과 같은 형태)")
+    if keys(r["applyFailedCarried"]) != ["result", "why", "checkin"]:
+        out.append(f"★R1 실패한 실행의 기록이 QAM 재개방을 못 넘는다: {r['applyFailedCarried']}")
+
+    # ═══ R2 조회 **역순 도착** — 낡은 응답은 없던 일이다 ══════════════════════
+    for name, snap in (("성공", r["staleOrder"]), ("실패", r["staleFailure"])):
+        if snap["loads"] != 2:
+            out.append(f"R2 조회가 2회 겹치지 않았다({snap['loads']}) — 측정 대상에 못 닿았다")
+            continue
+        if "3" not in (snap["afterNew"]["count"] or ""):
+            out.append(f"R2 새 응답이 카운트에 반영되지 않았다: {snap['afterNew']['count']!r} "
+                       f"(측정 대상에 못 닿았다)")
+        if snap["afterStale"]["count"] != snap["afterNew"]["count"]:
+            out.append(f"★R2 세대 가드가 없다 — 낡은 {name} 응답이 뒤늦게 도착하자 카운트가 "
+                       f"{snap['afterNew']['count']!r} → {snap['afterStale']['count']!r}로 되돌아갔다. "
+                       f"팝업 통지·확정 실행 뒤 재조회는 겹치고, 먼저 나간 응답이 나중에 오는 것은 "
+                       f"실사용의 흔한 순서다(§4-F ①)")
+        if snap["afterStale"]["keys"]:
+            out.append(f"★R2 낡은 {name} 응답이 상태박스에 줄을 세웠다: {snap['afterStale']['keys']} — "
+                       f"최신 성공 위에 옛 실패가 주황으로 뜨는 자리다")
 
     seen_fail = []
     for note in r["modalFailure"]:

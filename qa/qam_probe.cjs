@@ -43,18 +43,28 @@ const SCENE = {
   applyResult: null,
   /** 1차·2차 왕복을 붙잡아 둔다(진행 중 화면을 재기 위해) */
   holdApply: false,
+  /** 조회 응답을 **손에 쥔다** — 역순 도착(P15-E R2)을 만들려면 순서를 우리가 정해야 한다. */
+  holdOverview: false,
   modalThrows: false,
 };
 
 const calls = { overview: 0, apply: [], modals: [], toasts: [] };
 let releaseApply = null;
+/** 붙잡아 둔 조회들의 resolve — 먼저 나간 것이 `[0]`이다. */
+const heldOverviews = [];
 
 function resetCalls() {
   calls.overview = 0;
   calls.apply.length = 0;
   calls.modals.length = 0;
   calls.toasts.length = 0;
+  heldOverviews.length = 0;
 }
+
+/** 조회 봉투 하나 — 붙잡아 둔 응답을 나중에 이 모양으로 놓아 준다. */
+const overviewEnvelope = (o) => (o.ok
+  ? { ok: true, data: { games: [], counts: o.counts, profile_names: { dock: "", internal: "" } } }
+  : { ok: false, code: o.code || "REGISTRY_UNREADABLE", params: {} });
 
 const modules = {
   react,
@@ -63,9 +73,20 @@ const modules = {
     toaster: { toast: (v) => { calls.toasts.push(v); } },
     useQuickAccessVisible: () => true,
   },
+  // ★ P15-E: QAM이 조회·변이를 `popup.tsx`의 공용 문(`useDataDoor`)으로 지나면서 이 화면도
+  //   그 모듈을 끌어온다 — 골격 컴포넌트까지 목이 있어야 로더가 산다(팝업 3종은 여기서
+  //   목으로 갈아 끼우므로 실제로 그려지지는 않는다).
   "./deckyui": {
     ButtonItem: { __kind: "ButtonItem" },
     ConfirmModal: { __kind: "ConfirmModal" },
+    DialogBody: { __kind: "DialogBody" },
+    DialogButton: { __kind: "DialogButton" },
+    DialogHeader: { __kind: "DialogHeader" },
+    Focusable: { __kind: "Focusable" },
+    ModalRoot: { __kind: "ModalRoot" },
+    NavEntryPositionPreferences: { MAINTAIN_X: 2 },
+    TextField: { __kind: "TextField" },
+    ToggleField: { __kind: "ToggleField" },
     PanelSection: { __kind: "PanelSection" },
     PanelSectionRow: { __kind: "PanelSectionRow" },
     showModal: (node) => {
@@ -89,10 +110,10 @@ const modules = {
     getOverview: () => {
       calls.overview += 1;
       if (SCENE.hang) return new Promise(() => {});
-      const o = SCENE.overview;
-      return Promise.resolve(o.ok
-        ? { ok: true, data: { games: [], counts: o.counts, profile_names: { dock: "", internal: "" } } }
-        : { ok: false, code: o.code || "REGISTRY_UNREADABLE", params: {} });
+      if (SCENE.holdOverview) {
+        return new Promise((resolve) => { heldOverviews.push(resolve); });
+      }
+      return Promise.resolve(overviewEnvelope(SCENE.overview));
     },
     applyAll: (profile, token) => {
       calls.apply.push({ profile, token: token === undefined ? null : token });
@@ -522,6 +543,84 @@ async function driveApply(scene, profile) {
     out.modalFailureApplyCalls = calls.apply.length;   // 팝업 실패가 적용을 부르지 않는다
     SCENE.modalThrows = false;
   }
+
+  // ═══ R1 일괄 적용 **실패 봉투** — 체크인·요약·재조회 ═════════════════════
+  //
+  // 백엔드는 `save_registry`가 실패하면 **설정 파일을 이미 바꾼 뒤**에
+  // `Refused(code=UNEXPECTED, checkin=관측값)`을 낸다(main.py:861-862 · D-02).
+  // 그 봉투에는 체크인된 게임 목록이 실려 있는데, 화면은 오래 침묵했다(P15-E R1).
+  {
+    const run = await driveApply({
+      hang: false, holdApply: false, holdOverview: false, previewTotal: 7,
+      overview: { ok: true, counts: counts() },
+      applyResult: () => ({
+        ok: false,
+        code: "UNEXPECTED",
+        params: {
+          checkin: [
+            { appid: "1", name: "게임 하나", profile: "dock" },
+            { appid: "2", name: "게임 둘", profile: "internal" },
+          ],
+        },
+      }),
+    }, "dock");
+    const overviewAfterApply = calls.overview;
+    await settle();
+    out.applyFailed = {
+      blocked: run.blocked,
+      lines: (run.afterLines || []).map((l) => ({
+        key: l.key, text: l.text, color: l.color, icons: l.icons, stamped: l.stamped,
+      })),
+      groups: (run.afterBox ? run.afterBox.groups : []).map((g) => g.lines.map((l) => l.key)),
+      // 확정 실행은 성공·실패를 가리지 않고 다시 읽는다(§4-F ③) — 마운트 1 + 실패 뒤 1.
+      overviewCalls: overviewAfterApply,
+      toasts: calls.toasts.length,
+    };
+    // 실패도 **QAM 재개방을 넘어 승계**된다(§3-B 수명 — 성공 요약과 같은 규칙).
+    const again = mount(run.s.mod);
+    await settle();
+    await settle();
+    out.applyFailedCarried = boxLines(again.ui()).map((l) => ({ key: l.key, text: l.text }));
+  }
+
+  // ═══ R2 조회 **역순 도착** — 낡은 응답이 새 화면을 덮는가 ═════════════════
+  //
+  // QAM의 재조회는 겹친다(팝업 통지는 거부에도 오고, 확정 실행 뒤에도 자동으로 붙는다).
+  // 먼저 나간 조회가 **나중에** 도착하는 것은 실사용에서 흔한 순서다.
+  async function driveStale(staleEnvelope) {
+    const s = await snapshot({
+      hang: false, holdApply: false, holdOverview: true, modalThrows: false,
+      overview: { ok: true, counts: counts() },
+    });
+    // 팝업을 열어 **그 팝업의 통지**로 두 번째 조회를 만든다(실사용의 그 경로 그대로).
+    const entry = entriesOf(s.ui.ui())[0];
+    calls.modals.length = 0;
+    if (entry) entry.onClick();
+    await settle();
+    const popup = calls.modals[0] || null;
+    if (popup && popup.props.onMutate) popup.props.onMutate();
+    await settle();
+    // 새 세대(두 번째)가 **먼저** 도착한다.
+    if (heldOverviews[1]) {
+      heldOverviews[1](overviewEnvelope({ ok: true, counts: counts({ total: 3, dock_ready: 1, internal_ready: 1 }) }));
+    }
+    await settle();
+    const afterNew = { count: countLine(s.ui.ui()), keys: keysOf(boxLines(s.ui.ui())) };
+    // 낡은 세대(첫 번째)가 뒤늦게 도착한다 — **없던 일이어야 한다.**
+    if (heldOverviews[0]) heldOverviews[0](staleEnvelope);
+    await settle();
+    return {
+      loads: heldOverviews.length,
+      afterNew,
+      afterStale: { count: countLine(s.ui.ui()), keys: keysOf(boxLines(s.ui.ui())) },
+    };
+  }
+
+  out.staleOrder = await driveStale(
+    overviewEnvelope({ ok: true, counts: counts({ total: 9, dock_ready: 9, internal_ready: 8 }) }),
+  );
+  out.staleFailure = await driveStale(overviewEnvelope({ ok: false, code: "REGISTRY_UNREADABLE" }));
+  SCENE.holdOverview = false;
 
   console.log(JSON.stringify(out));
 })();

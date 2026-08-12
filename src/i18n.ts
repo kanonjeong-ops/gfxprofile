@@ -115,6 +115,15 @@ export function setProfileNames(names?: { dock?: string; internal?: string } | n
 }
 
 /**
+ * 배지("기본 이름"/"직접 정한 이름")가 **라벨과 같은 저장소**를 읽게 하는 조회.
+ * overview 재조회·이름 변경 응답 어느 쪽이 최신이든 setProfileNames가 이미 이 저장소에
+ * 합류시켰다 — 낡은 overview 봉투를 따로 읽으면 라벨과 배지가 서로를 부정한다(P15-E C1).
+ */
+export function hasProfileNameOverride(slot: "dock" | "internal"): boolean {
+  return PROFILE_NAME_KEYS[slot] in overrides;
+}
+
+/**
  * **덮어쓰기를 무시한** 기본 문구. 표시명 편집창이 *"비우면 무엇으로 돌아가는지"*를 말할 때만
  * 쓴다 — `t()`는 사용자가 정한 이름을 돌려주므로 그것으로는 기본 이름을 보여줄 수 없다.
  */

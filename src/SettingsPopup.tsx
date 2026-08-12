@@ -1,9 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef } from "react";
 import { makeNameEditSpec, makeResetConfirmSpec } from "./confirmSpecs";
 import { DialogButton, Focusable } from "./deckyui";
 import { IconGear, IconTrash } from "./icons";
-import { setProfileNames, t, tCode } from "./i18n";
-import { GfxPopup, PopupNote, usePopupData, usePopupGate } from "./popup";
+import { hasProfileNameOverride, setProfileNames, t, tCode } from "./i18n";
+import { GfxPopup, usePopupData, usePopupGate } from "./popup";
 import {
   getOverview, resetAll, setProfileName,
   type Overview, type Profile, type ResetConfirmParams,
@@ -48,14 +48,23 @@ export function SettingsPopup({
   /**
    * type-to-confirm으로 찍다 만 값(GP#9). 가상 키보드로 한 글자씩 찍은 입력이 B 오조작
    * 한 번에 사라지지 않게, 확인창이 언마운트될 때 여기로 받아 두었다가 다음에 되돌려준다.
+   *
+   * ★★ **상태가 아니라 ref다**(P15-E R5): 확인창의 `onOK`는 **그 창을 연 시점의 클로저**를
+   *   들고 있고, TOCTOU 재질문은 그 안에서 자기 자신(`runReset`)을 다시 부른다. 상태로 들면
+   *   재질문이 보는 값은 창이 열리던 시점의 것 — 즉 **방금 찍은 입력이 없는 값**이라, 보존
+   *   장치가 있는데도 재질문마다 입력이 사라졌다(GP#9 위반). ref는 언제 만들어진 클로저에서
+   *   읽어도 **지금 값**이라 그 갈래 자체가 없다(`usePopupData`의 `notify` ref와 같은 판단).
+   * ★ 화면은 이 값을 그리지 않는다 — 그리는 것은 확인창의 TextField이고 그 상태는 렌더러가
+   *   소유한다(§4-C). 다시 그릴 이유가 없으므로 상태일 필요도 없다.
    */
-  const [resetTyped, setResetTyped] = useState("");
-  const [nameTyped, setNameTyped] = useState<Partial<Record<Profile, string>>>({});
+  const resetTyped = useRef("");
+  const nameTyped = useRef<Partial<Record<Profile, string>>>({});
 
   // 이 화면은 `disk_matches`를 쓰지 않는다 — detail을 켜면 게임마다 원본 파일 sha1을 다시 읽는다.
   const load = useCallback(() => getOverview(), []);
   /* ★ busy·재조회·변경 통지는 **훅 한 곳**을 지난다(§4-F 개정). */
-  const { data, note, setNote, busy, runMutation } = usePopupData<Overview>(load, "LOAD_FAILED", onMutate);
+  const { data, noteText, setNote, noteView, busy, runMutation } =
+    usePopupData<Overview>(load, "LOAD_FAILED", onMutate);
   const { gate, renderBody } = usePopupGate();
 
   const counts = data?.counts;
@@ -74,7 +83,7 @@ export function SettingsPopup({
           const left = res.data.results.length - deleted;
           const ok = t("RESET_OK", { deleted, left });
           setNote(left > 0 ? `${ok} ${t("RESET_LEFT_NOTE", { left })}` : ok);
-          setResetTyped("");           // 성공했으면 보존할 입력도 없다
+          resetTyped.current = "";     // 성공했으면 보존할 입력도 없다
           return;
         }
         if (res.code === "CONFIRM_REQUIRED") {
@@ -82,9 +91,9 @@ export function SettingsPopup({
           gate(
             makeResetConfirmSpec(
               p,
-              resetTyped,
+              resetTyped.current,
               (value) => { void runReset(p.confirm_token, value); },
-              setResetTyped,
+              (value) => { resetTyped.current = value; },
             ),
             // 토큰이 안 돌아가면 아무것도 지워지지 않는다 — 이 문구가 참인 자리다.
             "MANAGE_MODAL_FAILED",
@@ -95,8 +104,9 @@ export function SettingsPopup({
         // 확정 실행의 거절이다 — 어디까지 지워졌는지 모르므로 재조회·통지가 따라온다(§4-F ③).
         setNote(tCode(res.code, "RESET_ACTION_FAILED"));
       }),
+    // 보존값을 ref로 읽으므로 이 문은 **한 번 만들어지면 계속 옳다** — deps에 입력값이 없다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [gate, resetTyped],
+    [gate],
   );
 
   /**
@@ -113,7 +123,7 @@ export function SettingsPopup({
         setProfileNames(res.data.profile_names);
         const saved = res.data.profile_names[profile];
         setNote(saved ? t("NAME_EDIT_OK_NOTE", { name: saved }) : t("NAME_EDIT_RESET_NOTE"));
-        setNameTyped((prev) => ({ ...prev, [profile]: undefined }));
+        nameTyped.current = { ...nameTyped.current, [profile]: undefined };
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -127,9 +137,9 @@ export function SettingsPopup({
     gate(
       makeNameEditSpec(
         // `t()`는 사용자가 정한 이름이 있으면 그것을 돌려준다 = "지금 보이는 이름".
-        { profile, current: t(profileKey(profile)), snapshot: nameTyped[profile] },
+        { profile, current: t(profileKey(profile)), snapshot: nameTyped.current[profile] },
         (value) => { void runRename(profile, value); },
-        (value) => setNameTyped((prev) => ({ ...prev, [profile]: value })),
+        (value) => { nameTyped.current = { ...nameTyped.current, [profile]: value }; },
       ),
       "NAME_EDIT_MODAL_FAILED",
       setNote,
@@ -149,14 +159,14 @@ export function SettingsPopup({
    *   거부해 **토큰 발급 자체가 안 된다**(정확한 사유가 note로 뜨는 정직한 실패).
    *   ⚠️ 즉 이것은 **손상 복구의 탈출구가 아니다.** 로딩 중(아직 아무것도 모름)만 비활성이다.
    */
-  const loading = data === null && !note;
+  const loading = data === null && !noteText;
   const resetEnabled = counts ? counts.total > 0 || counts.excluded > 0 : !loading;
 
   return (
     <GfxPopup title={t("SETTINGS_TITLE")} icon={<IconGear />} where="popup-s" closeModal={closeModal}>
       {renderBody(
         <div style={COLUMN_STYLE}>
-          <PopupNote note={note} />
+          {noteView}
 
           {/* ── 프로필 표시 이름 ─────────────────────────────────────────────
               바꾸는 것은 **화면 글자뿐**이다. 저장된 프로필·백업·경로는 그대로 있고,
@@ -170,8 +180,11 @@ export function SettingsPopup({
                   <div style={{ flex: "1 1 auto", minWidth: 0 }}>
                     <div style={{ fontSize: "15px" }}>{t("MANAGE_NAME_ROW", { profile: t(profileKey(profile)) })}</div>
                     <div style={META_STYLE}>
-                      {/* 봉투의 빈 문자열이 곧 "기본 이름"이다 — 화면이 다시 판정하지 않는다. */}
-                      {data?.profile_names?.[profile] ? t("MANAGE_NAME_CUSTOM") : t("MANAGE_NAME_DEFAULT")}
+                      {/* 봉투의 빈 문자열이 곧 "기본 이름"이다 — 화면이 다시 판정하지 않는다.
+                          출처는 라벨과 같은 저장소(setProfileNames 합류점): 이름 변경 직후
+                          reload가 실패해도 배지가 낡은 overview를 읽고 성공 문구를 부정하지
+                          않는다(P15-E C1). */}
+                      {hasProfileNameOverride(profile) ? t("MANAGE_NAME_CUSTOM") : t("MANAGE_NAME_DEFAULT")}
                     </div>
                   </div>
                   <DialogButton

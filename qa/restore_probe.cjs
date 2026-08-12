@@ -58,6 +58,7 @@ function reset(rows) {
   SCENE.outcome = "restored";
   SCENE.noConfirm = false;
   SCENE.failCode = null;
+  SCENE.listFailsNext = false;      // 복원 뒤 백업 목록 재조회가 실패하는 장면(P15-E R4)
   SCENE.throwOnNextModal = false;
   Object.values(calls).forEach((a) => { a.length = 0; });
   shownModals.length = 0;
@@ -104,7 +105,14 @@ const modules = {
         },
       });
     },
-    listBackups: (...a) => { calls.list.push(a); return Promise.resolve({ ok: true, data: { backups: SCENE.rows } }); },
+    listBackups: (...a) => {
+      calls.list.push(a);
+      // ★ P15-E R4: **뒤따르는 재조회만** 실패시킨다(뷰를 여는 첫 조회는 성공해야 장면이 선다).
+      if (SCENE.listFailsNext && calls.list.length > 1) {
+        return Promise.resolve({ ok: false, code: "BACKUP_DIR_UNREADABLE", params: {} });
+      }
+      return Promise.resolve({ ok: true, data: { backups: SCENE.rows } });
+    },
     restoreBackup: (...a) => {
       calls.restore.push(a);
       if (SCENE.failCode) return Promise.resolve({ ok: false, code: SCENE.failCode, params: {} });
@@ -294,6 +302,29 @@ function currentConfirm(ui, nested) {
     await settle();
     out.disk.modalsAfter = shownModals.length;       // 확인창 1개뿐(후속 제안 없음)
     out.disk.notes = texts(view.ui()).filter((x) => /RESTORE_/.test(x));
+  }
+
+  // ═══ ④′ 복원 성공 + **백업 목록 재조회 실패** — 둘 다 말한다(P15-E R4) ═══
+  //
+  // 복원은 끝났고(설정 파일이 바뀌었다) 목록만 못 읽은 상태다. 예전에는 재조회 실패가
+  // 같은 note 자리를 덮어써서 *"이 내용은 지금 게임 설정 파일에만 있습니다 — 계속 쓰려면
+  // 프로필로 저장하십시오"*라는 **후속 조치 안내가 통째로 사라졌다.**
+  {
+    reset();
+    SCENE.listFailsNext = true;
+    const view = await openBackupView(NestedPopup);
+    restoreButtons(view.ui)[1].onClick();            // 두 번째 행 = disk(후속 제안 없는 갈래)
+    await settle();
+    const confirm = currentConfirm(view.ui, true);
+    if (confirm && confirm.ok) confirm.ok();
+    await settle();
+    await settle();
+    const seen = texts(view.ui());
+    out.listFail = {
+      restoreNotes: seen.filter((x) => /RESTORE_/.test(x)),
+      listFailNote: seen.filter((x) => /BACKUP_LIST_FAILED/.test(x)),
+    };
+    SCENE.listFailsNext = false;
   }
 
   // ═══ ⑤ 복원은 성공했는데 **후속 제안 창만** 못 뜬 경우(R1) ═══════════════

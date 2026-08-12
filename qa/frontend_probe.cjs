@@ -76,6 +76,10 @@ const modules = {
     Component,
     useCallback: (fn) => fn,
     useEffect: () => {},
+    // ★ P15-E: QAM이 공용 문(`useDataDoor`)을 쓰면서 ref를 든다. 이 프로브는 **한 번만
+    //   그리므로**(재렌더 없음) 새 상자를 돌려줘도 관측 대상인 E1 판정에는 영향이 없다 —
+    //   ref의 지속성 자체는 `popup_shell_probe`의 진짜 훅 런타임이 잰다.
+    useRef: (initial) => ({ current: initial }),
     useState(initial) {
       const slot = hookSlot++;
       // 슬롯 0 = langReady(true로 강제), 슬롯 1 = overview(현황 주입).
@@ -131,10 +135,16 @@ const modules = {
     tDefault: (k) => String(k),
     setLang: () => {},
   },
+  // ★ P15-E: QAM이 조회·변이를 `popup.tsx`의 공용 문으로 지나면서 그 모듈까지 끌어온다 —
+  //   골격 컴포넌트가 목에 없으면 로더가 죽고, 그 죽음이 "E1 FAIL"로 오독된다.
   "./deckyui": {
     ButtonItem: { __kind: "ButtonItem" },
     ConfirmModal: { __kind: "ConfirmModal" },
+    DialogBody: { __kind: "DialogBody" },
+    DialogHeader: { __kind: "DialogHeader" },
     Focusable: { __kind: "Focusable" },
+    NavEntryPositionPreferences: { MAINTAIN_X: 2 },
+    TextField: { __kind: "TextField" },
     ToggleField: { __kind: "ToggleField" },
     DialogButton: { __kind: "DialogButton" },
     ModalRoot: { __kind: "ModalRoot" },

@@ -94,7 +94,17 @@ BYPASSES = [
      'runQuery(() => deleteGame(appid, token), "DELETE_ACTION_FAILED"'),
     # ── busy는 **훅**의 계약이라 대상 파일도 훅이다(팝업엔 방어 코드가 없다) ────
     ("reload()가 busy를 안 켬(조회 연타에 무방비 — P14 O1의 재발)", "popup.tsx",
-     r"    const mine = generation\.current;\n    begin\(\);", "    const mine = generation.current;"),
+     r"return inDoor\(\(\) => begin\(false\), \(\) => end\(false\), load,",
+     "return inDoor(() => {}, () => end(false), load,"),
+    # ── P15-E R3: 빈 이유를 뭉개면 화면이 거짓을 말한다 ──────────────────────
+    ("필터 0과 등록 0을 같은 문장으로 뭉갬(P15-E 이전 갈래)", "GamesPopup.tsx",
+     r'    if \(sorted\.length === 0\) return <div style=\{HINT_STYLE\}>\{t\("NO_GAMES"\)\}</div>;\n'
+     r'    return <div style=\{HINT_STYLE\}>\{t\("FILTER_ALL_HAVE_PROFILES"\)\}</div>;',
+     '    return <div style={HINT_STYLE}>{t("NO_GAMES")}</div>;'),
+    ("필터 0에도 등록 0 문장을 쓰되 반대로 뭉갬(등록 0에서 필터 안내)", "GamesPopup.tsx",
+     r'    if \(sorted\.length === 0\) return <div style=\{HINT_STYLE\}>\{t\("NO_GAMES"\)\}</div>;\n'
+     r'    return <div style=\{HINT_STYLE\}>\{t\("FILTER_ALL_HAVE_PROFILES"\)\}</div>;',
+     '    return <div style={HINT_STYLE}>{t("FILTER_ALL_HAVE_PROFILES")}</div>;'),
     ("제외 안내를 0건에도 표시", "GamesPopup.tsx",
      r"counts && counts\.excluded > 0", "counts && counts.excluded >= 0"),
     ("설정 파일 경로 줄을 빈 값에도 그림", "confirmSpecs.tsx",
@@ -313,6 +323,21 @@ def violations(r):                                             # noqa: C901  (�
         out.append(f"★§4-F ③ `DELETE_FAILED`(부분 삭제)인데 재조회 {dfail.get('reloads')}회 · "
                    f"통지 {dfail.get('mutations')}회다(각 1이어야 한다) — 일부는 **이미 지워졌다.** "
                    f"확정 실행은 성공·실패를 가리지 않고 다시 읽고 알린다(P15-B 개정)")
+
+    # ═══ R3 목록이 빈 **이유 3갈래** ══════════════════════════════════════════
+    if r.get("tailNoGames") != ["NO_GAMES"]:
+        out.append(f"★R3 등록이 0인데 안내가 NO_GAMES 하나가 아니다: {r.get('tailNoGames')} — "
+                   f"여기서만 「[게임 감지]에서 추가하라」가 참이다")
+    if r.get("tailBeforeFilter"):
+        out.append(f"R3 목록이 보이는데 빈 목록 안내가 떴다: {r.get('tailBeforeFilter')} "
+                   f"(측정 대상에 못 닿았다)")
+    if r.get("tailFilteredCards") != 0:
+        out.append(f"R3 필터를 켰는데 카드가 남았다({r.get('tailFilteredCards')}) — "
+                   f"측정 대상(필터가 전부 걸러낸 상태)에 못 닿았다")
+    if r.get("tailFiltered") != ["FILTER_ALL_HAVE_PROFILES"]:
+        out.append(f"★R3 **필터가 전부 걸러낸 상태**의 안내가 틀렸다: {r.get('tailFiltered')} — "
+                   f"등록은 2개인데 「등록된 게임이 없습니다」라고 말하면 화면이 거짓을 말하고 "
+                   f"처방([게임 감지]로 가라)도 틀린다. 여기서 할 일은 필터를 끄는 것뿐이다")
 
     # ═══ 조회 실패 — 모르는 것을 없다고 말하지 않는다 ═════════════════════════
     fail_texts = r.get("failTexts") or []

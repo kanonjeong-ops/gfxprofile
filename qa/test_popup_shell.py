@@ -120,8 +120,8 @@ def data_contract(r):                                          # noqa: C901  (�
 #: ⑤′ 전용 음성 대조군 — 전부 **훅(popup.tsx) 한 곳**을 겨눈다(팝업엔 이 배선이 없다).
 DOOR_BYPASSES = [
     ("세대 가드를 뺌(옛 응답이 새 화면을 덮는다)",
-     r"          // 옛 응답은 \*\*없던 일\*\*이다 — 화면은 이미 더 새 것을 알고 있다\.\n"
-     r"          if \(mine !== generation\.current\) return;\n", "",
+     r"      // 옛 응답은 \*\*없던 일\*\*이다 — 화면은 이미 더 새 것을 알고 있다\.\n"
+     r"      if \(mine !== generation\.current\) return;\n", "",
      "세대 가드가 없다"),
     ("busy를 불리언으로 되돌림(겹친 왕복 중 문이 열린다)",
      r"    inFlight\.current -= 1;\n    if \(inFlight\.current <= 0\) \{\n"
@@ -129,22 +129,96 @@ DOOR_BYPASSES = [
      "    inFlight.current -= 1;\n    setBusy(false);",
      "겹친 왕복 중 **하나가 끝났다고** 문이 열렸다"),
     ("reload()가 busy를 안 켬(조회에 무방비 — P14 O1 재발)",
-     r"    const mine = generation\.current;\n    begin\(\);", "    const mine = generation.current;",
+     r"return inDoor\(\(\) => begin\(false\), \(\) => end\(false\), load,",
+     "return inDoor(() => {}, () => end(false), load,",
      "마운트 조회 중인데 busy가 꺼져 있다"),
     ("확정 실행 **실패**에는 재조회를 안 붙임(비대칭 복원 — 이월 대장 #4)",
-     r"if \(!mutating \|\| isTokenIssue\(res\)\) return;", "if (!mutating || !res.ok) return;",
+     r"if \(!writing \|\| isTokenIssue\(res\)\) return;", "if (!writing || !res.ok) return;",
      "runMutation.fail"),
     ("토큰 발급에도 재조회를 붙임(무쓰기 갈래에 쓸데없는 왕복)",
-     r"if \(!mutating \|\| isTokenIssue\(res\)\) return;", "if (!mutating) return;",
+     r"if \(!writing \|\| isTokenIssue\(res\)\) return;", "if (!writing) return;",
      "runMutation.token"),
     ("조회에도 재조회를 붙임(읽기가 자기를 다시 읽는다)",
-     r"if \(!mutating \|\| isTokenIssue\(res\)\) return;", "if (isTokenIssue(res)) return;",
+     r"if \(!writing \|\| isTokenIssue\(res\)\) return;", "if (isTokenIssue(res)) return;",
      "runQuery.ok"),
     ("거절 갈래에서 재조회·통지를 뺌(쓴 뒤에 죽으면 화면이 낡는다)",
-     r"          setNote\(tCode\(\"UNEXPECTED\", key\)\);\n          if \(!mutating\) return;\n"
-     r"          reload\(\);\n          notify\.current\?\.\(\);",
-     "          setNote(tCode(\"UNEXPECTED\", key));",
+     r"        to\.current\.onCallFail\(key, err\);\n        if \(!writing\) return;",
+     "        to.current.onCallFail(key, err);\n        return;",
      "runMutation.reject"),
+]
+
+
+#: P15-E 계약(R4·R8·R6ⓑ). **음성 대조군이 이 함수를 그대로 다시 돌린다** —
+#: 판정과 대조군이 같은 코드를 보아야 "검사가 죽은 채 초록"이 생기지 않는다(⑤′와 같은 구조).
+def p15e_contract(r):                                          # noqa: C901  (판정 나열)
+    out = []
+
+    # ⑦ R4 — 변이 성공 note와 재조회 실패는 **둘 다** 화면에 있어야 한다.
+    both = r.get("bothNotes") or {}
+    lines = both.get("texts") or []
+    if both.get("loads") != 2:
+        out.append(f"⑦ 변이 뒤 재조회가 안 붙었다(loads={both.get('loads')}) — 측정 대상에 못 닿았다")
+    if "RESTORE_OK_MANUAL" not in lines:
+        out.append(f"★⑦ 변이 성공 note가 **재조회 실패에 덮였다**: {lines} — 두 사실은 서로 다르고 "
+                   f"둘 다 참이다. 덮으면 후속 조치 안내(복원 뒤 저장·부분 삭제 재시도·저장 경고·"
+                   f"초기화 잔여)가 통째로 사라진다")
+    if not any("REGISTRY_UNREADABLE" in x for x in lines):
+        out.append(f"★⑦ 재조회가 실패했는데 화면이 침묵한다: {lines} — 사용자는 화면의 숫자가 "
+                   f"방금 것인 줄 안다")
+    if both.get("data") != "BASE":
+        out.append(f"⑦ 재조회 실패가 데이터를 덮었다(data={both.get('data')}) — 모르는 값으로 "
+                   f"아는 값을 지우지 않는다")
+
+    # ⑧ R8 — 동기 throw에도 busy가 풀리고 화면이 사유를 말한다.
+    st = r.get("syncThrow") or {}
+    if st.get("busy") is not False:
+        out.append(f"★⑧ 호출이 **동기적으로 던지자 busy가 잠긴 채 남았다**(busy={st.get('busy')}) — "
+                   f"`begin()` 뒤 `.finally(end)`가 부착되기 전에 스택이 빠져나간 경우다. "
+                   f"그 팝업은 아무 버튼도 듣지 않는다(가드는 문 하나여야 한다)")
+    if st.get("note") != "UNEXPECTED/ACT_FAILED":
+        out.append(f"⑧ 동기 throw의 사유가 호출부 failKey 경유가 아니다: {st.get('note')!r} — "
+                   f"동기 throw와 비동기 거절은 **같은 문**으로 와야 한다")
+    if st.get("propagated"):
+        out.append("⑧ 동기 throw가 클릭 핸들러 밖으로 새어 나갔다 — 화면이 아무 말도 못 하는 갈래다")
+
+    # ③‴ R6ⓑ 취소 계약 — 닫기 1회 · onOK 0회(두 렌더러 모두)
+    life = r.get("lifecycle") or {}
+    if life.get("cancelCloses") != 1:
+        out.append(f"★③‴ 취소했을 때 닫기가 {life.get('cancelCloses')}회다(1이어야 한다) — "
+                   f"실물 ConfirmModal이 자기 경로에서도 닫으므로 1회 래퍼가 없으면 남의 창을 닫는다")
+    if life.get("cancelOkFired"):
+        out.append(f"★③‴ **취소했는데 onOK가 {life.get('cancelOkFired')}회 발화했다** — 취소와 확인은 "
+                   f"상호 배타다(D-05 ②). 파괴 동작에서 이 계약이 깨지면 취소가 실행이 된다")
+    if not life.get("overlayCancelWired"):
+        out.append("③‴ 폴백 오버레이에 B(취소) 배선이 없다 — 나갈 길이 버튼 하나뿐이다")
+    if life.get("overlayCancelCloses") != 1:
+        out.append(f"★③‴ 폴백 오버레이의 B 취소가 {life.get('overlayCancelCloses')}회 닫혔다(1이어야 한다)")
+    if life.get("overlayCancelOkFired"):
+        out.append(f"★③‴ 폴백 오버레이에서 취소 뒤 onOK가 발화했다"
+                   f"({life.get('overlayCancelOkFired')}회) — 같은 계약이 렌더러마다 달라졌다")
+    return out
+
+
+#: P15-E 전용 음성 대조군 — 전부 **훅·게이트(popup.tsx) 한 곳**을 겨눈다.
+P15E_BYPASSES = [
+    ("재조회 실패가 동작 note를 덮음(P15-E 이전 갈래)",
+     r"      onLoadFail: \(code\) => \{\n        ownLoadNote\.current = true;\n"
+     r"        setLoadNoteState\(tCode\(code, failKey\)\);\n      \},",
+     "      onLoadFail: (code) => { setNote(tCode(code, failKey)); },",
+     "재조회 실패에 덮였다"),
+    ("재조회 실패를 아예 안 말함(화면이 낡은 채 조용하다)",
+     r"      onLoadFail: \(code\) => \{\n        ownLoadNote\.current = true;\n"
+     r"        setLoadNoteState\(tCode\(code, failKey\)\);\n      \},",
+     "      onLoadFail: () => {},",
+     "재조회가 실패했는데 화면이 침묵한다"),
+    ("동기 throw 가드를 뺌(busy 영구 잠금)",
+     r"  let started: Promise<Env<R>>;\n  try \{\n    started = call\(\);\n  \} catch \(err\) \{\n"
+     r"    started = Promise\.reject\(err\);\n  \}",
+     "  const started = call();",
+     "busy가 잠긴 채 남았다"),
+    ("취소가 onOK를 발화(단일 종료의 반대쪽 붕괴)",
+     r"      if \(ok\) \{", "      if (true) {",
+     "취소했는데 onOK가"),
 ]
 
 
@@ -324,6 +398,10 @@ def main():                                                    # noqa: C901  (�
     for msg in data_contract(r):
         P(msg)
 
+    # ═══ P15-E — note 두 줄(R4) · 동기 throw(R8) · 취소 계약(R6ⓑ) ═════════════
+    for msg in p15e_contract(r):
+        P(msg)
+
     # ═══ ⑥ 입력값 보존 ═══════════════════════════════════════════════════════
     snap = r["snapshot"]
     if snap["snapshots"] != ["delete", "delete"] or snap["nameSnapshots"] != ["새 이름", "새 이름"]:
@@ -347,6 +425,9 @@ def main():                                                    # noqa: C901  (�
     print(f"  ⑤ 조회 {data['mountCalls']}→{data['afterReloadCalls']}회 · 표시명 선반영="
           f"{data['profileNamesTaken']}회 · ⑥ 복원={snap['restoredInitial']!r}")
     print(f"  ⑤′ 세대={r['generation']} · busy={r['busy']}")
+    print(f"  P15-E note 두 줄={r['bothNotes']['texts']} · 동기 throw busy="
+          f"{r['syncThrow']['busy']} · 취소(닫기/onOK)={r['lifecycle']['cancelCloses']}/"
+          f"{r['lifecycle']['cancelOkFired']}")
     print(f"  ⑤′ 문: " + " · ".join(
         f"{k}={v['reloads']}/{v['mutations']}" for k, v in (r.get("door") or {}).items()))
     if problems:
@@ -355,9 +436,10 @@ def main():                                                    # noqa: C901  (�
             print("  " + p)
         return 1
 
-    # ── 음성 대조군(⑤′ 전용): 알려진 위반이 지금도 잡히는가 ────────────────────
+    # ── 음성 대조군: 알려진 위반이 **그 판정으로** 잡히는가 ────────────────────
     source = (ROOT / "src" / "popup.tsx").read_text(encoding="utf-8")
-    for label, pattern, replacement, expect in DOOR_BYPASSES:
+    for label, pattern, replacement, expect in DOOR_BYPASSES + P15E_BYPASSES:
+        contract = data_contract if (label, pattern, replacement, expect) in DOOR_BYPASSES else p15e_contract
         with tempfile.TemporaryDirectory() as tmp:
             case = pathlib.Path(tmp) / "src"
             shutil.copytree(ROOT / "src", case)
@@ -371,7 +453,7 @@ def main():                                                    # noqa: C901  (�
             if control is None:
                 print(f"FAIL — 음성 대조군 프로브 실행 실패({label}): {err}")
                 return 1
-            caught = data_contract(control)
+            caught = contract(control)
             hit = [c for c in caught if expect in c]
             if not hit:
                 print(f"FAIL — 위반을 주입했는데 **그 판정이** 안 잡았다: {label}")

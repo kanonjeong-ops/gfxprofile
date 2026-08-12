@@ -389,6 +389,36 @@ function applyFace(b) {
     out.bulkExcludedNote = texts(many.ui()).filter((x) => /^GAMES_EXCLUDED_NOTE/.test(x));
   }
 
+  // ═══ R3 목록이 빈 **이유 3갈래** — 같은 문장으로 뭉치지 않는다 ═══════════
+  //
+  // 필터가 전부 걸러낸 상태는 **정상 운용의 종착점**이다(모든 게임이 두 프로필을 갖춘 상태).
+  // 거기서 "등록된 게임이 없습니다 — [게임 감지]에서 추가하십시오"라고 말하면 화면이 거짓을
+  // 말하고 처방까지 틀린다 — 실제로 할 일은 필터를 끄는 것뿐이다.
+  {
+    // ⓐ 등록 자체가 0
+    SCENE.games = [];
+    SCENE.counts = { total: 0, dock_ready: 0, internal_ready: 0, running: 0, incomplete: 0, excluded: 0 };
+    resetCalls();
+    const none = mount();
+    await settle();
+    out.tailNoGames = texts(none.ui()).filter((x) => x === "NO_GAMES" || x === "FILTER_ALL_HAVE_PROFILES");
+
+    // ⓑ 전부 두 프로필을 갖춘 상태에서 필터 ON — 목록은 비지만 등록은 0이 아니다.
+    SCENE.games = [
+      game({ appid: "10", name: "Full A", has_dock: true, has_internal: true }),
+      game({ appid: "11", name: "Full B", has_dock: true, has_internal: true }),
+    ];
+    SCENE.counts = { total: 2, dock_ready: 2, internal_ready: 2, running: 0, incomplete: 0, excluded: 0 };
+    resetCalls();
+    const full = mount();
+    await settle();
+    out.tailBeforeFilter = texts(full.ui()).filter((x) => x === "NO_GAMES" || x === "FILTER_ALL_HAVE_PROFILES");
+    find(full.ui(), "ToggleField").node.props.onChange(true);
+    await settle();
+    out.tailFilteredCards = cardNames(full.ui()).length;
+    out.tailFiltered = texts(full.ui()).filter((x) => x === "NO_GAMES" || x === "FILTER_ALL_HAVE_PROFILES");
+  }
+
   // ═══ 조회 실패 — 모르는 것을 없다고 말하지 않는다(§5-D) ══════════════════
   SCENE.overviewOk = false;
   resetCalls();

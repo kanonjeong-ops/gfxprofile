@@ -51,6 +51,10 @@ FIRST_BACKUP = "20260810-090300"
 BACKUP_KEEP = 10
 
 BYPASSES = [
+    # ── P15-E R4: 재조회 실패가 **동작 결과와 후속 조치 안내**를 덮지 않는다 ──
+    ("백업 목록 재조회 실패를 동작 note 자리에 씀(후속 조치 안내가 사라진다)", "GamesPopup.tsx",
+     r"        setReloadNote\(tCode\(res\.code, \"BACKUP_LIST_FAILED\"\)\);",
+     '        setNote(tCode(res.code, "BACKUP_LIST_FAILED"));'),
     ("복원 뒤 백업 목록을 다시 안 읽음(사라진 백업의 버튼이 남는다)", "GamesPopup.tsx",
      r'setNote\(t\("RESTORE_OK", \{ stamp \}\)\);\n          refreshBackups\(game\.appid\);',
      'setNote(t("RESTORE_OK", { stamp }));'),
@@ -232,6 +236,17 @@ def violations(r):                                             # noqa: C901  (�
         out.append(f"후속 제안을 확정했는데 저장이 안 나갔다: {saves}")
     elif len(saves[0]) > 2 and saves[0][2]:
         out.append("후속 저장의 1차 호출에 토큰이 실려 있다 ★저장 계약도 무너진다")
+
+    # ═══ P15-E R4 복원 성공 + 목록 재조회 실패 — **둘 다** 말한다 ═════════════
+    lf = r.get("listFail") or {}
+    if not has_key(lf.get("restoreNotes") or [], "RESTORE_OK_MANUAL"):
+        out.append(f"★복원은 됐는데 **후속 조치 안내가 사라졌다**: {lf.get('restoreNotes')} — "
+                   f"백업 목록 재조회 실패가 같은 자리를 덮으면, *이 내용은 지금 게임 설정 "
+                   f"파일에만 있다*는 안내와 다음 걸음(프로필로 저장)이 통째로 없어진다. "
+                   f"두 사실은 서로 다르고 둘 다 참이다")
+    if not lf.get("listFailNote"):
+        out.append(f"★백업 목록을 다시 못 읽었는데 화면이 침묵한다: {lf.get('listFailNote')} — "
+                   f"화면의 목록이 방금 것인 줄 알게 된다")
     return out
 
 

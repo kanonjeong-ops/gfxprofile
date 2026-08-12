@@ -244,6 +244,10 @@ function scene(opts) {
     "./rpc": {
       discoverGames: () => {
         calls.discover += 1;
+        // ★ P15-E R6ⓐ: 회차별로 응답을 갈아 끼운다 — *"조회에 실패해 시작 위치를 모르는"*
+        //   상태에서 수동 등록을 누르는 경로가 이 큐로만 만들어진다.
+        const queued = (opts.discoverQueue || [])[calls.discover - 1];
+        if (queued) return Promise.resolve(queued);
         return Promise.resolve({
           ok: true,
           data: {
@@ -328,6 +332,10 @@ function buttonOrder(root) {
     });
     // 제외분은 후보 목록에 **없다**(백엔드가 거르고, 화면도 섞지 않는다).
     out.mainShowsExcludedName = cardNames(ui).some((x) => x.startsWith("Excluded"));
+    // ★ P15-E R6ⓒ: 카드 이름만 보면 **카드가 아닌 자리**(안내 줄·버튼 라벨·요약)로 새어 나온
+    //   제외분을 못 본다. 화면 글자 전체로 본다 — 목록에 없어야 한다는 요구는 "카드에 없다"가
+    //   아니라 "이 화면에 없다"이다.
+    out.mainShowsExcludedText = visibleTexts(ui).some((x) => x.indexOf("Excluded") >= 0);
 
     // ── L3: 숨긴 것이 있으면 숨겼다고 말한다 ────────────────────────────────
     out.hiddenNoteDefault = textsFor(ui, "DISCOVER_HIDDEN_NOTE");
@@ -647,11 +655,28 @@ function buttonOrder(root) {
   }
 
   // ═══ 선택기 취소가 조용한가 ══════════════════════════════════════════════
+  //
+  // ★ 관측은 열거가 아니라 **전 RPC 델타**다(P15-E 재게이트 C2) — add·discover처럼 아는 채널을
+  //   하나씩 세다 보면 새 RPC가 취소 갈래에 끼어드는 날 검사가 눈감는다(열거 누락 3회 재발 이력:
+  //   P13 C2 면제 목록 → P14 O5 카드 한정 → 이번 취소 관측). picker 자체(+1)만 행위라서 예외다.
   {
     const s = scene({ entries: makeEntries(4), excluded: [], pick: null });
     await settle();
+    const rpcSnapshot = () => ({
+      discover: s.calls.discover,
+      add: s.calls.add.length,
+      bulk: s.calls.bulk,
+      include: s.calls.include.length,
+      picker: s.calls.picker.length,
+      mutations: s.mutations.length,
+    });
+    const before = rpcSnapshot();
     press(s.ui(), /^DISCOVER_PICK_FILE$/);
     await settle();
+    const after = rpcSnapshot();
+    out.cancelRpcDelta = Object.fromEntries(
+      Object.keys(before).map((k) => [k, after[k] - before[k]]),
+    );
     out.cancelAddCalls = s.calls.add.length;
     out.cancelModals = s.shownModals.length;
     out.cancelNoteTexts = visibleTexts(s.ui()).filter((x) => x.includes("FAILED") || x.includes("/"));
@@ -705,6 +730,11 @@ function buttonOrder(root) {
     out.warnCancelAddCalls = s.calls.add.length;
     out.warnCancelReloads = s.calls.discover;
     out.warnCancelMutations = s.mutations.length;
+    // ★ P15-E R6ⓑ: "아무 일도 없다"를 **등록 하나로만** 재면, 취소가 다른 쓰기를 부르는
+    //   갈래(일괄 등록·재포함)나 선택기를 다시 여는 갈래는 그대로 통과한다. 전부 센다.
+    out.warnCancelBulkCalls = s.calls.bulk;
+    out.warnCancelIncludeCalls = s.calls.include.length;
+    out.warnCancelPickerCalls = s.calls.picker.length;
   }
   {
     const s = warnScene();
@@ -770,6 +800,41 @@ function buttonOrder(root) {
     // 「훑는 중」이 실패 상태에 남아 있으면 화면이 영영 거짓을 말한다 — 그것까지 채집한다.
     out.failTexts = seen.filter((x) => x.startsWith("REGISTRY_UNREADABLE")
       || x.startsWith("DISCOVER_NONE") || x === "LOADING" || x === "DISCOVER_SCANNING");
+  }
+
+  // ═══ R6ⓐ 수동 등록의 시작 위치는 **봉투가 준 경로뿐**이다 ═══════════════
+  //
+  // 상주 [파일 직접 고르기]는 조건 없이 항상 있다(GP#16). 그래서 **조회에 실패해 라이브러리
+  // 경로를 모르는 상태**에서도 눌린다 — 예전에는 그때 `"/"`를 지어냈다(파일 시스템 루트는 이
+  // 도메인의 시작점이 아니다). 지어내는 대신 **그 자리에서 다시 읽는다.**
+  {
+    const s = scene({
+      entries: [], excluded: [],
+      pick: "/lib/steamapps/compatdata/424242/pfx/x.ini",
+      discoverQueue: [{ ok: false, code: "REGISTRY_UNREADABLE", params: {} }],
+    });
+    await settle();
+    const before = s.calls.discover;
+    press(s.ui(), /^DISCOVER_PICK_FILE$/);
+    await settle();
+    await settle();
+    out.blindPickStarts = s.calls.picker.slice();
+    out.blindPickRequery = s.calls.discover - before;    // 그 자리에서 다시 읽었는가
+    out.blindPickAdds = s.calls.add.length;              // 다시 읽은 경로로 등록까지 갔는가
+  }
+  {
+    // 조회는 되는데 **라이브러리가 하나도 없다** — 아무 데서나 열지 않고 그 사실을 말한다.
+    const s = scene({
+      entries: [], excluded: [], libraries: [],
+      pick: "/lib/steamapps/compatdata/424242/pfx/x.ini",
+      discoverQueue: [{ ok: false, code: "REGISTRY_UNREADABLE", params: {} }],
+    });
+    await settle();
+    press(s.ui(), /^DISCOVER_PICK_FILE$/);
+    await settle();
+    await settle();
+    out.noLibraryPickers = s.calls.picker.length;
+    out.noLibraryNote = visibleTexts(s.ui()).filter((x) => x.indexOf("DISCOVER_NO_LIBRARY") === 0);
   }
 
   // ═══ `filepicker.ts` **실물** — 취소를 삼키고 path를 넘긴다 ═══════════════

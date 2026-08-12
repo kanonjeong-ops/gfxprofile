@@ -63,7 +63,15 @@ BYPASSES = [
      r'setNote\(left > 0 \? `\$\{ok\} \$\{t\("RESET_LEFT_NOTE", \{ left \}\)\}` : ok\);',
      "setNote(ok);"),
     ("치다 만 입력을 버림(가상 키보드 입력이 날아간다)", "SettingsPopup.tsx",
-     r"\n              resetTyped,\n", '\n              "",\n'),
+     r"\n              resetTyped\.current,\n", '\n              "",\n'),
+    # ── P15-E R5·R6ⓓ ────────────────────────────────────────────────────────
+    ("스냅샷을 안 받음(재질문마다 처음부터 다시 치게 된다)", "SettingsPopup.tsx",
+     r"\(value\) => \{ resetTyped\.current = value; \},", "() => {},",
+     "TOCTOU 재질문에서 **입력이 소실됐다**"),
+    ("프리필 규칙을 뭉갬(기본 이름을 글자로 채운다 — 규칙 파괴 변이)", "confirmSpecs.tsx",
+     r'const initial = args\.snapshot \?\? \(args\.current === fallback \? "" : args\.current\);',
+     "const initial = args.snapshot ?? args.current;",
+     "기본 이름 상태인데 편집창이 채워져 있다"),
     ("이름 변경 RPC에 식별자 대신 표시명을 보냄", "SettingsPopup.tsx",
      r"setProfileName\(profile, name\), \"NAME_EDIT_FAILED\"",
      'setProfileName(name as never, name), "NAME_EDIT_FAILED"'),
@@ -196,7 +204,52 @@ def violations(r):                                             # noqa: C901  (�
                    f"설정은 **전역 전용**이고 게임별 동작과 완전히 분리된다(A4)")
     if r.get("perGameLeak"):
         out.append("설정 팝업에 목록 필터류 컨트롤이 들어왔다 — 게임별 화면과 섞이고 있다(A4)")
+
+    # ═══ R5 TOCTOU **재질문에도 입력이 살아 있다**(GP#9) ══════════════════════
+    #
+    # 초기화는 지문이 어긋나면 갱신된 params로 **다시 묻는다**. 그 재질문은 확인창 안에서
+    # `runReset`을 다시 부르므로, 보존값을 상태로 들면 그 클로저가 **창이 열리던 시점의 값**을
+    # 본다 — 방금 찍은 입력이 없는 값이다. 가상 키보드로 한 글자씩 찍는 화면에서 이것은
+    # "매번 처음부터 다시 치라"는 뜻이 된다.
+    if not r.get("toctouFound"):
+        out.append("R5 TOCTOU 재질문 장면을 만들지 못했다 — 측정 대상에 못 닿았다")
+    elif r.get("toctouModals") != 2:
+        out.append(f"R5 TOCTOU인데 확인창이 다시 뜨지 않았다(모달 {r.get('toctouModals')}개)")
+    else:
+        if r.get("toctouInitial") != "delete":
+            out.append(f"★R5 TOCTOU 재질문에서 **입력이 소실됐다**: {r.get('toctouInitial')!r} — "
+                       f"확인창 안에 갇힌 옛 클로저가 옛 보존값을 본다(GP#9 위반). 가상 키보드로 "
+                       f"한 글자씩 찍은 값을 다시 치게 만드는 자리다")
+        if (r.get("toctouTokens") or [])[:2] != [None, "RESET-1"]:
+            out.append(f"R5 재질문 흐름의 토큰이 이상하다: {r.get('toctouTokens')} "
+                       f"(1차 무토큰 → 받은 토큰 그대로 재호출)")
+
+    # ═══ R6ⓓ 표시 이름 편집의 **프리필 규칙** ═════════════════════════════════
+    #
+    # 빈 칸이 곧 *"기본으로 되돌리기"*다. 기본 이름을 글자로 채워 두면 사용자는 그것을 **지워야만**
+    # 기본으로 돌아간다(같은 뜻을 두 방법으로 표현하게 된다). 규칙은 spec 한 곳에 있다.
+    pre_default, pre_custom = r.get("prefillDefault") or {}, r.get("prefillCustom") or {}
+    if pre_default.get("value") != "":
+        out.append(f"★R6ⓓ 기본 이름 상태인데 편집창이 채워져 있다: {pre_default.get('value')!r} — "
+                   f"빈 칸이 곧 '기본으로 되돌리기'라, 채워 두면 그 뜻이 두 갈래가 된다")
+    if pre_custom.get("value") != "거실 TV":
+        out.append(f"★R6ⓓ 사용자가 정한 이름 상태인데 편집창이 그 이름으로 열리지 않는다: "
+                   f"{pre_custom.get('value')!r} — 고치려면 처음부터 다시 쳐야 한다")
+    if (pre_default.get("meta") or [None])[0] != "MANAGE_NAME_DEFAULT" \
+            or (pre_custom.get("meta") or [None])[0] != "MANAGE_NAME_CUSTOM":
+        out.append(f"R6ⓓ 이름 상태 메타 줄이 봉투와 어긋난다: 기본={pre_default.get('meta')} "
+                   f"사용자={pre_custom.get('meta')} (측정 대상에 못 닿았다)")
+    # ═══ C1(P15-E 재게이트) 이름 변경 성공 + 재조회 실패 — 배지·성공 문구 공존 ═══
+    # 배지는 setProfileNames 합류점(라벨과 같은 저장소)을 읽는다. 낡은 overview 봉투를
+    # 읽으면 성공 문구 옆에 "기본 이름"이 떠 서로를 부정한다 — 그 회귀를 여기서 잠근다.
+    if not r.get("c1OkNoteShown"):
+        out.append("이름 변경 성공 문구가 없다(C1 시나리오 자체가 안 돌았다)")
+    if "MANAGE_NAME_CUSTOM" not in (r.get("c1BadgeAfterRenameReloadFail") or []):
+        out.append(f"이름을 바꿨고 재조회만 실패했는데 배지가 「직접 정한 이름」이 아니다"
+                   f"({r.get('c1BadgeAfterRenameReloadFail')}) — 배지가 낡은 overview를 읽고 있다(C1)")
+
     return out
+
 
 
 def main():

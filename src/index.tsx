@@ -4,7 +4,9 @@ import {
   applyAll,
   getOverview,
   type ApplyAllConfirmParams,
+  type ApplyAllResult,
   type ApplyRow,
+  type Env,
   type Outcome,
   type Overview,
   type OverviewCounts,
@@ -14,6 +16,7 @@ import { ensureLang, setProfileNames, t, tCode, type StringKey } from "./i18n";
 import { PLUGIN_VERSION } from "./version";
 import { BulkApplyButton } from "./BulkApplyButton";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
+import { useDataDoor } from "./popup";
 import { GamesPopup } from "./GamesPopup";
 import { DiscoverPopup } from "./DiscoverPopup";
 import { SettingsPopup } from "./SettingsPopup";
@@ -141,6 +144,52 @@ function buildSummary(
     headline,
     hints,
     problems: running.length > 0 || specific.length > 0,
+    checkin,
+    at: Date.now(),
+  };
+}
+
+/**
+ * 왕복이 통째로 죽은 것(RPC 거절)을 **실패 봉투로** 바꾼다.
+ *
+ * ★★ 이 화면에는 *"응답이 없었다"*와 *"실패 봉투가 왔다"*가 **같은 사실**이다 — 일괄 적용이
+ *   끝나지 못했고 무엇이 쓰였는지 모른다. 갈래를 둘로 두면 한쪽만 고쳐지는 날이 오고,
+ *   실제로 그렇게 한쪽(실패 봉투)이 오래 침묵했다(P15-E R1).
+ * ⚠️ 함수로 빼 둔 이유가 하나 더 있다: `.catch((err): Env<T> => …)`처럼 **한 줄에 제네릭을
+ *   쓰면** `test_i18n_sets`의 JSX 텍스트 정규식이 `>…<`를 화면 글자로 오인해 거짓 FAIL을 낸다
+ *   (`.tsx`의 알려진 함정 — 이 파일 곳곳의 같은 주의와 같은 이유다).
+ */
+function deadApply(err: unknown): Env<ApplyAllResult> {
+  failTag(`apply-all-failed err=${String(err)}`);
+  return { ok: false, code: "UNEXPECTED", params: {} };
+}
+
+/**
+ * 실패 봉투가 실어 온 **체크인 목록의 길이**. 프론트가 세는 것이 아니라 **봉투를 읽는** 것이다.
+ *
+ * ★ `params`는 `Record<string, unknown>`이라 타입이 아무것도 보장해 주지 않는다 — 배열일 때만
+ *   길이를 쓴다. 없으면 0이고, 0이면 화면에 체크인 줄이 생기지 않는다(기존 "0이면 안 그림").
+ */
+function checkinCount(params: Record<string, unknown>): number {
+  const rows = params.checkin;
+  return Array.isArray(rows) ? rows.length : 0;
+}
+
+/**
+ * **끝내지 못한** 일괄 적용의 요약(§3-B 과거군 · P15-E R1).
+ *
+ * ★★ 왜 실패도 「직전 결과」에 남기는가: 확정 실행은 성공·실패를 가리지 않고 **다시 읽으므로**
+ *   (§4-F ③), 실패 직후에 뒤따르는 조회가 성공하면 현재군의 실패 줄은 §3-B 수명 규칙대로
+ *   거둬진다. 그러면 *"일괄 적용이 도중에 멈췄다"*는 사실이 화면 어디에도 안 남는다 —
+ *   **오래 사는 자리는 과거군뿐**이다. 사유(`hints`)와 체크인 수도 여기 함께 실어 보낸다.
+ * ★ 문구가 현재군 실패 줄과 겹치지 않는다: 저쪽은 *"왜 실패했나"*(코드), 이쪽은 *"그래서 지금
+ *   무슨 상태인가"*(일부는 이미 바뀌었을 수 있다)이다. 같은 말을 두 번 하지 않는다.
+ */
+function stoppedSummary(profile: Profile, code: string, checkin: number): ApplySummary {
+  return {
+    headline: t("APPLY_ALL_STOPPED", { profile: t(PROFILE_KEY[profile]) }),
+    hints: [tCode(code, "APPLY_FAILED")],
+    problems: true,
     checkin,
     at: Date.now(),
   };
@@ -317,7 +366,6 @@ function Content() {
   const [overview, setOverview] = useState<Overview | null>(null);
   // 초기값을 모듈 변수에서 받으므로 QAM을 닫았다 열어도 남아 있다(요약·실패 모두 — F20).
   const [failure, setFailureState] = useState(lastFailure);
-  const [busy, setBusy] = useState(false);
   /** busy 중 **무엇을 하는 중인가**(§3-B ①): 무토큰 1차 = 확인 중 / 토큰 재호출 = 적용 중. */
   const [previewing, setPreviewing] = useState(false);
   const [summary, setSummary] = useState(lastSummary);
@@ -329,33 +377,57 @@ function Content() {
   }, []);
 
   /**
-   * 현황 재조회 — **멱등이다.** 몇 번을 불러도 같은 봉투를 다시 읽어 덮어쓸 뿐이고,
-   * 세거나 쌓는 것이 없다.
-   *
-   * ★★ 그래야 하는 이유(P15-B 인계 ①): 팝업의 `onMutate`는 **거부·실패에도 발화한다**
-   *   (엔진은 쓴 뒤에 거부할 수 있으므로 "실패했으니 안 읽는다"가 틀린 규칙이다).
-   *   즉 이 핸들러는 한 동작에 여러 번 올 수 있고, 그때마다 다른 일을 하면 화면이 흔들린다.
+   * 결과도 **모듈 변수와 상태를 함께** 움직인다(실패와 같은 규칙) — 그리고 **토스트도 여기서**
+   * 나간다. 결과가 잡히는 자리를 하나로 두면 *"성공만 토스트가 나가는"* 비대칭이 생길 자리가
+   * 없다(F20이 실패 수명에 대해 고친 것과 같은 형태의 문제다). 토스트는 QAM이 닫혀 있어도
+   * 닿는 **부가 채널**일 뿐이고, 실패해도 요약 줄은 이미 붙잡혀 있다.
    */
-  const refresh = useCallback(() => {
-    getOverview().then(
-      (res) => {
-        if (res.ok) {
-          // 표시명(F11 ①)을 먼저 반영한다 — 라벨이 그려지기 전이어야 이름이 안 깜빡인다.
-          setProfileNames(res.data.profile_names);
-          setOverview(res.data);
-          // 새 로드 성공 = 다음 동작의 시작이다 — 승계해 온 실패를 여기서 거둔다(§3-B 수명).
-          setFailure(null);
-        } else {
-          setFailure({ key: "LOAD_FAILED", code: res.code, at: Date.now() });
-        }
-      },
-      (err) => {
-        // 백엔드에 닿지 못한 경우다 — 남길 곳이 cef_log뿐이라 여기만 console.error다.
-        failTag(`overview-failed err=${String(err)}`);
-        setFailure({ key: "LOAD_FAILED", code: "UNEXPECTED", at: Date.now() });
-      },
-    );
-  }, [setFailure]);
+  const keepSummary = useCallback((next: ApplySummary) => {
+    lastSummary = next;
+    setSummary(next);
+    try {
+      toaster.toast({ title: next.headline, body: next.hints.join(" · ") });
+    } catch (err) {
+      failTag(`toast-failed err=${String(err)}`);
+    }
+  }, []);
+
+  /**
+   * 현황 조회 — **팝업 3종과 같은 문**을 지난다(§4-F · P15-E 뿌리 해소).
+   *
+   * ★★ 왜 여기가 문제였나: QAM은 `usePopupData`를 쓰지 않는 **네 번째 소비자**였고, 조회·변이를
+   *   손으로 배선해 §4-F의 세 보증(세대 가드 · 확정 실행의 재조회 · 실패 봉투 판독)을 하나도
+   *   상속받지 못했다. 그래서 낡은 응답이 카운트를 되돌리고(R2), 낡은 실패가 최신 성공 위에
+   *   주황 줄을 세우고(R2b), 일괄 적용 실패 봉투의 체크인이 통째로 침묵했다(R1).
+   *   화면 표현(상태박스·받은 시각·QAM 재개방 승계)은 팝업과 다르므로 **표현만 sink로 내주고
+   *   규칙은 공유한다** — QAM 전용 가드를 덧대는 방식은 같은 사고를 다섯 번째 소비자에게 남긴다.
+   * ★ `refresh`는 여전히 **멱등**이다(P15-B 인계 ①): 팝업의 `onMutate`는 거부·실패에도 발화해
+   *   한 동작에 여러 번 오고, 그때마다 다른 일을 하면 화면이 흔들린다.
+   */
+  const load = useCallback(() => getOverview(), []);
+  const door = useDataDoor<Overview>(load, {
+    onData: (data) => {
+      // 표시명(F11 ①)을 먼저 반영한다 — 라벨이 그려지기 전이어야 이름이 안 깜빡인다.
+      setProfileNames(data.profile_names);
+      setOverview(data);
+      // 새 로드 성공 = 다음 동작의 시작이다 — 승계해 온 실패를 여기서 거둔다(§3-B 수명).
+      setFailure(null);
+    },
+    onLoadFail: (code, err) => {
+      // 백엔드에 닿지 못한 경우다 — 남길 곳이 cef_log뿐이라 여기만 console.error다.
+      if (err !== undefined) failTag(`overview-failed err=${String(err)}`);
+      setFailure({ key: "LOAD_FAILED", code, at: Date.now() });
+    },
+    // 왕복이 통째로 죽은 갈래 — 일괄 적용은 아래에서 스스로 봉투로 바꿔 받으므로 여기 오지
+    // 않는다. 남겨 두는 것은 그 밖의 죽음(호출이 그 자리에서 던지는 경우)을 위한 자리다.
+    onCallFail: (key, err) => {
+      failTag(`call-failed key=${key} err=${String(err)}`);
+      setFailure({ key, code: "UNEXPECTED", at: Date.now() });
+    },
+  });
+  const refresh = door.reload;
+  /** **쓰는 왕복**이 도는 중인가 — 조회(재조회)는 "적용 중"이라 말하지 않는다(D14). */
+  const busy = door.mutating;
 
   // ★ mount 태그는 **useEffect에서** 찍는다. 컴포넌트 본문은 render 단계라, 거기서 찍으면
   //   뒤이은 자식 렌더가 실패해도 "mounted"가 남아 진단이 거짓말을 한다. useEffect는
@@ -400,68 +472,67 @@ function Content() {
    */
   const runApplyAll = useCallback(
     (profile: Profile, token?: string) => {
-      setBusy(true);
       setPreviewing(!token);
       // 새 동작의 시작 — 승계해 온 실패는 여기서 거둔다(§3-B 수명). 과거군(요약)은 남는다.
       setFailure(null);
-      applyAll(profile, token)
-        .then(
-          (res) => {
-            if (!res.ok && res.code === "CONFIRM_REQUIRED") {
-              // ⚠️ 실패가 아니라 **흐름 신호**다(FLOW_CODES) — 오류 문구로 그리지 않는다.
-              //    이 시점에 백엔드는 파일을 1바이트도 쓰지 않았다.
-              const p = res.params as unknown as ApplyAllConfirmParams;
-              try {
-                showModal(
-                  <ApplyAllConfirm
-                    params={p}
-                    // 받은 토큰을 **그대로** 되돌린다. 지어낼 수 없고, 고쳐 봐야 거부된다.
-                    onConfirm={() => runApplyAll(profile, p.confirm_token)}
-                  />,
-                );
-              } catch (err) {
-                failTag(`apply-confirm-modal-failed err=${String(err)}`);
-                // ⚠️ code에 `"UNEXPECTED"`를 넣으면 안 된다 — `tCode`는 **i18n에 등재된 코드면
-                //   그 문구를 이긴다**(단일 관문의 정의). 그러면 "예기치 못한 오류"가 떠서
-                //   *확인창이 안 떴다*는 진짜 사유가 사라진다. 등재되지 않은 코드를 줘야
-                //   fallback(=아래 키)이 화면에 나온다.
-                setFailure({ key: "APPLY_CONFIRM_MODAL_FAILED", code: "MODAL", at: Date.now() });
-              }
-              return;
-            }
-            if (res.ok) {
-              // ★ 결과의 **정본은 이 상태**다. 모달은 없앴고(2026-08-06 사용자 결정),
-              //   토스트는 QAM이 닫혀 있어도 도달하는 부가 채널일 뿐이다 —
-              //   토스트가 실패해도 아래 요약 줄은 이미 붙잡혀 있다.
-              lastSummary = buildSummary(
-                profile,
-                res.data.results,
-                res.data.counts,
-                res.data.checkin.length,
+      // ★★ 팝업 3종과 **같은 문**을 지난다(§4-F): busy·세대 가드·재조회·통지가 여기서 온다.
+      //   특히 **재조회는 성공·실패를 가리지 않는다** — 엔진은 쓴 뒤에 거부할 수 있어
+      //   "실패했으니 화면은 그대로"가 틀린 규칙이다(아래 실패 갈래의 체크인이 그 증거다).
+      // ★ 왕복이 통째로 죽은 경우(RPC 거절)를 **여기서 봉투로 바꾼다**: 이 화면에는
+      //   *"응답이 없었다"*와 *"실패 봉투가 왔다"*가 같은 사실 — 일괄 적용이 끝나지 못했고
+      //   무엇이 쓰였는지 모른다 — 이고, 갈래를 둘로 두면 한쪽만 고쳐지는 날이 온다.
+      void door.runMutation(
+        () => applyAll(profile, token).catch(deadApply),
+        "APPLY_FAILED",
+        (res) => {
+          if (!res.ok && res.code === "CONFIRM_REQUIRED") {
+            // ⚠️ 실패가 아니라 **흐름 신호**다(FLOW_CODES) — 오류 문구로 그리지 않는다.
+            //    이 시점에 백엔드는 파일을 1바이트도 쓰지 않았다(문도 재조회를 붙이지 않는다).
+            const p = res.params as unknown as ApplyAllConfirmParams;
+            try {
+              showModal(
+                <ApplyAllConfirm
+                  params={p}
+                  // 받은 토큰을 **그대로** 되돌린다. 지어낼 수 없고, 고쳐 봐야 거부된다.
+                  onConfirm={() => runApplyAll(profile, p.confirm_token)}
+                />,
               );
-              setSummary(lastSummary);
-              setFailure(null);
-
-              try {
-                toaster.toast({ title: lastSummary.headline, body: lastSummary.hints.join(" · ") });
-              } catch (err) {
-                failTag(`toast-failed err=${String(err)}`);
-              }
-              refresh();
-            } else {
-              // ⚠️ 게임별 실패는 여기 오지 않는다. 봉투가 ok:false인 것은
-              //    일괄 적용 자체가 시작도 못 한 경우뿐이다.
-              setFailure({ key: "APPLY_FAILED", code: res.code, at: Date.now() });
+            } catch (err) {
+              failTag(`apply-confirm-modal-failed err=${String(err)}`);
+              // ⚠️ code에 `"UNEXPECTED"`를 넣으면 안 된다 — `tCode`는 **i18n에 등재된 코드면
+              //   그 문구를 이긴다**(단일 관문의 정의). 그러면 "예기치 못한 오류"가 떠서
+              //   *확인창이 안 떴다*는 진짜 사유가 사라진다. 등재되지 않은 코드를 줘야
+              //   fallback(=아래 키)이 화면에 나온다.
+              setFailure({ key: "APPLY_CONFIRM_MODAL_FAILED", code: "MODAL", at: Date.now() });
             }
-          },
-          (err) => {
-            failTag(`apply-all-failed err=${String(err)}`);
-            setFailure({ key: "APPLY_FAILED", code: "UNEXPECTED", at: Date.now() });
-          },
-        )
-        .finally(() => setBusy(false));
+            return;
+          }
+          if (res.ok) {
+            // ★ 결과의 **정본은 이 상태**다. 모달은 없앴고(2026-08-06 사용자 결정),
+            //   토스트는 QAM이 닫혀 있어도 도달하는 부가 채널일 뿐이다 —
+            //   토스트가 실패해도 아래 요약 줄은 이미 붙잡혀 있다.
+            keepSummary(buildSummary(
+              profile,
+              res.data.results,
+              res.data.counts,
+              res.data.checkin.length,
+            ));
+            setFailure(null);
+            return;
+          }
+          // ⚠️ **여기가 침묵하던 자리다**(P15-E R1). 예전 주석은 *"봉투가 ok:false인 것은
+          //   일괄 적용 자체가 시작도 못 한 경우뿐"*이라고 단언했는데 **거짓이었다**:
+          //   엔진이 설정 파일을 다 바꾼 **뒤** `save_registry`가 실패하면 백엔드는
+          //   `Refused(code=UNEXPECTED, checkin=관측값)`을 낸다(main.py:861-862 · D-02).
+          //   그 봉투에는 **체크인된 게임 목록**이 실려 있다 — 직전 프로필이 조용히 바뀐
+          //   사실이고, 개별 적용(팝업 G)은 같은 갈래를 이미 정확히 읽고 있었다.
+          //   그래서 화면도 ⓐ 무슨 일이 있었는지 ⓑ 왜 멈췄는지 ⓒ 체크인 몇 건인지를 말한다.
+          keepSummary(stoppedSummary(profile, res.code, checkinCount(res.params)));
+        },
+      );
     },
-    [refresh, setFailure],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [door.runMutation, setFailure],
   );
 
   /**

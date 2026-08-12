@@ -263,6 +263,13 @@ def check(r, n):                                                   # noqa: C901 
                        f"모달={r['alreadyModals']} 재조회={r['alreadyReloads']}, 기대 2) — QA R2")
 
     # ═══ ⑦ 취소가 조용하다 + filepicker 실물 ══════════════════════════════════
+    # ★ 전 RPC 델타 == 0 (picker 자체 +1만 예외 — 그것이 행위다). 열거 방식은 새 RPC가
+    #   취소 갈래에 끼는 날 눈감는다(P15-E 재게이트 C2 — 열거 누락 3회 재발의 종결).
+    delta = dict(r["cancelRpcDelta"])
+    if delta.pop("picker", None) != 1:
+        p.append(tag + f"취소 회차에 선택기 호출이 정확히 1이 아니다({r['cancelRpcDelta']})")
+    if any(v != 0 for v in delta.values()):
+        p.append(tag + f"선택기 취소 후 RPC 델타가 0이 아니다({r['cancelRpcDelta']})")
     if r["cancelAddCalls"] or r["cancelModals"] or r["cancelNoteTexts"]:
         p.append(tag + f"선택기를 취소했는데 무슨 일이 일어났다(add={r['cancelAddCalls']} "
                        f"modal={r['cancelModals']} note={r['cancelNoteTexts']})")
@@ -285,9 +292,16 @@ def check(r, n):                                                   # noqa: C901 
         p.append(tag + "CONFIRM_REQUIRED를 오류 문구로 그렸다 ★flow code를 에러로 취급 — 봉투 계약 위반")
     if not r["warnCodeInModal"] or not r["warnModalHasOK"]:
         p.append(tag + f"확인창에 경고 코드나 확인 동작이 없다: {r['warnModalTexts']}")
-    if r["warnCancelAddCalls"] != 1 or r["warnCancelReloads"] != 1 or r["warnCancelMutations"]:
+    # ★ P15-E R6ⓑ: 등록 하나만 세던 판정을 **왕복 전량**으로 넓힌다. 취소의 계약은 "그 쓰기를
+    #   안 한다"가 아니라 **"아무것도 안 한다"**이고, 좁게 재면 다른 쓰기(일괄 등록·재포함)나
+    #   선택기 재개방으로 새는 갈래가 그대로 통과한다.
+    if (r["warnCancelAddCalls"] != 1 or r["warnCancelReloads"] != 1 or r["warnCancelMutations"]
+            or r["warnCancelBulkCalls"] or r["warnCancelIncludeCalls"]
+            or r["warnCancelPickerCalls"] != 1):
         p.append(tag + f"취소했는데 무슨 일이 일어났다(add={r['warnCancelAddCalls']} "
-                       f"reload={r['warnCancelReloads']} mutate={r['warnCancelMutations']}) "
+                       f"reload={r['warnCancelReloads']} mutate={r['warnCancelMutations']} "
+                       f"일괄={r['warnCancelBulkCalls']} 재포함={r['warnCancelIncludeCalls']} "
+                       f"선택기={r['warnCancelPickerCalls']}, 기대 1·1·0·0·0·1) "
                        "★취소는 **아무 일도 없어야** 한다(QA R1 수용 기준)")
     if r["warnOkAddCalls"] != 2 or r["warnOkToken"] != "tok-synthetic":
         p.append(tag + f"확인해도 **받은 토큰 그대로** 재호출되지 않는다"
@@ -344,6 +358,31 @@ def check(r, n):                                                   # noqa: C901 
                        f"(present={r['excludedZeroPresent']} disabled={r['excludedZeroDisabled']}) — "
                        "M6 기각: 복구 렌즈의 유일한 화면 발견 경로라 숨기지 않고, 눌러도 갈 곳이 "
                        "없는 버튼은 활성이면 라벨이 거짓말을 한다")
+
+    if r.get("mainShowsExcludedText"):
+        p.append(tag + "★제외한 게임의 이름이 기본 뷰의 **화면 글자 어딘가**에 보인다 — 카드가 "
+                       "아니어도 이 화면에 있으면 제외가 아니다(카드 이름만 보던 판정의 사각)")
+
+    # ═══ R6ⓐ 수동 등록의 **시작 위치는 봉투가 준 경로뿐** ═════════════════════
+    #
+    # 상주 버튼은 조건 없이 항상 있으므로(GP#16) **조회 실패로 라이브러리를 모르는 상태**에서도
+    # 눌린다. 예전에는 그때 `"/"`를 지어냈다 — 코드 바로 위 주석은 *"경로를 지어내지 않는다"*
+    # 였다(이월 #6: 주석↔코드 자기모순). 지어내는 대신 그 자리에서 다시 읽는다.
+    starts = r.get("blindPickStarts") or []
+    if starts != ["/lib/steamapps/compatdata"]:
+        p.append(tag + f"★시작 위치를 모르는 상태에서 선택기를 {starts}에서 열었다 — 봉투가 준 "
+                       f"라이브러리 경로 말고는 시작점이 없다(파일 시스템 루트는 이 도메인의 "
+                       f"시작점이 아니다)")
+    if not r.get("blindPickRequery"):
+        p.append(tag + "★시작 위치를 모르는데 **다시 읽지도 않았다** — 근거 없이 열거나 아무 일도 "
+                       "안 하는 두 갈래뿐인 자리다")
+    if r.get("blindPickAdds") != 1:
+        p.append(tag + f"다시 읽어 연 선택기의 결과로 등록이 나가지 않았다(add={r.get('blindPickAdds')}) — "
+                       f"수동 등록 경로가 중간에 끊겼다")
+    if r.get("noLibraryPickers") or not r.get("noLibraryNote"):
+        p.append(tag + f"라이브러리를 못 찾았는데 선택기를 열거나(=아무 데서나 시작) 그 사실을 "
+                       f"말하지 않는다(picker={r.get('noLibraryPickers')} "
+                       f"note={r.get('noLibraryNote')})")
 
     # ═══ ⑨ §6-B 제외한 게임 뷰 ═══════════════════════════════════════════════
     if not r["excludedViewOpened"] or r["excludedHasBack"] != 1:
@@ -501,8 +540,18 @@ BYPASSES = [
      sub(r"runMutation\(\(\) => addGame\(appid, path, name, token\), \"DISCOVER_ADD_FAILED\", \(res\) => \{",
          "addGame(appid, path, name, token).then((res) => {")),
     ("변경 통지를 훅에서 끊음(QAM이 낡은 값을 말한다)", "popup.tsx",
-     sub(r"          reload\(\);\n          notify\.current\?\.\(\);\n        \},\n        \(\) => \{",
-         "          reload();\n        },\n        () => {")),
+     sub(r"      reload\(\);\n      notify\.current\?\.\(\);", "      reload();")),
+    # ── P15-E R6 ─────────────────────────────────────────────────────────────
+    ("시작 위치를 모를 때 `/`를 지어냄(이월 #6 주석↔코드 자기모순 복원)", "DiscoverPopup.tsx",
+     sub(r'      const known = data && data\.libraries\.length > 0 \? data\.libraries\[0\] : "";\n'
+         r"      if \(known\) return openManual\(known\);",
+         '      const known = data && data.libraries.length > 0 ? data.libraries[0] : "/";\n'
+         "      return openManual(known);")),
+    ("제외한 게임 이름을 기본 뷰에 흘림(카드 밖 자리)", "DiscoverPopup.tsx",
+     sub(r"\{renderTail\(\)\}",
+         '{renderTail()}\n        <div>{excluded.map((row) => row.name).join(" ")}</div>')),
+    ("취소가 확인처럼 발화(단일 종료의 반대쪽 붕괴)", "popup.tsx",
+     sub(r"      if \(ok\) \{", "      if (true) {")),
 ]
 
 
