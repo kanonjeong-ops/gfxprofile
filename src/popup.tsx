@@ -128,6 +128,32 @@ export function PopupSubView({
 }
 
 /**
+ * 목록 **카드**(§5-A R1 ④-A) — 팝업 G의 게임·백업 행과 팝업 D의 후보 행이 같은 모양이어야 한다.
+ *
+ * ★ **주황 경고 테두리는 없다**(A6 — "프로필 없음"·"미등록"은 정상 상태이고, 상태는 배지가 말한다).
+ * ★ 왜 여기 있는가: P13까지는 `GamesPopup` 안의 private 상수였는데 P14에서 소비자가 둘이 됐다.
+ *   같은 값을 두 파일이 각자 들고 있으면 한쪽만 손대는 날 **같은 목록이 화면마다 달라진다** —
+ *   `POPUP_LIST_MAX_HEIGHT`를 `limits.ts` 한 곳으로 모은 것과 같은 판단이다.
+ */
+export const CARD_STYLE = {
+  background: "rgba(255,255,255,0.05)",
+  borderRadius: "4px",
+  padding: "8px 10px",
+  marginBottom: "4px",
+} as const;
+
+/**
+ * 카드 **내용**의 폭 상한(GP#11 — F4 재발 방지).
+ *
+ * 모달 자체 크기는 지정하지 않는다(A10). 대신 행 내용의 폭을 접어 이름과 버튼이 화면 양 끝으로
+ * 벌어지는 것을 막는다 — 그 벌어짐이 *"버튼과 게임이 안 맞물려 보인다"*(F4)의 실체다.
+ * 실측 폭(§16-⑥)이 나오면 이 숫자 하나만 고친다.
+ */
+export const CARD_INNER_STYLE = {
+  maxWidth: "720px", display: "flex", flexDirection: "column", gap: "4px",
+} as const;
+
+/**
  * 목록 스크롤 컨테이너(§4-D) — 높이 상한과 하단 완충이 **한 곳**에서 온다.
  *
  * ★ 행마다 패딩을 두지 않는다: 값이 두 곳에 있으면 새 목록이 생길 때 한쪽을 빠뜨리고,

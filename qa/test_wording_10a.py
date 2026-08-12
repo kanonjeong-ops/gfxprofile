@@ -68,6 +68,12 @@ LOCKED = {
     # §10-A: `BACKUP_KIND_PROFILE` / `BACKUP_KIND_DISK` (F2)
     "BACKUP_KIND_PROFILE": {"ko": "{profile} 프로필에서 밀려난 이전 내용"},
     "BACKUP_KIND_DISK": {"ko": "적용·복원 직전 자동 백업(게임 설정 파일)"},
+    # ── 감지 팝업(P14에서 합류) ────────────────────────────────────────────────
+    #    §10-A: `DISCOVER_RESCAN`(L2) · `DISCOVER_ADD_CONFIDENT`·`DISCOVER_BADGE_CONFIDENT`(M3 —
+    #    "확신"이라는 내부 용어를 화면에서 걷어낸다). en 값은 §10-A가 확정하지 않아 ko만 잠근다.
+    "DISCOVER_RESCAN": {"ko": "다시 검색"},
+    "DISCOVER_ADD_CONFIDENT": {"ko": "설정 파일을 찾은 게임 {n}개 모두 추가"},
+    "DISCOVER_BADGE_CONFIDENT": {"ko": "설정 파일 확인됨"},
     # §10-A: `SAVE_CONFIRM_BODY` (Codex D-09) — A5 게이트가 기준으로 삼는 문구.
     "SAVE_CONFIRM_BODY": {
         "ko": "이 프로필에 저장돼 있던 이전 내용을 덮어씁니다.",
@@ -159,22 +165,7 @@ PINNED = {
         "converge": "{names} 실행 중이라 적용되지 않았습니다 — 종료 후 다시 눌러 주세요",
         "note": "F16-ⓑ. {names}+NAMES_AND_MORE CAP은 결과 봉투가 이름을 실어야 성립 — P15",
     },
-    # 감지 팝업(P14) 소관 — L2·M3.
-    "DISCOVER_RESCAN": {
-        "ko": "다시 훑기",
-        "converge": "다시 검색",
-        "note": "L2. 감지 팝업 재편(P14)에서 교체",
-    },
-    "DISCOVER_ADD_CONFIDENT": {
-        "ko": "확신 후보 {n}개 모두 추가",
-        "converge": "설정 파일을 찾은 게임 {n}개 모두 추가",
-        "note": "M3. 감지 팝업 재편(P14)에서 교체",
-    },
-    "DISCOVER_BADGE_CONFIDENT": {
-        "ko": "설정 파일 하나를 확실하게 찾았습니다",
-        "converge": "설정 파일 확인됨",
-        "note": "M3. 감지 팝업 재편(P14)에서 교체",
-    },
+    # (감지 팝업 3키는 **P14에서 합류해 LOCKED로 옮겼다** — 래칫: 한 번 맞춘 값은 다시 안 풀린다.)
     # ── converge 없음: 실물이 설계 셀보다 **앞서 있다**(구현이 의도적으로 강화함) ──────
     "RESTORE_FOLLOWUP_MODAL_FAILED": {
         "ko": "게임 설정 파일은 되돌렸습니다. 다만 프로필에도 저장할지 묻는 창을 표시하지 "

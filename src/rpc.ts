@@ -299,25 +299,30 @@ export interface ExcludedRow {
  */
 export const includeGame = rpc<[appid: string], { excluded: ExcludedRow[] }>("include_game");
 
+/**
+ * `discover_games` 봉투의 내용물.
+ *
+ * ★ 이름을 붙여 **한 곳에서만** 정의한다 — 화면(팝업 D)이 이 모양을 상태 타입으로 다시
+ *   적으면 봉투가 늘어날 때 두 곳이 갈리고, 갈린 쪽은 조용히 낡는다.
+ */
+export interface DiscoverData {
+  entries: DiscoverEntry[];
+  counts: DiscoverCounts;
+  /**
+   * 감지에서 제외한 게임들(A9) — 「제외한 게임」 뷰의 재료다. 제외분은 `entries`에
+   * **구조적으로 없다**(백엔드가 탐지 목록을 만드는 한 곳에서 거른다).
+   */
+  excluded: ExcludedRow[];
+  /**
+   * Steam 라이브러리 루트들. **탐지 0건일 때 파일 선택기를 어디서 열지**가 여기서 나온다 —
+   * `entries`가 비면 시작 위치를 만들 근거가 사라지고, 그러면 0건 안내가 가리키는
+   * 「파일 직접 고르기」를 그릴 수 없다(2026-08-07 QA R5). 프론트가 경로를 지어내지 않는다.
+   */
+  libraries: string[];
+}
+
 /** 탐지는 **인자가 없고 아무것도 쓰지 않는다**(순수 탐색). */
-export const discoverGames = rpc<
-  [],
-  {
-    entries: DiscoverEntry[];
-    counts: DiscoverCounts;
-    /**
-     * 감지에서 제외한 게임들(A9) — 「제외한 게임」 뷰의 재료다. 제외분은 `entries`에
-     * **구조적으로 없다**(백엔드가 탐지 목록을 만드는 한 곳에서 거른다).
-     */
-    excluded: ExcludedRow[];
-    /**
-     * Steam 라이브러리 루트들. **탐지 0건일 때 파일 선택기를 어디서 열지**가 여기서 나온다 —
-     * `entries`가 비면 시작 위치를 만들 근거가 사라지고, 그러면 0건 안내가 가리키는
-     * 「파일 직접 고르기」를 그릴 수 없다(2026-08-07 QA R5). 프론트가 경로를 지어내지 않는다.
-     */
-    libraries: string[];
-  }
->("discover_games");
+export const discoverGames = rpc<[], DiscoverData>("discover_games");
 
 export interface RegisterRow {
   appid: string;

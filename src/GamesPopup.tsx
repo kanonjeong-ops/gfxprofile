@@ -8,8 +8,8 @@ import {
 } from "./icons";
 import { t, tCode } from "./i18n";
 import {
-  GfxPopup, PopupNote, PopupScrollList, PopupSubView, listRowNavProps, subViewKey,
-  usePopupData, usePopupGate, type GView,
+  CARD_INNER_STYLE, CARD_STYLE, GfxPopup, PopupNote, PopupScrollList, PopupSubView,
+  listRowNavProps, subViewKey, usePopupData, usePopupGate, type GView,
 } from "./popup";
 import { slotSummary } from "./slots";
 import {
@@ -44,24 +44,8 @@ const META_STYLE = { fontSize: "11px", color: "#9aa0a6" } as const;
 const DESC_STYLE = { fontSize: "11px", color: "#9aa0a6", margin: "2px 0 6px" } as const;
 const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
 
-/**
- * 카드(§5-A R1 ④-A). **주황 경고 테두리는 없다**(A6 — "프로필 없음"은 정상 상태다).
- */
-const CARD_STYLE = {
-  background: "rgba(255,255,255,0.05)",
-  borderRadius: "4px",
-  padding: "8px 10px",
-  marginBottom: "4px",
-} as const;
-
-/**
- * 카드 **내용**의 폭 상한(GP#11 — F4 재발 방지).
- *
- * 모달 자체 크기는 지정하지 않는다(A10). 대신 행 내용의 폭을 접어 게임명과 버튼이 화면
- * 양 끝으로 벌어지는 것을 막는다 — 그 벌어짐이 *"버튼과 게임이 안 맞물려 보인다"*(F4)의 실체다.
- * 실측 폭(§16-⑥)이 나오면 이 숫자 하나만 고친다.
- */
-const CARD_INNER_STYLE = { maxWidth: "720px", display: "flex", flexDirection: "column", gap: "4px" } as const;
+/* 카드(§5-A)의 두 상수는 **`popup.tsx`에 있다** — 팝업 D의 후보 행과 같은 모양이어야 하고,
+   값이 두 곳에 있으면 한쪽만 손대는 날 같은 목록이 화면마다 달라진다(P14 공용화). */
 
 const ROW_STYLE = { display: "flex", alignItems: "center", gap: "6px" } as const;
 const NAME_STYLE = { flex: "1 1 auto", minWidth: 0, fontSize: "15px", overflow: "hidden", textOverflow: "ellipsis" } as const;

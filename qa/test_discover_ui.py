@@ -1,31 +1,61 @@
 #!/usr/bin/env python3
-"""P6 「게임 추가」 탭의 완료 기준을 **실행형으로** 잠근다.
+"""팝업 D(게임 감지, 설계 §6)의 계약을 **렌더+클릭으로** 잠근다. 명세 정본 §15-A 이식표 + §17 P14.
 
-잠그는 것(설계 단계표 P6 행 + 결정 8-a):
-    ① **미등록 게임이 등록된다 · 타이핑 0회** — 텍스트 입력 요소가 하나도 없다
-    ② **`.sav`를 골라도 등록되지 않고 이유가 화면에 뜬다**(G14가 유일한 방어선)
-    ③ **자동 탐지 0건이어도 "게임 없음"이 아니라 "자동 탐지가 못 찾았을 뿐"** 안내가 뜬다
-    ④ **registered 기본 필터 + confident 일괄 등록**으로 500게임 규모를 감당한다
-    ⑤ **confident 단일 매치는 인라인 1탭**(모달 없음·선택기 없음)
-    ⑥ **warnings 재확인 모달은 수동 파일 선택기 경로에서만** 뜬다
-    ⑦ 선택기 취소가 조용하다 — `openFilePicker`는 취소를 `reject('User canceled')`로 알린다
+⚠️ **P14에서 대상이 바뀌었다**: 전체화면 「게임 추가」 탭 → **팝업 D**(`src/DiscoverPopup.tsx`).
+   프로브도 자체 하네스에서 공용 `qa/probe_kit.cjs`로 옮겼다. **기존 판정은 전량 살아 있고**
+   (아래 ①~⑧), 설계가 새로 요구한 것(⑨~⑬)이 더해졌다.
+   전체화면 탭 자체는 P15에서 사라진다 — 그때까지 남는 `DiscoverTab.tsx`는 ①(타이핑 0회)만
+   계속 검사한다(그 화면의 흐름 검사는 팝업으로 이관했다).
 
-★★ 2026-08-07 재게이트 R5: 「존재」의 뜻을 **렌더 트리에 있음**에서 **화면에서 볼 수 있음**으로
-   옮겼다. 상주 버튼에 `display:none`만 얹으면 개수·시작 경로·Focusable 조상이 전부 성립하는데
-   사용자는 아무것도 못 본다(Codex가 그렇게 뚫었다). 프로브가 자기+조상 style을 누적해
-   가시성을 판정하고(`discover_probe.cjs`의 `hidesSelf`), 버튼·텍스트·도달성 집계가 **보이는
-   것만** 센다. 은닉 벡터는 열거가 원리적으로 불가하므로(오프스크린·clip-path·CSS 클래스 등)
-   **최종 근거는 실기 캡처다** — 이 검사는 회귀를 잠글 뿐 "보였다"를 증명하지 않는다.
+### 잠그는 것 — 13판정
+    ① **타이핑 0회** — 소스에 입력 컴포넌트가 없고, **렌더 결과에도** 입력 요소가 없다.
+       Game Mode에는 온스크린 키보드가 자동으로 안 뜬다 — 입력이 하나라도 생기면 이 화면은
+       핸드헬드에서 못 쓴다.
+    ② **`.sav`를 골라도 등록되지 않고 이유가 화면에 뜬다**(G14가 유일한 방어선) · 실패는
+       목록을 다시 읽지 않는다(실패를 성공처럼 다루지 않는다).
+    ③ **탐지 0건은 "게임 없음"이 아니다**(결정 8-a) · 「전부 이미 등록됨」과 **다른 문구** ·
+       그 안내가 가리키는 **[파일 직접 고르기]가 실재·도달·동작**한다(QA R5·R5-b).
+    ④ **등록된 게임 숨기기 기본 ON** + 토글이 실제로 상태를 바꾼다 + **확신 후보 일괄 등록**
+       (라벨의 수 = 봉투 값 · 클릭 1회 · 대상 0이면 버튼 없음).
+    ⑤ **확신 단일 매치 = 모달 없이 1탭**(선택기 0회·모달 0회·`best` 경로·토큰 없음) +
+       **행별 [파일 직접 고르기] 상주**(S-01 — 후보가 전부 틀렸을 때의 게임별 탈출구).
+    ⑥ **2단계 토큰 계약**(QA R1): 확인 전에는 저장되지 않고, 확정 시 **받은 토큰을 그대로**
+       되돌린다. 취소는 아무 일도 없다. 백엔드가 안 묻는 경로(자동 후보 1탭)에는 확인창이 없다.
+    ⑦ **선택기 취소가 조용하다**(등록 0·문구 0·모달 0·unhandled 0) + `filepicker.ts` 실물
+       (취소를 null로 삼키고, `realpath`가 아니라 `path`를 넘긴다).
+    ⑧ **등록 성공 = 자체 재조회 + 변경 통지**(§4-F). 전체화면 시절의 「탭을 오가면 현황이 다시
+       읽는가」가 팝업에서 갖는 형태다 — 낡은 숫자가 화면에 남는 사고의 재발 방지.
+    ⑨ **§6-B 제외한 게임 뷰**: 진입·통일 문구·행(빈 날짜면 그 줄 없음)·[다시 포함]이
+       **한 버튼 한 쓰기**(등록 RPC 0회)·note가 **다음 경로를 병기**·재조회로 목록이 줄고·
+       빈 목록 문구·[← 뒤로]로 복귀.
+    ⑩ **제외분은 후보 목록에 없다** + 제외 0건이어도 **진입 버튼은 남고 비활성**(M6 기각 —
+       복구 렌즈의 유일한 화면 발견 경로라 숨기지 않는다).
+    ⑪ **액션 줄 순서 = [다시 검색] 먼저**(GP#7) + **제외 진입은 목록 위**(GP#8 — 하단에 두면
+       도달 비용이 목록 길이에 비례한다).
+    ⑫ **GP#10 선택 즉시 등록 전환**: 1압 [선택]은 등록 0회 + 같은 자리가 [이 파일로 추가]로
+       바뀌고, 2압이 **고른 경로로** 등록한다. 다른 후보를 고르면 전환이 옮겨간다.
+       목록 끝의 별도 [추가] 버튼은 **없다**(선택 전후로 개수가 안 변한다).
+    ⑬ **§9-③ 등록 note 분기**(남은 백업이 있으면 복원 경로를 그 자리에서 말한다) +
+       **L3 숨김 병기**(숨긴 게 있으면 숨겼다고 말하고, 없으면 그 말도 사라진다) + 팝업 골격.
 
-⚠️ 한계: node에서 컴포넌트를 렌더한다. **실기 관찰을 대체하지 않는다** —
-   파일 선택기 자체가 Game Mode에서 뜨는지·D-패드로 조작되는지는 빅픽처에서만 확인된다
-   (`ModalRoot`+`WithSuspense` lazy 로딩이라 정적으로는 못 잰다).
+### 「존재」의 뜻 — 렌더 트리에 있음이 아니라 **화면에서 볼 수 있음**
+2026-08-07 재게이트 R5: 상주 버튼에 `display:none`만 얹으면 개수·시작 경로·Focusable 조상이
+전부 성립하는데 사용자는 아무것도 못 본다(Codex가 그렇게 뚫었다). 프로브가 **조상 체인까지
+누적해** 가시성을 판정하고, 버튼·글자·도달성 집계가 **보이는 것만** 센다.
+⚠️ 은닉 벡터는 원리적으로 열거가 안 된다 — **최종 근거는 실기 캡처다.**
+
+★ 이 테스트도 **자기 자신을 반증한다** — 알려진 위반을 사본에 주입해 전부 검출되는지 보고,
+  하나라도 안 잡히면 *"이 테스트는 그 위반에 대해 무효다"*라며 스스로 실패한다.
+⚠️ 한계: node에서 컴포넌트를 직접 렌더한다(실제 Steam CEF·`@decky/ui`가 아니다).
+  포커스·B버튼·실제 폭·파일 선택기의 실물 동작은 실기(§16)의 몫이다.
 """
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PROBE = ROOT / "qa" / "discover_probe.cjs"
@@ -51,9 +81,17 @@ TYPING_COMPONENTS = (
     "window.prompt", "designMode",
 )
 
+#: 타이핑 0회를 지켜야 하는 파일. **없으면 실패**인 것(감지 화면과 선택기)과, P15까지만
+#: 공존하는 전환기 파일(`DiscoverTab.tsx`)을 가른다 — 전자가 사라지면 검사가 대상을 잃은 것이다.
+TYPING_REQUIRED = ("DiscoverPopup.tsx", "filepicker.ts")
+TYPING_TRANSITIONAL = ("DiscoverTab.tsx",)
 
-def run(n):
-    proc = subprocess.run([str(U1), str(PROBE), str(n)], capture_output=True, text=True, cwd=str(ROOT))
+
+def run_probe(n, src_dir=None):
+    args = [str(U1), str(PROBE), str(n)]
+    if src_dir is not None:
+        args.append(str(src_dir))
+    proc = subprocess.run(args, capture_output=True, text=True, cwd=str(ROOT))
     if proc.returncode != 0:
         return None, (proc.stderr or proc.stdout).strip().splitlines()[-3:]
     return json.loads(proc.stdout.strip().splitlines()[-1]), None
@@ -63,8 +101,14 @@ def check_no_typing():
     """텍스트 입력 요소 0건. **Game Mode에는 온스크린 키보드가 자동으로 안 뜬다** —
     입력 요소가 하나라도 생기면 그 화면은 핸드헬드에서 못 쓴다."""
     bad = []
-    for name in ("DiscoverTab.tsx", "filepicker.ts"):
-        src = (ROOT / "src" / name).read_text()
+    for name in TYPING_REQUIRED:
+        if not (ROOT / "src" / name).is_file():
+            bad.append(f"{name}이 없다 — 타이핑 0회 검사가 대상을 잃었다(판정 불가는 통과가 아니다)")
+    for name in TYPING_REQUIRED + TYPING_TRANSITIONAL:
+        path = ROOT / "src" / name
+        if not path.is_file():
+            continue                      # 전환기 파일은 P15에서 사라진다 — 그때는 대상이 아니다
+        src = path.read_text(encoding="utf-8")
         for needle in TYPING_COMPONENTS:
             if needle in src:
                 bad.append(f"{name}에 텍스트 입력이 생겼다 — {needle} ★P6 기준 위반(타이핑 0회)")
@@ -96,204 +140,366 @@ def check_picker_pitfalls():
     return bad
 
 
-def check(r, n):
+def check(r, n):                                                   # noqa: C901  (판정 나열)
     p = []
     tag = f"N={n}: "
 
     # 측정 경로에 닿았는지부터 — 아무것도 안 그렸으면 아래 단언은 전부 공허하다
     if r["discoverCalls"] != 1:
-        p.append(tag + f"탐지 RPC가 {r['discoverCalls']}회 나갔다(1회여야 한다)")
-    if r["rowsDefault"] != n - r["registeredCount"]:
-        p.append(tag + f"기본 목록이 {r['rowsDefault']}행이다(기대 {n - r['registeredCount']})")
+        p.append(tag + f"마운트 시 탐지 RPC가 {r['discoverCalls']}회 나갔다(1회여야 한다)")
+    if not r.get("hasModalRoot") or r.get("popupWhere") != "popup-d":
+        p.append(tag + f"팝업 골격이 안 섰다 — ModalRoot={r.get('hasModalRoot')} "
+                       f"경계={r.get('popupWhere')!r} (§4-A: 경계는 DialogBody 안쪽·popup-d)")
+    if r.get("headerTitle") != "DISCOVER_TITLE":
+        p.append(tag + f"팝업 제목이 감지 화면의 것이 아니다: {r.get('headerTitle')!r}")
     if r["interactiveSeen"] < 4:
         p.append(tag + f"상호작용 컴포넌트를 {r['interactiveSeen']}개만 봤다 — "
-                       "검사가 재려던 대상에 닿지 못했다(INTERACTIVE 집합이 낡았을 수 있다)")
+                       "검사가 재려던 대상에 닿지 못했다")
+    if r["rowsDefault"] != n - r["registeredCount"]:
+        p.append(tag + f"기본 목록이 {r['rowsDefault']}행이다(기대 {n - r['registeredCount']})")
 
-    # ④ registered 기본 필터
-    if r["toggleCheckedDefault"] is not True:
-        p.append(tag + "「등록된 게임 숨기기」가 기본으로 켜져 있지 않다 ★P6 기준 위반")
-    if not r["defaultHidesRegistered"]:
-        p.append(tag + "기본 상태에서 이미 등록된 게임이 목록에 보인다 ★P6 기준 위반")
-    if not r["toggleWired"]:
-        p.append(tag + "필터 토글에 onChange가 안 걸렸다")
-    if not r["toggleDrivesState"]:
-        p.append(tag + "토글을 눌러도 상태가 안 바뀐다 — 배선이 죽었다")
-    if r["rowsAfterToggle"] != n or not r["toggleRevealsRegistered"]:
-        p.append(tag + f"토글을 껐는데 등록된 게임이 안 나온다({r['rowsAfterToggle']}행)")
+    # ═══ ① 타이핑 0회 — **렌더 결과로도** 잰다 ════════════════════════════════
+    for key in ("inputElements", "emptyInputElements"):
+        if r.get(key):
+            p.append(tag + f"입력 요소가 실제로 그려졌다({key}): {r[key]} ★타이핑 0회 위반 — "
+                           "Game Mode에는 온스크린 키보드가 안 뜬다")
 
-    # ④ confident 일괄 등록
-    if not r["bulkPresent"]:
-        p.append(tag + "확신 후보 일괄 등록 버튼이 없다 ★P6 기준 위반")
-    elif r["bulkLabel"] != f"DISCOVER_ADD_CONFIDENT {r['bulkExpectedN']}":
-        p.append(tag + f"일괄 버튼 라벨의 수가 틀렸다: {r['bulkLabel']} (기대 {r['bulkExpectedN']})")
-    if r["bulkClickCalls"] != 1:
-        p.append(tag + f"일괄 버튼을 눌렀는데 RPC가 {r['bulkClickCalls']}회 나갔다(1회여야 한다)")
-
-    # ⑤ confident 단일 매치 = 인라인 1탭
-    if not r["confidentAddPresent"]:
-        p.append(tag + "확신 게임에 인라인 [추가] 버튼이 없다 ★P6 기준 위반")
-    if r["addGameCalls"] != 1 or not r["addGameUsedBestPath"]:
-        p.append(tag + f"1탭 등록이 best 후보 경로로 1회 나가지 않았다(calls={r['addGameCalls']})")
-    if r["filePickerCallsOnConfident"] != 0:
-        p.append(tag + "확신 게임인데 파일 선택기가 떴다 ★'모달 없이 1탭' 위반")
-    if r["modalCallsOnConfident"] != 0:
-        p.append(tag + "확신 게임 등록에 모달이 떴다 ★'모달 없이 1탭' 위반")
-
-    # 애매한 게임은 후보를 펼쳐 사람이 고른다
-    if not r["ambiguousHasShowButton"]:
-        p.append(tag + "애매한 게임에 후보 펼침 버튼이 없다")
-    if r.get("candidatePathsShown", 0) < 1 or r.get("chooseButtons", 0) < 1:
-        p.append(tag + "후보를 펼쳤는데 경로·선택 버튼이 안 나온다")
-
-    # ⑦ D-패드 도달성
-    if r["unreachable"]:
-        p.append(tag + f"{r['unreachable']}가 Focusable 밖이라 D-패드로 도달할 수 없다 ★기준 위반")
-
-    # ① 타이핑 0회 — **렌더 결과로도** 잰다(소스 금지 목록 우회 방지, 2026-08-07 QA R4)
-    if r["inputElements"] or r["emptyInputElements"]:
-        p.append(tag + f"입력 요소가 실제로 그려졌다: {r['inputElements'] + r['emptyInputElements']} "
-                       "★P6 기준 위반(타이핑 0회) — Game Mode에는 온스크린 키보드가 안 뜬다")
-
-    # ③ 0건 안내
-    if not r["emptySaysNotFound"]:
-        p.append(tag + "탐지 0건 안내가 DISCOVER_NONE_FOUND가 아니다 ★결정 8-a 위반")
-    if r["emptySaysNoGames"]:
-        p.append(tag + "탐지 0건인데 '등록된 게임이 없습니다'(NO_GAMES)라고 단언한다 ★결정 8-a 위반")
-    if r["emptyBulkPresent"]:
-        p.append(tag + "탐지 0건인데 일괄 등록 버튼이 있다 — 라벨이 거짓말을 한다")
-
-    # ③″ 수동 등록 진입점은 **목록 상태와 무관하게 상주한다** (2026-08-07 실기, QA R5-b)
-    #     ⚠️ 이 단언이 없으면 «0건 안내 ↔ 버튼» 정합만 보게 되고, 실기에서 난 결함
-    #        (탐지 10 / 등록 10 → 진입점이 화면 어디에도 없음)은 **그 검사를 통과한다.**
-    #        그 상태의 문구는 CTA를 권하지 않아 문구↔버튼이 정합이기 때문이다.
-    #     ★ 개수만 세면 행 버튼과 구별이 안 된다 — **시작 경로**로 가른다:
-    #        행 버튼 = `<lib>/steamapps/compatdata/<appid>/pfx` · 상주 버튼 = `<lib>/steamapps/compatdata`
-    if r.get("pickButtonsWithRows") != r.get("unregisteredRowsShown", -1) + 1:
-        p.append(tag + f"목록이 있는 상태의 「파일 직접 고르기」 버튼이 {r.get('pickButtonsWithRows')}개다"
-                       f"(미등록 행 {r.get('unregisteredRowsShown')}개 + 상주 1개여야 한다) "
-                       "★QA R5-b — 탐지가 성공한 기기에서 수동 등록 경로가 소멸한다")
-    if r.get("tailPickStart") != "/lib/steamapps/compatdata":
-        p.append(tag + f"목록 아래 상주 버튼의 시작 위치가 라이브러리 기준이 아니다: "
-                       f"{r.get('tailPickStart')!r} — 행 버튼만 있고 상주 버튼이 없는 상태다")
-    if r.get("tailPickAddDelta") != 0:
-        p.append(tag + "상주 버튼에서 선택기를 취소했는데 등록 RPC가 나갔다")
-    if not r.get("manualPickReachable"):
-        p.append(tag + "목록 상태의 상주 버튼이 Focusable 밖이다 — D-패드로 못 누른다")
-    if not r.get("allRegisteredPickPresent"):
-        p.append(tag + "「전부 이미 등록됨」 상태에 수동 등록 진입점이 없다 ★QA R5-b 반려 사유 "
-                       "— 탐지 밖 게임(네이티브 리눅스 등)을 등록할 유일한 길이 막힌다")
-    if not r.get("allRegisteredPickReachable"):
-        p.append(tag + "「전부 이미 등록됨」 상태의 상주 버튼이 Focusable 밖이다")
-
-    # ③‴ **렌더 트리에는 있는데 화면에는 없는** 상호작용 요소가 없다 (2026-08-07 재게이트 R5)
-    #     ⚠️ 위 단언들만으로는 `display:none` 하나로 전부 통과한다 — 개수도 맞고 프로브는
-    #        숨은 버튼의 onClick도 부를 수 있기 때문이다. 「존재」의 뜻을 **트리에 있음**에서
-    #        **볼 수 있음**으로 옮겼고(`discover_probe.cjs`의 `hidesSelf`), 여기서 그것을 잠근다.
+    # ═══ ③‴ 화면에 **없는** 상호작용 요소가 없다(재게이트 R5) ═════════════════
     for key, where in (("hiddenInteractive", "목록 상태"),
                        ("emptyHiddenInteractive", "탐지 0건 상태"),
                        ("allRegisteredHiddenInteractive", "전부 등록됨 상태")):
         if r.get(key):
             p.append(tag + f"{where}에 **화면에서 숨겨진** 상호작용 요소가 있다: {r[key]} "
                            "★사용자가 볼 수도 누를 수도 없다 — 렌더 트리에 있는 것은 존재가 아니다")
+    if r["unreachable"]:
+        p.append(tag + f"{r['unreachable']}가 Focusable 밖이라 D-패드로 도달할 수 없다 ★기준 위반")
 
-    # ③′ 0건 안내가 **가리키는 조작이 실재한다** (2026-08-07 QA R5)
-    #    존재하지 않는 조작을 권하는 문장은 오정보다 — 문구만 고치고 끝내지 않았다는 잠금이다.
-    if not r["emptyPickPresent"]:
-        p.append(tag + "탐지 0건 안내가 「파일 직접 고르기」를 권하는데 그 버튼이 없다 ★QA R5 반려 사유")
-    if not r["emptyPickReachable"]:
-        p.append(tag + "0건 상태의 수동 등록 버튼이 Focusable 밖이다 — D-패드로 못 누른다")
-    if r.get("emptyPickOpensPicker") != 1:
-        p.append(tag + f"0건 상태의 버튼을 눌러도 선택기가 안 뜬다({r.get('emptyPickOpensPicker')}회)")
-    if not (r.get("emptyPickStart") or "").endswith("/steamapps/compatdata"):
-        p.append(tag + f"수동 선택기의 시작 위치가 라이브러리 기준이 아니다: {r.get('emptyPickStart')!r} — "
-                       "프론트가 경로를 지어내면 안 된다(백엔드 libraries가 정본)")
-    if r.get("emptyPickRegisters") != 1 or r.get("emptyPickAppid") != "424242":
-        p.append(tag + f"수동 등록이 경로에서 읽은 appid로 나가지 않았다"
-                       f"(calls={r.get('emptyPickRegisters')} appid={r.get('emptyPickAppid')!r})")
-    # compatdata 밖 파일은 **등록하지 않고 이유를 말한다** — 조용히 실패하지 않는다
-    if r.get("emptyPickOutsideRegisters") != 0:
-        p.append(tag + "prefix 밖 파일을 골랐는데 등록 RPC가 나갔다 — appid를 지어낸 것이다")
-    if not r.get("emptyPickOutsideSaysWhy"):
-        p.append(tag + "prefix 밖 파일을 골랐는데 이유가 화면에 안 뜬다 — 조용히 아무 일도 안 한다")
+    # ═══ ④ 필터 기본 ON + 일괄 등록 ═══════════════════════════════════════════
+    if r["toggleCheckedDefault"] is not True:
+        p.append(tag + "「등록된 게임 숨기기」가 기본으로 켜져 있지 않다 ★P6 기준 위반")
+    if not r["defaultHidesRegistered"]:
+        p.append(tag + "기본 상태에서 이미 등록된 게임이 목록에 보인다 ★P6 기준 위반")
+    if not r["toggleWired"] or not r["toggleDrivesState"]:
+        p.append(tag + "필터 토글 배선이 죽었다(onChange 또는 상태 반영 없음)")
+    if r["rowsAfterToggle"] != n or not r["toggleRevealsRegistered"]:
+        p.append(tag + f"토글을 껐는데 등록된 게임이 안 나온다({r['rowsAfterToggle']}행)")
+    if not r["bulkPresent"]:
+        p.append(tag + "확신 후보 일괄 등록 버튼이 없다 ★P6 기준 위반")
+    elif r["bulkLabel"] != f"DISCOVER_ADD_CONFIDENT {r['bulkExpectedN']}":
+        p.append(tag + f"일괄 버튼 라벨의 수가 틀렸다: {r['bulkLabel']} (기대 {r['bulkExpectedN']}) — "
+                       "수는 봉투가 준 값이고 프론트가 다시 세지 않는다")
+    if r["bulkClickCalls"] != 1:
+        p.append(tag + f"일괄 버튼을 눌렀는데 RPC가 {r['bulkClickCalls']}회 나갔다(1회여야 한다)")
+    if r["emptyBulkPresent"] or r["allRegisteredBulkPresent"]:
+        p.append(tag + "등록할 것이 없는데 일괄 등록 버튼이 있다 — 라벨이 거짓말을 한다")
+
+    # ═══ ⑤ 확신 1탭 + 행별 선택기 상주 (S-01 보존) ════════════════════════════
+    if not r["confidentAddPresent"]:
+        p.append(tag + "확신 게임에 인라인 [추가] 버튼이 없다 ★P6 기준 위반")
+    if r["addGameCalls"] != 1 or not r["addGameUsedBestPath"]:
+        p.append(tag + f"1탭 등록이 best 후보 경로로 1회 나가지 않았다(calls={r['addGameCalls']})")
+    if r["addGameToken"] is not None:
+        p.append(tag + f"1탭 등록의 첫 호출에 토큰이 실려 있다({r['addGameToken']!r}) "
+                       "★프론트가 토큰을 지어냈다")
+    if r["filePickerCallsOnConfident"] or r["modalCallsOnConfident"]:
+        p.append(tag + f"확신 게임 등록에 선택기·모달이 떴다"
+                       f"(picker={r['filePickerCallsOnConfident']} modal={r['modalCallsOnConfident']}) "
+                       "★'모달 없이 1탭' 위반")
+    #   ★ 개수만 세면 행 버튼과 상주 버튼이 구별되지 않는다 — **시작 경로**로 가른다.
+    if r["pickButtonsWithRows"] != r["unregisteredRowsShown"] + 1:
+        p.append(tag + f"「파일 직접 고르기」가 {r['pickButtonsWithRows']}개다"
+                       f"(미등록 행 {r['unregisteredRowsShown']}개 + 상주 1개여야 한다) "
+                       "★행별 탈출구(S-01) 또는 상주 진입점(QA R5-b)이 사라졌다")
+    if r["tailPickStart"] != "/lib/steamapps/compatdata":
+        p.append(tag + f"상주 버튼의 시작 위치가 라이브러리 기준이 아니다: {r['tailPickStart']!r}")
+    if not (r.get("rowPickStart") or "").endswith("/pfx"):
+        p.append(tag + f"행별 버튼이 그 게임의 prefix에서 시작하지 않는다: {r.get('rowPickStart')!r}")
+    if r["tailPickAddDelta"] != 0:
+        p.append(tag + "상주 버튼에서 선택기를 취소했는데 등록 RPC가 나갔다")
+    if not r["manualPickReachable"]:
+        p.append(tag + "상주 버튼이 Focusable 밖이다 — D-패드로 못 누른다")
+    if not r["pickFileDescShown"]:
+        p.append(tag + "상주 버튼이 무엇을 하는 것인지 말하지 않는다(H5 설명 줄 없음)")
+
+    # ═══ ③ 0건·전부등록 안내 ══════════════════════════════════════════════════
+    if not r["emptySaysNotFound"] or r["emptySaysNoGames"]:
+        p.append(tag + "탐지 0건 안내가 틀렸다 ★결정 8-a — 「자동 탐지가 못 찾았을 뿐」이지 "
+                       "「게임이 없다」가 아니다")
     if not r["allRegisteredSaysDifferent"]:
         p.append(tag + "전부 등록된 경우와 탐지 0건이 같은 문구다 — 두 상황은 다르다")
-    if r["allRegisteredBulkPresent"]:
-        p.append(tag + "등록할 것이 없는데 일괄 등록 버튼이 있다")
+    if not r["emptyPickPresent"] or not r["emptyPickReachable"]:
+        p.append(tag + "탐지 0건 안내가 「파일 직접 고르기」를 권하는데 그 버튼이 없거나 도달 불가다 "
+                       "★QA R5 반려 사유")
+    if not r["allRegisteredPickPresent"] or not r["allRegisteredPickReachable"]:
+        p.append(tag + "「전부 이미 등록됨」 상태에 수동 등록 진입점이 없다 ★QA R5-b 반려 사유 — "
+                       "탐지 밖 게임(네이티브 리눅스 등)을 등록할 유일한 길이 막힌다")
+    if r["emptyPickOpensPicker"] != 1 or not (r["emptyPickStart"] or "").endswith("/steamapps/compatdata"):
+        p.append(tag + f"0건 상태의 버튼이 라이브러리 기준 위치에서 선택기를 열지 않는다"
+                       f"({r['emptyPickOpensPicker']}회, {r['emptyPickStart']!r})")
+    if r["emptyPickRegisters"] != 1 or r["emptyPickAppid"] != "424242":
+        p.append(tag + f"수동 등록이 경로에서 읽은 appid로 나가지 않았다"
+                       f"(calls={r['emptyPickRegisters']} appid={r['emptyPickAppid']!r})")
+    if r["outsideRegisters"] != 0 or not r["outsideSaysWhy"]:
+        p.append(tag + "prefix 밖 파일을 골랐을 때 등록이 나가거나 이유가 화면에 안 뜬다 — "
+                       "조용히 아무 일도 안 하면 안 된다")
 
-    # ② .sav 거부
+    # ═══ ② `.sav` 거부 ═══════════════════════════════════════════════════════
     if not r["savRefusedShown"]:
         p.append(tag + ".sav를 골랐는데 거부 사유가 화면에 안 뜬다 ★P6 완료 기준 위반")
     if r["savAddedText"]:
         p.append(tag + ".sav가 거부됐는데 '추가했습니다'가 떴다 — 화면이 거짓말을 한다")
-    if r["savDiscoverReloads"] != 1:
-        p.append(tag + "등록이 거부됐는데 목록을 다시 불렀다 — 실패를 성공처럼 다룬다")
-    if r["savModalCalls"] != 0:
+    if r["savDiscoverReloads"] != 1 or r["savMutations"]:
+        p.append(tag + f"등록이 거부됐는데 목록을 다시 부르거나 변경을 알렸다"
+                       f"(reload={r['savDiscoverReloads']} mutate={r['savMutations']}) — "
+                       "실패를 성공처럼 다룬다")
+    if r["savModals"]:
         p.append(tag + "거부된 등록에 확인 모달이 떴다")
+    if not r["alreadyShown"] or r["alreadyModals"] or r["alreadyReloads"] != 1:
+        p.append(tag + f"이미 등록된 appid 거부의 처리가 틀렸다(표시={r['alreadyShown']} "
+                       f"모달={r['alreadyModals']} 재조회={r['alreadyReloads']}) — QA R2")
 
-    # ⑦ 취소가 조용하다
-    if r["cancelAddGameCalls"] != 0:
-        p.append(tag + "선택기를 취소했는데 등록 RPC가 나갔다")
-    if r["cancelNoteTexts"]:
-        p.append(tag + f"선택기를 취소했는데 오류 문구가 떴다: {r['cancelNoteTexts']}")
-    if r["cancelModalCalls"] != 0:
-        p.append(tag + "선택기를 취소했는데 모달이 떴다")
+    # ═══ ⑦ 취소가 조용하다 + filepicker 실물 ══════════════════════════════════
+    if r["cancelAddCalls"] or r["cancelModals"] or r["cancelNoteTexts"]:
+        p.append(tag + f"선택기를 취소했는데 무슨 일이 일어났다(add={r['cancelAddCalls']} "
+                       f"modal={r['cancelModals']} note={r['cancelNoteTexts']})")
     if r["unhandledRejections"] != 0:
         p.append(tag + f"unhandled rejection {r['unhandledRejections']}건 — "
                        "취소가 reject로 오는데 잡지 않았다")
-
-    # ⑥ **등록 전** 재확인 모달 — 2단계 계약 (2026-08-07 QA R1)
-    if r["manualWarnModalCalls"] != 1:
-        p.append(tag + f"CONFIRM_REQUIRED를 받았는데 확인창이 {r['manualWarnModalCalls']}회 떴다(1회여야 한다)")
-    if r["inlineWarnModalCalls"] != 0:
-        p.append(tag + "백엔드가 묻지 않은 경로(자동 후보 1탭)에서 확인창이 떴다 — 확인창 지옥의 시작이다")
-    if r["manualAddCallsBeforeConfirm"] != 1 or r["manualTokenBeforeConfirm"] != [None]:
-        p.append(tag + f"확인 전 호출이 이상하다(calls={r['manualAddCallsBeforeConfirm']} "
-                       f"tokens={r['manualTokenBeforeConfirm']}) — 첫 호출은 토큰 없이 1회여야 한다")
-    if r["manualShowsErrorNote"]:
-        p.append(tag + "CONFIRM_REQUIRED를 오류 문구로 그렸다 ★flow code를 에러로 취급 — 봉투 계약 위반")
-    if not r["manualWarnShownInModal"]:
-        p.append(tag + "확인창에 경고 코드가 안 실렸다 — 무엇을 확인하라는지 알 수 없다")
-    if not r["confirmModalHasOK"]:
-        p.append(tag + "확인창에 onOK가 없다 — 확인해도 등록되지 않는다")
-    if r["confirmModalHasCancelSideEffect"]:
-        p.append(tag + "확인창의 취소에 동작이 걸려 있다 ★취소는 **아무 일도 없어야** 한다(QA R1 수용 기준)")
-    if r["confirmCancelAddCalls"] != 1:
-        p.append(tag + f"취소 뒤에도 등록 RPC가 나갔다({r['confirmCancelAddCalls']}회, 1이어야 한다)")
-    if r["confirmOkAddCalls"] != 2 or r["confirmOkSentToken"] != "tok-synthetic":
-        p.append(tag + f"확인해도 **받은 토큰 그대로** 재호출되지 않는다"
-                       f"(calls={r['confirmOkAddCalls']} token={r['confirmOkSentToken']!r})")
-    if r["confirmOkReloads"] != 2:
-        p.append(tag + f"확인 뒤 등록됐는데 목록을 다시 안 읽는다({r['confirmOkReloads']}회)")
-
-    # ⑥′ 기등록 appid 거부가 화면에 뜬다 (2026-08-07 QA R2)
-    if not r["alreadyRegisteredShown"]:
-        p.append(tag + "ALREADY_REGISTERED로 거부됐는데 사유가 화면에 안 뜬다")
-    if r["alreadyRegisteredModalCalls"] != 0:
-        p.append(tag + "거부된 등록에 확인창이 떴다 — 확인해도 등록되지 않는데 묻는 것은 오정보다")
-    if r["alreadyRegisteredReloads"] != 1:
-        p.append(tag + "등록이 거부됐는데 목록을 다시 불렀다 — 실패를 성공처럼 다룬다")
-
-    # ⑧' 탭 왕복 — 「게임 추가」에서 등록하고 돌아오면 「현황」이 다시 읽어야 한다
-    if r["tabButtons"] != ["TAB_STATUS", "TAB_DISCOVER"]:
-        p.append(tag + f"탭 버튼이 둘이 아니다: {r['tabButtons']} — 검사가 대상에 닿지 못했다")
-    if not r["discoverTabRendered"]:
-        p.append(tag + "「게임 추가」 탭을 눌러도 그 화면이 안 뜬다")
-    if r["overviewCallsOnMount"] != 1:
-        p.append(tag + f"마운트에서 현황을 {r['overviewCallsOnMount']}회 읽었다(1회여야 한다)")
-    if r["overviewCallsOnDiscover"] != r["overviewCallsOnMount"]:
-        p.append(tag + "「게임 추가」 탭으로 갔는데 현황을 또 읽었다 — 쓸데없는 왕복이다")
-    if not r["statusTabReloads"]:
-        p.append(tag + "「현황」으로 돌아왔는데 다시 읽지 않는다 — "
-                       "게임을 등록하고 넘어오면 **낡은 숫자**가 뜬다(2026-08-07 실기에서 실제로 그랬다)")
-    if r["tabReachability"]:
-        p.append(tag + f"탭 왕복 뒤 {r['tabReachability']}가 Focusable 밖이다")
-
-    # ⑨ filepicker 실물
     if not r["pickerCancelResolvesNull"]:
         p.append(tag + "filepicker가 취소(reject)를 null로 삼키지 않는다")
     if not r["pickerReturnsPathNotRealpath"]:
-        p.append(tag + "filepicker가 path가 아니라 realpath를 돌려준다 — G11의 심볼릭 링크 거부가 무력화된다")
+        p.append(tag + "filepicker가 path가 아니라 realpath를 돌려준다 — "
+                       "G11의 심볼릭 링크 거부가 무력화된다")
+
+    # ═══ ⑥ 2단계 토큰 계약 ════════════════════════════════════════════════════
+    if r["warnModals"] != 1:
+        p.append(tag + f"CONFIRM_REQUIRED를 받았는데 확인창이 {r['warnModals']}회 떴다(1회여야 한다)")
+    if r["warnAddCallsBefore"] != 1 or r["warnTokensBefore"] != [None]:
+        p.append(tag + f"확인 전 호출이 이상하다(calls={r['warnAddCallsBefore']} "
+                       f"tokens={r['warnTokensBefore']}) — 첫 호출은 토큰 없이 1회여야 한다")
+    if r["warnShowsErrorNote"]:
+        p.append(tag + "CONFIRM_REQUIRED를 오류 문구로 그렸다 ★flow code를 에러로 취급 — 봉투 계약 위반")
+    if not r["warnCodeInModal"] or not r["warnModalHasOK"]:
+        p.append(tag + f"확인창에 경고 코드나 확인 동작이 없다: {r['warnModalTexts']}")
+    if r["warnCancelAddCalls"] != 1 or r["warnCancelReloads"] != 1 or r["warnCancelMutations"]:
+        p.append(tag + f"취소했는데 무슨 일이 일어났다(add={r['warnCancelAddCalls']} "
+                       f"reload={r['warnCancelReloads']} mutate={r['warnCancelMutations']}) "
+                       "★취소는 **아무 일도 없어야** 한다(QA R1 수용 기준)")
+    if r["warnOkAddCalls"] != 2 or r["warnOkToken"] != "tok-synthetic":
+        p.append(tag + f"확인해도 **받은 토큰 그대로** 재호출되지 않는다"
+                       f"(calls={r['warnOkAddCalls']} token={r['warnOkToken']!r})")
+    if r["warnOkReloads"] != 2 or r["warnOkMutations"] != 1 or not r["warnOkNote"]:
+        p.append(tag + f"확인 뒤 등록됐는데 재조회·통지·안내가 빠졌다"
+                       f"(reload={r['warnOkReloads']} mutate={r['warnOkMutations']} "
+                       f"note={r['warnOkNote']})")
+
+    # ═══ ⑧ 등록 성공 = 자체 재조회 + 변경 통지 (§4-F) ═════════════════════════
+    if r["addReloads"] != 2 or r["addMutations"] != 1:
+        p.append(tag + f"등록에 성공했는데 자체 재조회·변경 통지가 빠졌다"
+                       f"(reload={r['addReloads']} mutate={r['addMutations']}) — "
+                       "QAM Content는 팝업이 떠 있는 동안 언마운트일 수 있어 둘은 다른 일이다")
+    if r["rescanCalls"] != 1:
+        p.append(tag + f"[다시 검색]을 눌렀는데 조회가 {r['rescanCalls']}회다(1이어야 한다)")
+
+    # ═══ ⑬ §9-③ note 분기 + L3 숨김 병기 ═════════════════════════════════════
+    if r["addedNote"] != ["DISCOVER_ADDED Added"] or r["addedBackupNote"]:
+        p.append(tag + f"백업 0건 등록에서 note가 틀렸다(plain={r['addedNote']} "
+                       f"backups={r['addedBackupNote']}) — 0이면 복원 안내를 그리지 않는다")
+    if not r["backupsNote"] or r["backupsPlainNote"]:
+        p.append(tag + f"★§9-③ 남은 백업이 있는데 복원 경로를 말하지 않는다"
+                       f"(backups={r['backupsNote']} plain={r['backupsPlainNote']}) — "
+                       "등록을 해제해도 백업은 남는다. 재등록한 그 자리가 유일한 안내 지점이다")
+    if r["backupsNote"] and " 3" not in r["backupsNote"][0]:
+        p.append(tag + f"복원 안내가 백업 수를 말하지 않는다: {r['backupsNote']}")
+    if r["hiddenNoteDefault"] != [f"DISCOVER_HIDDEN_NOTE {r['registeredCount']}"]:
+        p.append(tag + f"★L3 숨김 병기가 틀렸다: {r['hiddenNoteDefault']} "
+                       f"(기대 등록 {r['registeredCount']}개) — 숨긴 것을 말하지 않으면 "
+                       "「감지가 안 되네」로 읽힌다")
+    if r["hiddenNoteAfterToggle"]:
+        p.append(tag + f"토글을 껐는데도 「숨겨져 있습니다」가 남아 있다: {r['hiddenNoteAfterToggle']}")
+    if not r["summaryShown"]:
+        p.append(tag + "요약 줄이 없다")
+
+    # ═══ ⑪ 액션 줄 순서(GP#7) · 제외 진입 위치(GP#8) ═════════════════════════
+    if not (0 <= r["rescanIndex"] < r["bulkIndex"]):
+        p.append(tag + f"★GP#7 [다시 검색]이 먼저가 아니다(rescan={r['rescanIndex']} "
+                       f"bulk={r['bulkIndex']}) — 진입 직후 A 관성의 착지가 무해한 쪽이어야 한다")
+    if not (0 <= r["excludedIndex"] < r["firstCardIndex"]):
+        p.append(tag + f"★GP#8 제외 진입이 목록 위 전용 행이 아니다(excluded={r['excludedIndex']} "
+                       f"firstCard={r['firstCardIndex']}) — 하단에 두면 도달 비용이 목록 길이에 "
+                       "비례해 「존재를 보인다」가 게임패드에서 성립하지 않는다")
+
+    # ═══ ⑩ 제외분 비표시 + 0건 비활성 유지 ════════════════════════════════════
+    if r["mainShowsExcludedName"]:
+        p.append(tag + "제외한 게임이 후보 목록에 보인다 — 제외분은 목록에 없어야 한다")
+    if r["excludedButtonLabel"] != "DISCOVER_EXCLUDED_OPEN 2" or r["excludedButtonDisabled"]:
+        p.append(tag + f"제외 진입 버튼이 봉투의 수를 말하지 않거나 비활성이다"
+                       f"({r['excludedButtonLabel']!r} disabled={r['excludedButtonDisabled']})")
+    if not r["excludedZeroPresent"] or r["excludedZeroDisabled"] is not True:
+        p.append(tag + f"★제외 0건에서 진입 버튼이 사라지거나 활성으로 남았다"
+                       f"(present={r['excludedZeroPresent']} disabled={r['excludedZeroDisabled']}) — "
+                       "M6 기각: 복구 렌즈의 유일한 화면 발견 경로라 숨기지 않고, 눌러도 갈 곳이 "
+                       "없는 버튼은 활성이면 라벨이 거짓말을 한다")
+
+    # ═══ ⑨ §6-B 제외한 게임 뷰 ═══════════════════════════════════════════════
+    if not r["excludedViewOpened"] or r["excludedHasBack"] != 1:
+        p.append(tag + f"제외 뷰가 안 열리거나 [← 뒤로]가 없다(opened={r['excludedViewOpened']} "
+                       f"back={r['excludedHasBack']})")
+    for key in ("DISCOVER_EXCLUDED_TITLE", "DISCOVER_EXCLUDED_HINT"):
+        if key not in (r["excludedViewTexts"] or []):
+            p.append(tag + f"제외 뷰에 {key}가 없다 — F12·M15 통일 문구가 이 화면의 요구다")
+    if r["excludedRowNames"] != ["Excluded One", "Excluded Two"] or r["includeButtons"] != 2:
+        p.append(tag + f"제외 행이 봉투대로 안 그려졌다(names={r['excludedRowNames']} "
+                       f"buttons={r['includeButtons']})")
+    if len(r["excludedRowMeta"] or []) != 1:
+        p.append(tag + f"제외 날짜 줄이 {len(r['excludedRowMeta'] or [])}개다(라벨이 있는 1건만) — "
+                       "빈 값이면 그 줄을 그리지 않는다")
+    if r["excludedViewCards"]:
+        p.append(tag + f"제외 뷰에 후보 카드가 {r['excludedViewCards']}개 보인다 — 뷰 전환이 아니라 "
+                       "덧그리기다")
+    if r["includeCalls"][:1] != ["900001"] or r["includeAddGameCalls"]:
+        p.append(tag + f"★[다시 포함]이 한 버튼 한 쓰기가 아니다(include={r['includeCalls']} "
+                       f"addGame={r['includeAddGameCalls']}) — 재포함은 **등록이 아니다**")
+    if not r["includedNote"] or "Excluded One" not in r["includedNote"][0]:
+        p.append(tag + f"★재포함 note가 없거나 대상을 말하지 않는다: {r['includedNote']} — "
+                       "F11·F13: 다음 경로를 병기하지 않으면 「포함했는데 왜 그대로냐」가 된다")
+    if r["includeReloads"] != 1 or r["includeMutations"] != 1:
+        p.append(tag + f"재포함 뒤 재조회·통지가 빠졌다(reload={r['includeReloads']} "
+                       f"mutate={r['includeMutations']})")
+    if r["excludedRowsAfterInclude"] != 1:
+        p.append(tag + f"재포함했는데 목록이 안 줄었다({r['excludedRowsAfterInclude']}행 남음)")
+    if not r["excludedEmptyText"]:
+        p.append(tag + "제외 목록이 비었는데 빈 목록 문구가 없다 — 화면이 아무 말도 안 한다")
+    if not r["backToMain"]:
+        p.append(tag + "[← 뒤로]로 기본 뷰에 못 돌아온다")
+
+    # ═══ ⑫ GP#10 선택 즉시 등록 전환 ══════════════════════════════════════════
+    if not r["ambiguousHasShowButton"]:
+        p.append(tag + "애매한 게임에 후보 펼침 버튼이 없다")
+    if len(r["candidateFiles"] or []) != 3 or len(r["candidatePaths"] or []) != 3:
+        p.append(tag + f"후보를 펼쳤는데 파일명·경로가 안 나온다(files={r['candidateFiles']} "
+                       f"paths={r['candidatePaths']}) — M4: 파일명과 경로를 갈라 보여 준다")
+    if r["candidateTierTexts"] != 3:
+        p.append(tag + f"후보의 tier 설명이 {r['candidateTierTexts']}개다(후보 3개 = 3) — "
+                       "고를 근거를 화면에서 지웠다")
+    if r["candLabelsInitial"] != ["DISCOVER_CHOOSE"] * 3:
+        p.append(tag + f"펼친 직후 후보 버튼이 [선택]이 아니다: {r['candLabelsInitial']}")
+    if r["addCallsAfterFirstPress"] != 0:
+        p.append(tag + f"★1압에서 등록 RPC가 {r['addCallsAfterFirstPress']}회 나갔다 — "
+                       "「두 번의 의도적 누름」 원칙 위반(포커스·1탭으로 등록되면 안 된다)")
+    if r["candLabelsAfterFirst"] != ["DISCOVER_CANDIDATE_ADD", "DISCOVER_CHOOSE", "DISCOVER_CHOOSE"]:
+        p.append(tag + f"★1압 뒤 **같은 자리**가 [이 파일로 추가]로 안 바뀐다: "
+                       f"{r['candLabelsAfterFirst']} (GP#10)")
+    if r["addButtonsBeforeChoose"] != 0 or r["addButtonsAfterChoose"] != 0:
+        p.append(tag + f"★목록 끝에 별도 [추가] 버튼이 있다(before={r['addButtonsBeforeChoose']} "
+                       f"after={r['addButtonsAfterChoose']}) — GP#10에서 제거된 이동 낭비다")
+    if r["candLabelsAfterOther"] != ["DISCOVER_CHOOSE", "DISCOVER_CHOOSE", "DISCOVER_CANDIDATE_ADD"]:
+        p.append(tag + f"다른 후보를 골랐는데 전환이 안 옮겨간다: {r['candLabelsAfterOther']}")
+    if r["addCallsAfterOtherPress"] != 0:
+        p.append(tag + "선택을 옮기는 것만으로 등록 RPC가 나갔다")
+    if r["addCallsAfterSecondPress"] != 1:
+        p.append(tag + f"2압에서 등록이 1회 나가지 않았다({r['addCallsAfterSecondPress']}회)")
+    if r["addPathSecondPress"] != r["expectedCandPath"]:
+        p.append(tag + f"★2압이 **고른 후보의 경로**로 등록하지 않았다\n"
+                       f"      보낸 것: {r['addPathSecondPress']}\n"
+                       f"      골랐던 것: {r['expectedCandPath']}")
+    if r["secondPressToken"] is not None or r["secondPressModals"]:
+        p.append(tag + f"2압 등록이 토큰을 지어냈거나 모달을 띄웠다"
+                       f"(token={r['secondPressToken']!r} modal={r['secondPressModals']})")
+
+    # ═══ 조회 실패 — 모르는 것을 없다고 말하지 않는다 ═════════════════════════
+    fails = r.get("failTexts") or []
+    if not any(x.startswith("REGISTRY_UNREADABLE") for x in fails):
+        p.append(tag + f"조회 실패 사유를 화면이 말하지 않는다: {fails}")
+    if any(x.startswith("DISCOVER_NONE") for x in fails):
+        p.append(tag + f"★조회에 실패했는데 「탐지된 것이 없다」고 단언한다: {fails}")
+    if any(x in ("DISCOVER_SCANNING", "LOADING") for x in fails):
+        p.append(tag + f"★조회가 실패했는데 화면은 아직 「훑는 중」이라고 말한다: {fails} — "
+                       "그 문장은 영영 안 바뀐다(한 상태에 한 문장)")
     return p
+
+
+# ── 음성 대조군 ───────────────────────────────────────────────────────────────
+#
+# 주입 방식을 **하나로** 통일한다(치환/이동 두 갈래를 각각 다루면 목록이 늘 때마다 분기가 는다).
+# 각 항목은 `(설명, 대상 파일, 변환 함수)`이고, 변환이 실패하면 검사가 **스스로 무효를 선언**한다.
+def sub(pattern, replacement):
+    def apply(text):
+        out, n = re.subn(pattern, replacement, text, count=1)
+        return out if n == 1 else None
+    return apply
+
+
+def move_after(block_pattern, anchor):
+    """블록을 잘라 **뒤쪽 앵커 다음**으로 옮긴다 — 순서 요구(GP#7·GP#8)의 음성 대조군."""
+    def apply(text):
+        m = re.search(block_pattern, text, re.S)
+        if not m:
+            return None
+        rest = text[:m.start()] + text[m.end():]
+        at = rest.find(anchor, m.start())
+        if at < 0:
+            return None
+        at += len(anchor)
+        return rest[:at] + "\n" + m.group(0) + rest[at:]
+    return apply
+
+
+BYPASSES = [
+    # 앵커는 액션 줄 **안쪽**의 끝이다 — `</Focusable>`을 앵커로 쓰면 버튼이 Focusable 밖으로
+    # 나가 「도달 불가」로 잡히고, 그러면 순서 판정이 일했는지 알 수 없다(대조군이 다른 것을 잰다).
+    ("GP#7 액션 줄 순서를 뒤집음([모두 추가]가 먼저)", "DiscoverPopup.tsx",
+     move_after(r"<DialogButton disabled=\{busy\} onClick=\{\(\) => reload\(\)\}.*?</DialogButton>",
+                ") : null}")),
+    ("GP#8 제외 진입을 목록 아래로 옮김", "DiscoverPopup.tsx",
+     move_after(r"<Focusable>\s*<DialogButton\s+disabled=\{busy \|\| excluded\.length === 0\}.*?</Focusable>",
+                "</PopupScrollList>")),
+    ("제외 0건인데 진입 버튼을 활성으로", "DiscoverPopup.tsx",
+     sub(r"disabled=\{busy \|\| excluded\.length === 0\}", "disabled={busy}")),
+    ("L3 숨김 병기를 지움", "DiscoverPopup.tsx",
+     sub(r"\{hiddenN > 0 \? <div style=\{META_STYLE\}>\{t\(\"DISCOVER_HIDDEN_NOTE\", \{ n: hiddenN \}\)\}</div> : null\}",
+         "{null}")),
+    ("§9-③ 등록 note 분기를 없앰(항상 짧은 안내)", "DiscoverPopup.tsx",
+     sub(r"setNote\(res\.data\.backups > 0\s*\n\s*\? t\(\"DISCOVER_ADDED_HAS_BACKUPS\"[^;]*?\);",
+         'setNote(t("DISCOVER_ADDED", { name: res.data.name }));')),
+    ("GP#10 1압에서 곧바로 등록(두 번의 의도적 누름 위반)", "DiscoverPopup.tsx",
+     sub(r"if \(chosen === cand\.path\) onAdd\(entry, cand\.path\);\s*\n\s*else onChoose\(entry, cand\.path\);",
+         "onAdd(entry, cand.path);")),
+    ("GP#10 전환 없음(라벨이 [선택] 고정)", "DiscoverPopup.tsx",
+     sub(r"\{t\(chosen === cand\.path \? \"DISCOVER_CANDIDATE_ADD\" : \"DISCOVER_CHOOSE\"\)\}",
+         '{t("DISCOVER_CHOOSE")}')),
+    ("재포함이 등록까지 함(한 버튼 한 쓰기 위반)", "DiscoverPopup.tsx",
+     sub(r"setNote\(t\(\"DISCOVER_INCLUDED_NOTE\", \{ name: row\.name \}\)\);",
+         'setNote(t("DISCOVER_INCLUDED_NOTE", { name: row.name }));\n'
+         '            void register(row.appid, "/lib/steamapps/compatdata/1/pfx/a.ini", row.name);')),
+    ("재포함 뒤 재조회 없음(목록이 낡는다)", "DiscoverPopup.tsx",
+     sub(r"// 제외 목록과 후보 목록이 \*\*함께\*\* 바뀐다 — 봉투를 통째로 다시 읽는다\(§4-F\)\.\s*\n\s*reload\(\);",
+         "")),
+    ("상주 [파일 직접 고르기]를 화면에서 숨김", "DiscoverPopup.tsx",
+     sub(r"onClick=\{\(\) => \{ void pickManual\(\); \}\} style=\{PICK_BUTTON_STYLE\}",
+         'onClick={() => { void pickManual(); }} style={{ ...PICK_BUTTON_STYLE, display: "none" }}')),
+    ("행별 [파일 직접 고르기]를 없앰(S-01 보존 파괴)", "DiscoverPopup.tsx",
+     sub(r"<DialogButton disabled=\{busy\} onClick=\{\(\) => onPick\(entry\)\} style=\{ROW_PICK_STYLE\}>\s*\n\s*\{t\(\"DISCOVER_PICK_FILE\"\)\}\s*\n\s*</DialogButton>",
+         "")),
+    ("확신 1탭이 선택기를 엶(모달 없이 1탭 위반)", "DiscoverPopup.tsx",
+     sub(r"onClick=\{\(\) => onAdd\(entry, entry\.best \? entry\.best\.path : \"\"\)\}",
+         "onClick={() => onPick(entry)}")),
+    ("등록 1차 호출에 토큰을 지어냄", "DiscoverPopup.tsx",
+     sub(r"return addGame\(appid, path, name, token\)",
+         'return addGame(appid, path, name, token ?? "MADE-UP-TOKEN")')),
+    ("확정 시 받은 토큰이 아닌 값을 되돌림", "DiscoverPopup.tsx",
+     sub(r"void register\(appid, path, name, p\.confirm_token\);",
+         'void register(appid, path, name, "SOMETHING-ELSE");')),
+    ("「등록된 게임 숨기기」 기본값을 끔", "DiscoverPopup.tsx",
+     sub(r"const \[hideRegistered, setHideRegistered\] = useState\(true\);",
+         "const [hideRegistered, setHideRegistered] = useState(false);")),
+    ("등록이 거부됐는데 목록을 다시 읽음", "DiscoverPopup.tsx",
+     sub(r"setNote\(tCode\(res\.code, \"DISCOVER_ADD_FAILED\"\)\);\s*\n\s*return;",
+         'setNote(tCode(res.code, "DISCOVER_ADD_FAILED"));\n              reload();\n              return;')),
+    ("등록 성공을 QAM에 안 알림", "DiscoverPopup.tsx",
+     sub(r": t\(\"DISCOVER_ADDED\", \{ name: res\.data\.name \}\)\);\s*\n\s*reload\(\);\s*\n\s*onMutate\?\.\(\);",
+         ': t("DISCOVER_ADDED", { name: res.data.name }));\n            reload();')),
+]
 
 
 def main():
@@ -302,21 +508,56 @@ def main():
         return 1
 
     problems = check_no_typing() + check_picker_pitfalls()
+    baseline = None
     for n in (12, 500):                               # 이 기기 규모 / 설계 상한(설치 500게임)
-        r, err = run(n)
+        r, err = run_probe(n)
         if r is None:
             print(f"FAIL — 프로브 실행 실패(N={n}): {err}")
             return 1
+        if baseline is None:
+            baseline = r
         problems += check(r, n)
         print(f"N={n:3d}: 전체 {n}행 / 등록됨 {r['registeredCount']}개 → 기본 {r['rowsDefault']}행 · "
               f"확신 일괄 {r['bulkExpectedN']}개 · 상호작용 {r['interactiveSeen']}개 · "
               f"unhandled {r['unhandledRejections']}건")
+    print(f"  액션 줄 순서: 다시검색={baseline['rescanIndex']} 일괄={baseline['bulkIndex']} "
+          f"제외={baseline['excludedIndex']} 첫카드={baseline['firstCardIndex']}")
+    print(f"  GP#10: 초기={baseline['candLabelsInitial']} → 1압={baseline['candLabelsAfterFirst']} "
+          f"→ 다른 후보={baseline['candLabelsAfterOther']} (등록 RPC {baseline['addCallsAfterSecondPress']}회)")
+    print(f"  제외 뷰: 행={baseline['excludedRowNames']} include={baseline['includeCalls']} "
+          f"재조회={baseline['includeReloads']} · §9-③ note={baseline['backupsNote']}")
 
     if problems:
         print("\nFAIL")
         for p in problems:
             print("  " + p)
         return 1
+
+    # ── 음성 대조군: 알려진 위반이 지금도 잡히는가 ─────────────────────────────
+    for label, target, transform in BYPASSES:
+        source = (ROOT / "src" / target).read_text(encoding="utf-8")
+        injected = transform(source)
+        if injected is None or injected == source:
+            # 주입이 안 됐는데 "통과"로 읽는 것이 이 프로젝트에서 세 번 난 사고다.
+            print(f"FAIL — 음성 대조군 주입 실패({label}): 대상 식을 못 찾았다. 검사가 무효다.")
+            return 1
+        with tempfile.TemporaryDirectory() as tmp:
+            case = pathlib.Path(tmp) / "src"
+            shutil.copytree(ROOT / "src", case)
+            (case / target).write_text(injected, encoding="utf-8")
+            control, err = run_probe(12, case)
+            if control is None:
+                print(f"FAIL — 음성 대조군 프로브 실행 실패({label}): {err}")
+                return 1
+            caught = check(control, 12)
+            if not caught:
+                print(f"FAIL — 위반을 주입했는데 통과했다: {label}")
+                print("       **이 테스트는 그 위반에 대해 무효다.**")
+                return 1
+            # 몇 개의 판정이 걸렸는지도 적는다 — 의도한 판정 말고 **다른 판정만** 걸리는 경우가
+            # 있고(파급 효과), 그때 어느 쪽이 일했는지는 이 수와 첫 줄로 가늠한다.
+            print(f"  음성 대조군 검출({len(caught)}건): {label} → {caught[0].splitlines()[0][:104]}")
+
     print("PASS")
     return 0
 
