@@ -207,7 +207,10 @@ export function GamesPopup({
   onMutate,
   closeModal,
 }: {
-  /** 변이 성공을 QAM에 알린다(§4-F). 화면 갱신은 **이 팝업이 스스로** 한다 — 다른 일이다. */
+  /**
+   * 변이를 QAM에 알린다(§4-F ③ 개정 — 확정 실행이면 **성공·실패를 가리지 않는다**: 엔진은
+   * 쓴 뒤에 거부할 수 있다). 화면 갱신은 **이 팝업이 스스로** 한다 — 다른 일이다.
+   */
   onMutate?: () => void;
   /** `showModal`이 최상위 엘리먼트에 주입한다. */
   closeModal?: () => void;
@@ -222,7 +225,9 @@ export function GamesPopup({
   const [backups, setBackups] = useState<BackupRow[] | null>(null);
 
   const load = useCallback(() => getOverview(true), []);
-  const { data, note, setNote, busy, setBusy, reload } = usePopupData<Overview>(load, "LOAD_FAILED");
+  /* ★ 변이 통지·재조회·busy는 **훅 한 곳**을 지난다(§4-F 개정) — 이 파일에는 그 배선이 없다. */
+  const { data, note, setNote, busy, reload, runMutation, runQuery } =
+    usePopupData<Overview>(load, "LOAD_FAILED", onMutate);
   const { gate, renderBody } = usePopupGate();
 
   const games = data?.games ?? [];
@@ -231,13 +236,11 @@ export function GamesPopup({
   /** 백업 뷰의 목록을 **다시 읽는다**(D-07 ⓐ). 실패해도 화면은 남는다 — note가 말한다. */
   const refreshBackups = useCallback(
     (appid: string) => {
-      listBackups(appid).then(
-        (res) => {
-          if (res.ok) setBackups(res.data.backups);
-          else setNote(tCode(res.code, "BACKUP_LIST_FAILED"));
-        },
-        () => setNote(tCode("UNEXPECTED", "BACKUP_LIST_FAILED")),
-      );
+      // 읽기 전용이다 — busy만 같이 쓰고 재조회·통지는 붙지 않는다.
+      void runQuery(() => listBackups(appid), "BACKUP_LIST_FAILED", (res) => {
+        if (res.ok) setBackups(res.data.backups);
+        else setNote(tCode(res.code, "BACKUP_LIST_FAILED"));
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -252,27 +255,20 @@ export function GamesPopup({
    */
   const runApply = useCallback(
     (game: OverviewGame, profile: Profile) => {
-      setBusy(true);
-      applyProfile(game.appid, profile)
-        .then(
-          (res) => {
-            const checkedIn = res.ok
-              ? res.data.checked_in
-              : ((res.params as unknown as { checked_in?: Profile | null }).checked_in ?? null);
-            const base = res.ok
-              ? t("APPLY_ONE_OK", { profile: t(profileKey(profile)) })
-              : tCode(res.code, "APPLY_FAILED");
-            setNote(checkedIn ? `${base} ${t("CHECKIN_ONE", { profile: t(profileKey(checkedIn)) })}` : base);
-            reload();
-            // 체크인만 일어난 실패도 **디스크·백업이 바뀐 변이**다 — QAM에 알린다.
-            if (res.ok || checkedIn) onMutate?.();
-          },
-          () => setNote(tCode("UNEXPECTED", "APPLY_FAILED")),
-        )
-        .finally(() => setBusy(false));
+      // 확정 실행이다 — 재조회·변경 통지는 **성공·실패를 가리지 않고** 훅이 붙인다(§4-F ③).
+      // 체크인만 일어난 실패가 정확히 그 이유다: 디스크·백업이 이미 바뀌었을 수 있다.
+      void runMutation(() => applyProfile(game.appid, profile), "APPLY_FAILED", (res) => {
+        const checkedIn = res.ok
+          ? res.data.checked_in
+          : ((res.params as unknown as { checked_in?: Profile | null }).checked_in ?? null);
+        const base = res.ok
+          ? t("APPLY_ONE_OK", { profile: t(profileKey(profile)) })
+          : tCode(res.code, "APPLY_FAILED");
+        setNote(checkedIn ? `${base} ${t("CHECKIN_ONE", { profile: t(profileKey(checkedIn)) })}` : base);
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [reload, onMutate],
+    [],
   );
 
   /**
@@ -283,36 +279,27 @@ export function GamesPopup({
    *   note에 병기한다 — 저장은 됐지만 값이 게임 종료 시 달라질 수 있다는 사실이다.
    */
   const runSave = useCallback(
-    (appid: string, profile: Profile, token?: string) => {
-      setBusy(true);
-      return saveProfile(appid, profile, token)
-        .then(
-          (res) => {
-            if (res.ok) {
-              const ok = t("SAVE_OK", { profile: t(profileKey(profile)) });
-              setNote(res.data.warning ? `${ok} ${res.data.warning}` : ok);
-              reload();
-              onMutate?.();
-              return;
-            }
-            if (res.code === "CONFIRM_REQUIRED") {
-              const p = res.params as unknown as ConfirmParams;
-              gate(
-                makeSaveConfirmSpec(p, profile, () => { void runSave(appid, profile, p.confirm_token); }),
-                // 토큰이 안 돌아가면 저장은 일어나지 않는다 — "저장하지 않았습니다"가 참이다.
-                "SAVE_CONFIRM_MODAL_FAILED",
-                setNote,
-              );
-              return;
-            }
-            setNote(tCode(res.code, "SAVE_FAILED"));
-          },
-          () => setNote(tCode("UNEXPECTED", "SAVE_FAILED")),
-        )
-        .finally(() => setBusy(false));
-    },
+    (appid: string, profile: Profile, token?: string) =>
+      runMutation(() => saveProfile(appid, profile, token), "SAVE_FAILED", (res) => {
+        if (res.ok) {
+          const ok = t("SAVE_OK", { profile: t(profileKey(profile)) });
+          setNote(res.data.warning ? `${ok} ${res.data.warning}` : ok);
+          return;
+        }
+        if (res.code === "CONFIRM_REQUIRED") {
+          const p = res.params as unknown as ConfirmParams;
+          gate(
+            makeSaveConfirmSpec(p, profile, () => { void runSave(appid, profile, p.confirm_token); }),
+            // 토큰이 안 돌아가면 저장은 일어나지 않는다 — "저장하지 않았습니다"가 참이다.
+            "SAVE_CONFIRM_MODAL_FAILED",
+            setNote,
+          );
+          return;
+        }
+        setNote(tCode(res.code, "SAVE_FAILED"));
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [reload, onMutate, gate],
+    [gate],
   );
 
   /**
@@ -321,61 +308,55 @@ export function GamesPopup({
    *
    * ★★ **성공 뒤 재조회**(D-07): 복원은 disk 대피본을 하나 새로 만든다(`engine.py:705-709`) —
    *   백업 목록의 행 수·순서가 그 자리에서 바뀌고, 링이 차 있으면 가장 오래된 행이 사라진다.
-   *   화면을 그대로 두면 **방금 사라진 백업의 [복원] 버튼**이 남는다. 그래서 백업 목록과
-   *   overview를 각각 다시 읽는다. `already`는 아무것도 안 바꿨으므로 재조회하지 않는다.
+   *   화면을 그대로 두면 **방금 사라진 백업의 [복원] 버튼**이 남는다. 그래서 백업 목록을
+   *   여기서 다시 읽고(overview 재조회·통지는 훅이 붙인다).
+   * ★ `already`도 **확정 실행의 응답**이라 overview 재조회·통지가 따라온다(§4-F ③ 개정):
+   *   무쓰기 여부를 프론트가 outcome으로 다시 판정하면, 그 판정이 백엔드와 갈리는 날 화면만
+   *   낡는다. 백업 목록은 링이 안 밀렸으므로 여기서 다시 읽지 않는다.
    */
   const runRestore = useCallback(
-    (game: OverviewGame, row: BackupRow, token?: string) => {
-      setBusy(true);
-      return restoreBackup(game.appid, row.backup_id, token)
-        .then(
-          (res) => {
-            if (res.ok) {
-              if (res.data.outcome === "already") {
-                // 실패가 아니다 — 되돌릴 것이 없었다는 뜻이고, 쓰기도 링 소모도 0이다.
-                setNote(t("RESTORE_ALREADY"));
-                return;
-              }
-              const stamp = res.data.stamp_label || res.data.backup_id;
-              setNote(t("RESTORE_OK", { stamp }));
-              refreshBackups(game.appid);
-              reload();
-              onMutate?.();
-              const kind = res.data.kind;
-              if (kind === "profile_dock" || kind === "profile_internal") {
-                const profile: Profile = kind === "profile_dock" ? "dock" : "internal";
-                gate(
-                  makeRestoreFollowUpSpec(profile, () => { void runSave(game.appid, profile); }),
-                  // ★ 여기서는 **복원이 이미 끝났다.** "아무것도 안 했다"고 말하면 거짓이다 —
-                  //   못 한 것은 후속 제안뿐이고, 그 문구가 남은 길을 알려 준다.
-                  "RESTORE_FOLLOWUP_MODAL_FAILED",
-                  setNote,
-                );
-                return;
-              }
-              // `disk`·`unknown`은 어느 슬롯의 내용인지 추론할 근거가 없다 — 안내만 한다.
-              setNote(t("RESTORE_OK_MANUAL", { stamp }));
-              return;
-            }
-            if (res.code === "CONFIRM_REQUIRED") {
-              const p = res.params as unknown as RestoreConfirmParams;
-              gate(
-                makeRestoreConfirmSpec(p, () => { void runRestore(game, row, p.confirm_token); }),
-                "RESTORE_MODAL_FAILED",
-                setNote,
-              );
-              return;
-            }
-            // GAME_RUNNING(조기 거부)·BACKUP_FILE_MISSING(그 사이 prune) 등 — tCode 단일 관문.
-            setNote(tCode(res.code, "RESTORE_FAILED"));
-            refreshBackups(game.appid);
-          },
-          () => setNote(tCode("UNEXPECTED", "RESTORE_FAILED")),
-        )
-        .finally(() => setBusy(false));
-    },
+    (game: OverviewGame, row: BackupRow, token?: string) =>
+      runMutation(() => restoreBackup(game.appid, row.backup_id, token), "RESTORE_FAILED", (res) => {
+        if (res.ok) {
+          if (res.data.outcome === "already") {
+            // 실패가 아니다 — 되돌릴 것이 없었다는 뜻이고, 쓰기도 링 소모도 0이다.
+            setNote(t("RESTORE_ALREADY"));
+            return;
+          }
+          const stamp = res.data.stamp_label || res.data.backup_id;
+          setNote(t("RESTORE_OK", { stamp }));
+          refreshBackups(game.appid);
+          const kind = res.data.kind;
+          if (kind === "profile_dock" || kind === "profile_internal") {
+            const profile: Profile = kind === "profile_dock" ? "dock" : "internal";
+            gate(
+              makeRestoreFollowUpSpec(profile, () => { void runSave(game.appid, profile); }),
+              // ★ 여기서는 **복원이 이미 끝났다.** "아무것도 안 했다"고 말하면 거짓이다 —
+              //   못 한 것은 후속 제안뿐이고, 그 문구가 남은 길을 알려 준다.
+              "RESTORE_FOLLOWUP_MODAL_FAILED",
+              setNote,
+            );
+            return;
+          }
+          // `disk`·`unknown`은 어느 슬롯의 내용인지 추론할 근거가 없다 — 안내만 한다.
+          setNote(t("RESTORE_OK_MANUAL", { stamp }));
+          return;
+        }
+        if (res.code === "CONFIRM_REQUIRED") {
+          const p = res.params as unknown as RestoreConfirmParams;
+          gate(
+            makeRestoreConfirmSpec(p, () => { void runRestore(game, row, p.confirm_token); }),
+            "RESTORE_MODAL_FAILED",
+            setNote,
+          );
+          return;
+        }
+        // GAME_RUNNING(조기 거부)·BACKUP_FILE_MISSING(그 사이 prune) 등 — tCode 단일 관문.
+        setNote(tCode(res.code, "RESTORE_FAILED"));
+        refreshBackups(game.appid);
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [reload, onMutate, gate, refreshBackups, runSave],
+    [gate, refreshBackups, runSave],
   );
 
   /**
@@ -383,59 +364,43 @@ export function GamesPopup({
    * **인접 행**에 착지시킨다(§4-B) — 방금 지운 자리에 포커스를 두면 어디로 갔는지 알 수 없다.
    */
   const runDelete = useCallback(
-    (appid: string, token?: string) => {
-      setBusy(true);
-      return deleteGame(appid, token)
-        .then(
-          (res) => {
-            if (res.ok) {
-              setNote(t("DELETE_OK", { name: res.data.name }));
-              setView({ kind: "list" });
-              reload();
-              onMutate?.();
-              return;
-            }
-            if (res.code === "CONFIRM_REQUIRED") {
-              // ⚠️ 흐름 신호다 — 오류 문구로 그리지 않는다. TOCTOU면 갱신된 params로 다시 묻는다.
-              const p = res.params as unknown as DeleteConfirmParams;
-              gate(
-                makeDeleteConfirmSpec(p, () => { void runDelete(appid, p.confirm_token); }),
-                // 토큰이 없으면 아무것도 지워지지 않는다 — 이 문구가 참인 유이한 자리(+초기화).
-                "MANAGE_MODAL_FAILED",
-                setNote,
-              );
-              return;
-            }
-            // `DELETE_FAILED`(부분 삭제)도 여기로 온다 — 다시 해제하면 남은 것부터 이어서 지운다.
-            setNote(tCode(res.code, "DELETE_ACTION_FAILED"));
-            reload();
-          },
-          () => setNote(tCode("UNEXPECTED", "DELETE_ACTION_FAILED")),
-        )
-        .finally(() => setBusy(false));
-    },
+    (appid: string, token?: string) =>
+      runMutation(() => deleteGame(appid, token), "DELETE_ACTION_FAILED", (res) => {
+        if (res.ok) {
+          setNote(t("DELETE_OK", { name: res.data.name }));
+          setView({ kind: "list" });
+          return;
+        }
+        if (res.code === "CONFIRM_REQUIRED") {
+          // ⚠️ 흐름 신호다 — 오류 문구로 그리지 않는다. TOCTOU면 갱신된 params로 다시 묻는다.
+          const p = res.params as unknown as DeleteConfirmParams;
+          gate(
+            makeDeleteConfirmSpec(p, () => { void runDelete(appid, p.confirm_token); }),
+            // 토큰이 없으면 아무것도 지워지지 않는다 — 이 문구가 참인 유이한 자리(+초기화).
+            "MANAGE_MODAL_FAILED",
+            setNote,
+          );
+          return;
+        }
+        // `DELETE_FAILED`(부분 삭제)도 여기로 온다 — 다시 해제하면 남은 것부터 이어서 지운다.
+        // 그 갈래는 **일부가 이미 지워진** 변이라, 재조회·통지가 성공과 같이 따라온다(§4-F ③).
+        setNote(tCode(res.code, "DELETE_ACTION_FAILED"));
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [reload, onMutate, gate],
+    [gate],
   );
 
   /** 백업 뷰로 — 목록을 **먼저 받아** 연다(빈 창이 떴다가 채워지는 중간 상태를 만들지 않는다). */
   const openBackups = useCallback(
-    (game: OverviewGame) => {
-      setBusy(true);
-      return listBackups(game.appid)
-        .then(
-          (res) => {
-            if (!res.ok) {
-              setNote(tCode(res.code, "BACKUP_LIST_FAILED"));
-              return;
-            }
-            setBackups(res.data.backups);
-            setView({ kind: "backups", appid: game.appid });
-          },
-          () => setNote(tCode("UNEXPECTED", "BACKUP_LIST_FAILED")),
-        )
-        .finally(() => setBusy(false));
-    },
+    (game: OverviewGame) =>
+      runQuery(() => listBackups(game.appid), "BACKUP_LIST_FAILED", (res) => {
+        if (!res.ok) {
+          setNote(tCode(res.code, "BACKUP_LIST_FAILED"));
+          return;
+        }
+        setBackups(res.data.backups);
+        setView({ kind: "backups", appid: game.appid });
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );

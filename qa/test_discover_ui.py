@@ -23,7 +23,8 @@
        되돌린다. 취소는 아무 일도 없다. 백엔드가 안 묻는 경로(자동 후보 1탭)에는 확인창이 없다.
     ⑦ **선택기 취소가 조용하다**(등록 0·문구 0·모달 0·unhandled 0) + `filepicker.ts` 실물
        (취소를 null로 삼키고, `realpath`가 아니라 `path`를 넘긴다).
-    ⑧ **등록 성공 = 자체 재조회 + 변경 통지**(§4-F). 전체화면 시절의 「탭을 오가면 현황이 다시
+    ⑧ **등록 = 자체 재조회 + 변경 통지**(§4-F ③ 개정 — 성공·거부 무관. 무쓰기가 보장된
+       응답은 `CONFIRM_REQUIRED` 하나뿐이다). 전체화면 시절의 「탭을 오가면 현황이 다시
        읽는가」가 팝업에서 갖는 형태다 — 낡은 숫자가 화면에 남는 사고의 재발 방지.
     ⑨ **§6-B 제외한 게임 뷰**: 진입·통일 문구·행(빈 날짜면 그 줄 없음)·[다시 포함]이
        **한 버튼 한 쓰기**(등록 RPC 0회)·note가 **다음 경로를 병기**·재조회로 목록이 줄고·
@@ -248,15 +249,19 @@ def check(r, n):                                                   # noqa: C901 
         p.append(tag + ".sav를 골랐는데 거부 사유가 화면에 안 뜬다 ★P6 완료 기준 위반")
     if r["savAddedText"]:
         p.append(tag + ".sav가 거부됐는데 '추가했습니다'가 떴다 — 화면이 거짓말을 한다")
-    if r["savDiscoverReloads"] != 1 or r["savMutations"]:
-        p.append(tag + f"등록이 거부됐는데 목록을 다시 부르거나 변경을 알렸다"
-                       f"(reload={r['savDiscoverReloads']} mutate={r['savMutations']}) — "
-                       "실패를 성공처럼 다룬다")
+    # ★ P15-B §4-F ③ 개정: 등록은 **확정 실행**이라 거부돼도 다시 읽고 알린다(reload 2 = 마운트+1).
+    #   거부 봉투는 "쓰지 않았다"를 보장하지 않는다 — 무쓰기 보장은 `CONFIRM_REQUIRED` 하나뿐이다.
+    if r["savDiscoverReloads"] != 2 or r["savMutations"] != 1:
+        p.append(tag + f"등록이 거부됐는데 목록을 다시 읽지 않았다"
+                       f"(reload={r['savDiscoverReloads']} mutate={r['savMutations']}, 기대 2·1) — "
+                       "확정 실행은 성공·실패를 가리지 않는다(§4-F ③)")
+    if r["savAddedText"]:
+        p.append(tag + "거부됐는데 성공 문구가 떴다")
     if r["savModals"]:
         p.append(tag + "거부된 등록에 확인 모달이 떴다")
-    if not r["alreadyShown"] or r["alreadyModals"] or r["alreadyReloads"] != 1:
+    if not r["alreadyShown"] or r["alreadyModals"] or r["alreadyReloads"] != 2:
         p.append(tag + f"이미 등록된 appid 거부의 처리가 틀렸다(표시={r['alreadyShown']} "
-                       f"모달={r['alreadyModals']} 재조회={r['alreadyReloads']}) — QA R2")
+                       f"모달={r['alreadyModals']} 재조회={r['alreadyReloads']}, 기대 2) — QA R2")
 
     # ═══ ⑦ 취소가 조용하다 + filepicker 실물 ══════════════════════════════════
     if r["cancelAddCalls"] or r["cancelModals"] or r["cancelNoteTexts"]:
@@ -473,8 +478,8 @@ BYPASSES = [
          'setNote(t("DISCOVER_INCLUDED_NOTE", { name: row.name }));\n'
          '            void register(row.appid, "/lib/steamapps/compatdata/1/pfx/a.ini", row.name);')),
     ("재포함 뒤 재조회 없음(목록이 낡는다)", "DiscoverPopup.tsx",
-     sub(r"// 제외 목록과 후보 목록이 \*\*함께\*\* 바뀐다 — 봉투를 통째로 다시 읽는다\(§4-F\)\.\s*\n\s*reload\(\);",
-         "")),
+     sub(r"runMutation\(\(\) => includeGame\(row\.appid\), \"DISCOVER_INCLUDE_FAILED\", \(res\) => \{",
+         "includeGame(row.appid).then((res) => {")),
     ("상주 [파일 직접 고르기]를 화면에서 숨김", "DiscoverPopup.tsx",
      sub(r"onClick=\{\(\) => \{ void pickManual\(\); \}\} style=\{PICK_BUTTON_STYLE\}",
          'onClick={() => { void pickManual(); }} style={{ ...PICK_BUTTON_STYLE, display: "none" }}')),
@@ -485,20 +490,20 @@ BYPASSES = [
      sub(r"onClick=\{\(\) => onAdd\(entry, entry\.best \? entry\.best\.path : \"\"\)\}",
          "onClick={() => onPick(entry)}")),
     ("등록 1차 호출에 토큰을 지어냄", "DiscoverPopup.tsx",
-     sub(r"return addGame\(appid, path, name, token\)",
-         'return addGame(appid, path, name, token ?? "MADE-UP-TOKEN")')),
+     sub(r"addGame\(appid, path, name, token\), \"DISCOVER_ADD_FAILED\"",
+         'addGame(appid, path, name, token ?? "MADE-UP-TOKEN"), "DISCOVER_ADD_FAILED"')),
     ("확정 시 받은 토큰이 아닌 값을 되돌림", "DiscoverPopup.tsx",
      sub(r"void register\(appid, path, name, p\.confirm_token\);",
          'void register(appid, path, name, "SOMETHING-ELSE");')),
     ("「등록된 게임 숨기기」 기본값을 끔", "DiscoverPopup.tsx",
      sub(r"const \[hideRegistered, setHideRegistered\] = useState\(true\);",
          "const [hideRegistered, setHideRegistered] = useState(false);")),
-    ("등록이 거부됐는데 목록을 다시 읽음", "DiscoverPopup.tsx",
-     sub(r"setNote\(tCode\(res\.code, \"DISCOVER_ADD_FAILED\"\)\);\s*\n\s*return;",
-         'setNote(tCode(res.code, "DISCOVER_ADD_FAILED"));\n              reload();\n              return;')),
-    ("등록 성공을 QAM에 안 알림", "DiscoverPopup.tsx",
-     sub(r": t\(\"DISCOVER_ADDED\", \{ name: res\.data\.name \}\)\);\s*\n\s*reload\(\);\s*\n\s*onMutate\?\.\(\);",
-         ': t("DISCOVER_ADDED", { name: res.data.name }));\n            reload();')),
+    ("등록이 공용 문을 안 지남(거부·성공 어느 쪽도 목록이 안 바뀐다)", "DiscoverPopup.tsx",
+     sub(r"runMutation\(\(\) => addGame\(appid, path, name, token\), \"DISCOVER_ADD_FAILED\", \(res\) => \{",
+         "addGame(appid, path, name, token).then((res) => {")),
+    ("변경 통지를 훅에서 끊음(QAM이 낡은 값을 말한다)", "popup.tsx",
+     sub(r"          reload\(\);\n          notify\.current\?\.\(\);\n        \},\n        \(\) => \{",
+         "          reload();\n        },\n        () => {")),
 ]
 
 

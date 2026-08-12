@@ -260,7 +260,12 @@ function currentConfirm(ui, nested) {
     };
   }
 
-  // ═══ ③ `already` — 무쓰기라 **재조회하지 않는다** ════════════════════════
+  // ═══ ③ `already` — 백업 목록은 그대로, overview는 다시 읽는다(§4-F ③ 개정) ═
+  //
+  // ★ 백엔드 계약("`already`는 무쓰기")은 그대로다(§15-C). 바뀐 것은 **프론트가 그 사실을
+  //   어떻게 아는가**이다: 이제 무쓰기 판정은 봉투의 `CONFIRM_REQUIRED` 하나뿐이고,
+  //   `already`는 **확정 실행의 성공 응답**이라 같은 문을 지난다. 링은 안 밀렸으므로
+  //   백업 목록 재조회(`listBackups`)는 여전히 0이다.
   {
     reset();
     SCENE.outcome = "already";

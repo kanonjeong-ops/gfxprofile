@@ -17,6 +17,12 @@
      (안전한 것과 진단 가능한 것은 다른 요건이다)
   ⑤ **데이터 로드·자체 재조회**: 마운트 1회 조회 · `profile_names` 선반영(R-6) · `reload()` 재조회
      · 실패 봉투는 `tCode(failKey)` 경유
+  ⑤′ **§4-F 개정(P15-B)**: ⓐ **세대 가드**(역순 완료 시 옛 응답을 버린다) ⓑ **busy 문 하나**
+     (조회도 변이도 같은 문 · 겹친 왕복이 다 끝나야 열린다) ⓒ **확정 실행은 성공·실패 무관**
+     재조회+통지 ⓓ **무쓰기 보장은 `CONFIRM_REQUIRED` 하나**뿐(그 응답만 재조회 0) ·
+     조회(`runQuery`)는 어느 결과에도 재조회·통지가 없다.
+     ★ ⑤′만 **음성 대조군**을 함께 돈다(아래 `DOOR_BYPASSES`) — 훅 한 곳을 고치면 팝업 3종이
+       같이 바뀌는 자리라, 판정이 죽은 채 초록인 것이 가장 비싼 실패다.
   ⑥ **입력값 보존**(GP#9): 언마운트 시 스냅샷이 나가고, 그 값을 `initial`로 되돌리면 복원된다
 
 그리고 **폴백 격리**(D-05 ⑤): 오버레이가 떠 있는 동안 원 콘텐츠는 **렌더되지 않는다**
@@ -30,14 +36,115 @@
 """
 import json
 import pathlib
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PROBE = ROOT / "qa" / "popup_shell_probe.cjs"
 U1 = pathlib.Path(
     "/home/deck/ClaudeWork/GfxProfileToolV2/u1-toolchain/u1-bundle/toolchain/node-v22.23.2-linux-x64/bin/node"
 )
+
+
+
+def run_probe(src_dir=None):
+    """프로브를 돌려 봉투를 돌려준다. `src_dir`을 주면 **그 사본**을 잰다(음성 대조군)."""
+    cmd = [str(U1), str(PROBE)] + ([str(src_dir)] if src_dir else [])
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT))
+    if proc.returncode != 0:
+        return None, (proc.stderr or proc.stdout).strip().splitlines()[-1]
+    return json.loads(proc.stdout.strip().splitlines()[-1]), None
+
+
+#: ⑤′ §4-F 개정 계약. **음성 대조군이 이 함수를 그대로 다시 돌린다** —
+#: 판정과 대조군이 같은 코드를 보아야 "검사가 죽은 채 초록"이 생기지 않는다.
+def data_contract(r):                                          # noqa: C901  (판정 나열)
+    out = []
+    gen = r.get("generation") or {}
+    if gen.get("loads") != 2:
+        out.append(f"⑤′ⓐ 조회가 2회 나가지 않았다({gen.get('loads')}) — 측정 대상에 못 닿았다")
+    elif gen.get("afterNew") != "NEW" or gen.get("afterStale") != "NEW":
+        out.append(f"★⑤′ⓐ 세대 가드가 없다 — 새 응답 뒤({gen.get('afterNew')}) 옛 응답이 도착하자 "
+                   f"화면이 {gen.get('afterStale')}로 되돌아갔다. 연타·변이 뒤 자동 재조회는 겹치고, "
+                   f"먼저 나간 응답이 나중에 오면 **낡은 값이 새 값을 덮는다**")
+    if gen.get("staleNote") is not None:
+        out.append(f"⑤′ⓐ 옛 응답이 note까지 건드렸다: {gen.get('staleNote')!r}")
+    if gen.get("staleFailNote") is not None or gen.get("staleFailData") != "NEW":
+        out.append(f"★⑤′ⓐ 낡은 **실패** 응답이 반영됐다 — note={gen.get('staleFailNote')!r} "
+                   f"data={gen.get('staleFailData')} (성공한 화면 밑에 옛 실패 사유가 뜬다)")
+
+    busy = r.get("busy") or {}
+    if busy.get("onMount") is not True:
+        out.append("★⑤′ⓑ 마운트 조회 중인데 busy가 꺼져 있다 — [다시 검색] 연타가 **조회에는 "
+                   "무방비**다(P14 O1이 확인한 후퇴)")
+    if busy.get("afterLoad") is not False or busy.get("afterAll") is not False:
+        out.append(f"★⑤′ⓑ 왕복이 끝났는데 busy가 안 풀린다 — 응답 뒤 {busy.get('afterLoad')} / "
+                   f"전부 끝난 뒤 {busy.get('afterAll')} (팝업이 영구히 잠긴다)")
+    if busy.get("duringMutation") is not True:
+        out.append("⑤′ⓑ 변이 중에 busy가 안 켜진다")
+    if busy.get("whileReloadPending") is not True:
+        out.append("★⑤′ⓑ 겹친 왕복 중 **하나가 끝났다고** 문이 열렸다 — busy가 불리언이면 "
+                   "남은 조회가 도는 중에 화면이 열리고, 그 틈이 곧 예전 버그다(진행 수로 센다)")
+
+    door = r.get("door") or {}
+    want = {
+        # 확정 실행: 무쓰기가 보장된 토큰 발급만 재조회 0, 나머지는 성공·실패·예외 모두 1
+        "runMutation.ok": (1, 1), "runMutation.fail": (1, 1),
+        "runMutation.reject": (1, 1), "runMutation.token": (0, 0),
+        # 조회: 어느 결과에도 재조회·통지가 없다
+        "runQuery.ok": (0, 0), "runQuery.fail": (0, 0),
+        "runQuery.reject": (0, 0), "runQuery.token": (0, 0),
+    }
+    for key, (reloads, mutations) in want.items():
+        got = door.get(key)
+        if not got:
+            out.append(f"⑤′ⓒⓓ {key} 측정값이 없다 — 측정 대상에 못 닿았다")
+            continue
+        if (got.get("reloads"), got.get("mutations")) != (reloads, mutations):
+            out.append(f"★⑤′ⓒⓓ {key}: 재조회 {got.get('reloads')} · 통지 {got.get('mutations')}"
+                       f"(기대 {reloads}·{mutations}) — 확정 실행은 **성공·실패를 가리지 않고** 다시 읽고, "
+                       f"무쓰기가 보장된 응답은 `CONFIRM_REQUIRED` 하나뿐이다(§4-F ③ 개정)")
+    for key in ("runMutation.reject", "runQuery.reject"):
+        got = door.get(key) or {}
+        if got.get("note") != "UNEXPECTED/ACT_FAILED":
+            out.append(f"⑤′ 예기치 못한 실패의 문구가 호출부 failKey 경유가 아니다({key}): {got.get('note')!r}")
+        if got.get("results"):
+            out.append(f"⑤′ 거절인데 onResult가 불렸다({key}) — 없는 봉투를 읽게 된다")
+    return out
+
+
+#: ⑤′ 전용 음성 대조군 — 전부 **훅(popup.tsx) 한 곳**을 겨눈다(팝업엔 이 배선이 없다).
+DOOR_BYPASSES = [
+    ("세대 가드를 뺌(옛 응답이 새 화면을 덮는다)",
+     r"          // 옛 응답은 \*\*없던 일\*\*이다 — 화면은 이미 더 새 것을 알고 있다\.\n"
+     r"          if \(mine !== generation\.current\) return;\n", "",
+     "세대 가드가 없다"),
+    ("busy를 불리언으로 되돌림(겹친 왕복 중 문이 열린다)",
+     r"    inFlight\.current -= 1;\n    if \(inFlight\.current <= 0\) \{\n"
+     r"      inFlight\.current = 0;\n      setBusy\(false\);\n    \}",
+     "    inFlight.current -= 1;\n    setBusy(false);",
+     "겹친 왕복 중 **하나가 끝났다고** 문이 열렸다"),
+    ("reload()가 busy를 안 켬(조회에 무방비 — P14 O1 재발)",
+     r"    const mine = generation\.current;\n    begin\(\);", "    const mine = generation.current;",
+     "마운트 조회 중인데 busy가 꺼져 있다"),
+    ("확정 실행 **실패**에는 재조회를 안 붙임(비대칭 복원 — 이월 대장 #4)",
+     r"if \(!mutating \|\| isTokenIssue\(res\)\) return;", "if (!mutating || !res.ok) return;",
+     "runMutation.fail"),
+    ("토큰 발급에도 재조회를 붙임(무쓰기 갈래에 쓸데없는 왕복)",
+     r"if \(!mutating \|\| isTokenIssue\(res\)\) return;", "if (!mutating) return;",
+     "runMutation.token"),
+    ("조회에도 재조회를 붙임(읽기가 자기를 다시 읽는다)",
+     r"if \(!mutating \|\| isTokenIssue\(res\)\) return;", "if (isTokenIssue(res)) return;",
+     "runQuery.ok"),
+    ("거절 갈래에서 재조회·통지를 뺌(쓴 뒤에 죽으면 화면이 낡는다)",
+     r"          setNote\(tCode\(\"UNEXPECTED\", key\)\);\n          if \(!mutating\) return;\n"
+     r"          reload\(\);\n          notify\.current\?\.\(\);",
+     "          setNote(tCode(\"UNEXPECTED\", key));",
+     "runMutation.reject"),
+]
 
 
 def main():                                                    # noqa: C901  (판정 나열)
@@ -47,12 +154,11 @@ def main():                                                    # noqa: C901  (�
         print(f"FAIL — 툴체인 node가 없다: {U1}")
         return 1
 
-    proc = subprocess.run([str(U1), str(PROBE)], capture_output=True, text=True, cwd=str(ROOT))
-    if proc.returncode != 0:
+    r, err = run_probe()
+    if r is None:
         print("FAIL — 프로브가 죽었다")
-        print("  " + (proc.stderr or proc.stdout).strip().splitlines()[-1])
+        print("  " + err)
         return 1
-    r = json.loads(proc.stdout.strip().splitlines()[-1])
     problems = []
 
     def P(msg):
@@ -249,6 +355,10 @@ def main():                                                    # noqa: C901  (�
     if data["noteOnFail"] != "REGISTRY_UNREADABLE/LOAD_FAILED":
         P(f"⑤ 실패 note가 tCode(code, failKey) 경유가 아니다 — {data['noteOnFail']}")
 
+    # ═══ ⑤′ §4-F 개정 — 세대 가드·busy 문 하나·확정 실행 재조회 규칙 ══════════
+    for msg in data_contract(r):
+        P(msg)
+
     # ═══ ⑥ 입력값 보존 ═══════════════════════════════════════════════════════
     snap = r["snapshot"]
     if snap["snapshots"] != ["delete", "delete"] or snap["nameSnapshots"] != ["새 이름", "새 이름"]:
@@ -273,11 +383,39 @@ def main():                                                    # noqa: C901  (�
           f"(원 콘텐츠 미렌더={not fallback['originalContentRendered']}) · 실패 note={fail['notes']}")
     print(f"  ⑤ 조회 {data['mountCalls']}→{data['afterReloadCalls']}회 · 표시명 선반영="
           f"{data['profileNamesTaken']}회 · ⑥ 복원={snap['restoredInitial']!r}")
+    print(f"  ⑤′ 세대={r['generation']} · busy={r['busy']}")
+    print(f"  ⑤′ 문: " + " · ".join(
+        f"{k}={v['reloads']}/{v['mutations']}" for k, v in (r.get("door") or {}).items()))
     if problems:
         print("\nFAIL")
         for p in problems:
             print("  " + p)
         return 1
+
+    # ── 음성 대조군(⑤′ 전용): 알려진 위반이 지금도 잡히는가 ────────────────────
+    source = (ROOT / "src" / "popup.tsx").read_text(encoding="utf-8")
+    for label, pattern, replacement, expect in DOOR_BYPASSES:
+        with tempfile.TemporaryDirectory() as tmp:
+            case = pathlib.Path(tmp) / "src"
+            shutil.copytree(ROOT / "src", case)
+            injected, n = re.subn(pattern, replacement, source, count=1)
+            if n != 1:
+                # 주입이 안 됐는데 "통과"로 읽는 것이 이 프로젝트에서 세 번 난 사고다.
+                print(f"FAIL — 음성 대조군 주입 실패({label}): 대상 식을 못 찾았다. 검사가 무효다.")
+                return 1
+            (case / "popup.tsx").write_text(injected, encoding="utf-8")
+            control, err = run_probe(case)
+            if control is None:
+                print(f"FAIL — 음성 대조군 프로브 실행 실패({label}): {err}")
+                return 1
+            caught = data_contract(control)
+            hit = [c for c in caught if expect in c]
+            if not hit:
+                print(f"FAIL — 위반을 주입했는데 **그 판정이** 안 잡았다: {label}")
+                print(f"       기대 조각 {expect!r} / 잡힌 것: {caught}")
+                return 1
+            print(f"  음성 대조군 검출: {label} → {hit[0].splitlines()[0][:110]}")
+
     print("PASS")
     return 0
 

@@ -6,14 +6,15 @@
  * 주석을 잡았다"*였다. 골격의 계약(경계가 DialogBody **안쪽**인가 · 두 렌더러가 같은 것을
  * 그리는가 · 입력값이 살아남는가)은 전부 **구조와 동작**이라 표면 문법으로는 못 잰다.
  *
- * ★ 실행: node qa/popup_shell_probe.cjs   (u1-toolchain node — test가 절대경로로 부른다)
+ * ★ 실행: node qa/popup_shell_probe.cjs [소스디렉터리]   (기본 = 이 저장소의 src)
+ *   소스디렉터리 인자는 **음성 대조군용**이다 — 사본에 위반을 주입해 같은 프로브를 돌린다.
  */
 const path = require("path");
 const {
   makeHost, h, find, findAll, texts, buttons, makeLoader, react,
 } = require(path.join(__dirname, "probe_kit.cjs"));
 
-const srcDir = path.join(path.resolve(__dirname, ".."), "src");
+const srcDir = process.argv[2] ? path.resolve(process.argv[2]) : path.join(path.resolve(__dirname, ".."), "src");
 
 globalThis.window = globalThis.window || { navigator: { userAgent: "gfxprofile-probe" } };
 
@@ -639,6 +640,108 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
     addButtonLabel: addButton ? addButton.label : null,
   });
 
+  // ── ⑤′ §4-F 개정: 세대 가드 · busy 문 하나 · 확정 실행 재조회 규칙 ─────────
+  //
+  // 여기서 재는 것은 **훅 자체**다. 팝업 화면을 거치지 않는 이유: 이 계약은 세 팝업이
+  // 상속하는 한 벌이고, 화면을 통해서만 재면 *"그 화면이 마침 그렇게 생겼을 뿐"*인 통과가
+  // 섞인다(팝업별 관측은 `test_games_popup`의 busy·확정 실행 실패 판정이 맡는다).
+
+  /** 응답을 **손에 쥔 채** 부르는 조회 — 세대·busy는 그 순간에만 관측된다. */
+  function heldLoader(sink) {
+    return () => new Promise((resolve) => { sink.push(resolve); });
+  }
+  const okEnv = (tag) => ({ ok: true, data: { tag } });
+
+  function mountData(loader, onMutate) {
+    const host = makeHost(() => popup.usePopupData(loader, "LOAD_FAILED", onMutate));
+    host.render();
+    return host;
+  }
+
+  // ⓐ 세대 가드 — **역순 완료**: 나중에 부른 조회가 먼저 도착하고, 옛 응답이 뒤늦게 온다.
+  const genSink = [];
+  const genHost = mountData(heldLoader(genSink));
+  await settle();
+  genHost.output.reload();
+  await settle();
+  genSink[1](okEnv("NEW"));                     // 새 세대가 먼저 도착
+  await settle();
+  const genMid = genHost.output.data;
+  genSink[0](okEnv("OLD"));                     // 옛 세대가 뒤늦게 도착 — 버려져야 한다
+  await settle();
+  const generationReport = {
+    loads: genSink.length,
+    afterNew: genMid ? genMid.tag : null,
+    afterStale: genHost.output.data ? genHost.output.data.tag : null,
+    staleNote: genHost.output.note,
+  };
+
+  // ⓐ′ 낡은 **실패** 응답도 버린다 — 아니면 성공한 화면 밑에 옛 실패 사유가 뜬다.
+  const genSink2 = [];
+  const genHost2 = mountData(heldLoader(genSink2));
+  await settle();
+  genHost2.output.reload();
+  await settle();
+  genSink2[1](okEnv("NEW"));
+  await settle();
+  genSink2[0]({ ok: false, code: "REGISTRY_UNREADABLE", params: {} });
+  await settle();
+  generationReport.staleFailNote = genHost2.output.note;
+  generationReport.staleFailData = genHost2.output.data ? genHost2.output.data.tag : null;
+
+  // ⓑ busy — 마운트 조회 중에 이미 켜져 있고, 겹친 왕복이 **다 끝나야** 열린다.
+  const busySink = [];
+  const busyHost = mountData(heldLoader(busySink));
+  const busyReport = { onMount: busyHost.output.busy };
+  busySink[0](okEnv("A"));
+  await settle();
+  busyReport.afterLoad = busyHost.output.busy;
+  // 변이 하나와 조회 하나를 **겹친다**: 변이가 먼저 끝나도 조회가 남아 있으면 잠긴 채여야 한다.
+  const mutSink = [];
+  void busyHost.output.runMutation(() => new Promise((r) => mutSink.push(r)), "ACT_FAILED", () => {});
+  await settle();
+  busyReport.duringMutation = busyHost.output.busy;
+  busyHost.output.reload();
+  await settle();
+  mutSink[0]({ ok: true, data: {} });
+  await settle();
+  busyReport.whileReloadPending = busyHost.output.busy;   // 조회가 남았다 — 아직 잠김
+  // 남은 조회를 전부 흘려보낸다(변이 성공이 붙인 자동 재조회까지) — 그래야 문이 다시 열린다.
+  for (let guard = 0; guard < 5 && busyHost.output.busy; guard += 1) {
+    busySink.splice(0).forEach((resolve) => resolve(okEnv("B")));
+    await settle();
+  }
+  busyReport.afterAll = busyHost.output.busy;
+
+  // ⓒⓓ 문의 규칙 — 응답 종류별로 재조회·통지가 붙는지.
+  const OUTCOMES = {
+    ok: () => Promise.resolve({ ok: true, data: { tag: "X" } }),
+    fail: () => Promise.resolve({ ok: false, code: "DELETE_FAILED", params: {} }),
+    token: () => Promise.resolve({ ok: false, code: "CONFIRM_REQUIRED", params: { confirm_token: "T" } }),
+    reject: () => Promise.reject(new TypeError("rpc died")),
+  };
+  const doorReport = {};
+  for (const mode of ["runMutation", "runQuery"]) {
+    for (const [name, call] of Object.entries(OUTCOMES)) {
+      const loads = [];
+      const mutations = [];
+      const host = mountData(
+        () => { loads.push(1); return Promise.resolve(okEnv("BASE")); },
+        () => { mutations.push(1); },
+      );
+      await settle();
+      const seen = [];
+      await host.output[mode](call, "ACT_FAILED", (res) => { seen.push(!!res.ok); });
+      await settle();
+      doorReport[`${mode}.${name}`] = {
+        reloads: loads.length - 1,           // 마운트 1회는 뺀다
+        mutations: mutations.length,
+        results: seen,                        // 거절이면 onResult는 안 불린다
+        note: host.output.note,
+      };
+    }
+  }
+
   console.log(JSON.stringify({
     skeleton: skeletonReport,
     views: viewReport,
@@ -650,5 +753,8 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
     failure: failureReport,
     data: dataReport,
     snapshot: snapshotReport,
+    generation: generationReport,
+    busy: busyReport,
+    door: doorReport,
   }));
 })();

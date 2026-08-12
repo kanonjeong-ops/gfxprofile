@@ -17,7 +17,10 @@
    ⓒ 변경 통지가 나가야 한다. 안 하면 **방금 사라진 백업의 [복원] 버튼**이 화면에 남는다.
    기대 행 수는 **`min(old + 1, BACKUP_KEEP)`** 이다 — 링이 차 있으면 "+1"은 거짓이고,
    그때는 **최고령 행이 퇴출**된다(N-04).
-4. `already`는 **무쓰기**다 — 링도 안 밀렸으므로 **재조회하지 않는다**(§15-C 정상 동작).
+4. `already`는 **무쓰기**다(백엔드 계약 §15-C 불변) — 링이 안 밀렸으므로 **백업 목록은 다시
+   읽지 않는다**. 다만 overview 재조회·변경 통지는 **확정 실행의 문**을 그대로 지난다
+   (P15-B §4-F ③ 개정: 무쓰기 판정은 봉투의 `CONFIRM_REQUIRED` 하나뿐이고, 프론트가
+   outcome으로 다시 판정하면 그 판정이 백엔드와 갈리는 날 화면만 낡는다).
 5. 후속 제안(2단계의 ②)은 **`kind`가 `profile_*`일 때만** 뜬다. 실사용 백업 다수인 `disk`는
    *"오지 않을 창"*을 약속하지 않고 `RESTORE_OK_MANUAL`로 남은 길을 알려 준다(R2·F7).
 6. **복원은 성공했는데 후속 창만 못 뜬 경우**(R1): 디스크는 이미 다시 쓰였고 링도 1칸
@@ -49,22 +52,23 @@ BACKUP_KEEP = 10
 
 BYPASSES = [
     ("복원 뒤 백업 목록을 다시 안 읽음(사라진 백업의 버튼이 남는다)", "GamesPopup.tsx",
-     r"refreshBackups\(game\.appid\);\n              reload\(\);", "reload();"),
-    ("복원 뒤 overview를 다시 안 읽음(백업 수·상태가 낡는다)", "GamesPopup.tsx",
-     r"refreshBackups\(game\.appid\);\n              reload\(\);\n              onMutate\?\.\(\);",
-     "refreshBackups(game.appid);\n              onMutate?.();"),
-    ("already인데도 재조회(무쓰기 갈래에 쓸데없는 왕복)", "GamesPopup.tsx",
-     r'setNote\(t\("RESTORE_ALREADY"\)\);\n                return;',
-     'setNote(t("RESTORE_ALREADY"));\n                refreshBackups(game.appid);\n                reload();\n                return;'),
+     r'setNote\(t\("RESTORE_OK", \{ stamp \}\)\);\n          refreshBackups\(game\.appid\);',
+     'setNote(t("RESTORE_OK", { stamp }));'),
+    ("already에서 백업 목록까지 다시 읽음(링이 안 밀렸는데 쓸데없는 왕복)", "GamesPopup.tsx",
+     r'setNote\(t\("RESTORE_ALREADY"\)\);\n            return;',
+     'setNote(t("RESTORE_ALREADY"));\n            refreshBackups(game.appid);\n            return;'),
+    ("복원을 조회 취급(확정 실행인데 overview·통지가 안 나간다)", "GamesPopup.tsx",
+     r'runMutation\(\(\) => restoreBackup\(game\.appid, row\.backup_id, token\), "RESTORE_FAILED"',
+     'runQuery(() => restoreBackup(game.appid, row.backup_id, token), "RESTORE_FAILED"'),
     ("복원 1차 호출에 토큰을 지어냄", "GamesPopup.tsx",
-     r"return restoreBackup\(game\.appid, row\.backup_id, token\)",
-     'return restoreBackup(game.appid, row.backup_id, token ?? "MADE-UP-TOKEN")'),
+     r"restoreBackup\(game\.appid, row\.backup_id, token\), \"RESTORE_FAILED\"",
+     'restoreBackup(game.appid, row.backup_id, token ?? "MADE-UP-TOKEN"), "RESTORE_FAILED"'),
     ("확정 시 받은 토큰이 아닌 값을 되돌림", "GamesPopup.tsx",
      r"void runRestore\(game, row, p\.confirm_token\);",
      'void runRestore(game, row, "SOMETHING-ELSE");'),
     ("조기 거부에도 확인창을 띄움(확실히 거부될 확인을 시킨다)", "GamesPopup.tsx",
-     r'if \(res\.code === "CONFIRM_REQUIRED"\) \{\n              const p = res\.params as unknown as RestoreConfirmParams;',
-     'if (res.code !== "__never__") {\n              const p = res.params as unknown as RestoreConfirmParams;'),
+     r'if \(res\.code === "CONFIRM_REQUIRED"\) \{\n          const p = res\.params as unknown as RestoreConfirmParams;',
+     'if (res.code !== "__never__") {\n          const p = res.params as unknown as RestoreConfirmParams;'),
     ("후속 제안 실패 문구를 삭제용 하나로 합침(성공 뒤에 '안 지웠습니다'가 뜬다)", "GamesPopup.tsx",
      r'"RESTORE_FOLLOWUP_MODAL_FAILED",', '"MANAGE_MODAL_FAILED",'),
     ("disk 복원 뒤 남은 길을 안 알려 줌", "GamesPopup.tsx",
@@ -147,17 +151,21 @@ def violations(r):                                             # noqa: C901  (�
     if not ring.get("evictedGone"):
         out.append("★포화 상태에서 최고령 행이 화면에 그대로 남아 있다 — 눌러도 없는 파일이다")
 
-    # ═══ 4 already는 무쓰기 ══════════════════════════════════════════════════
+    # ═══ 4 already — 링은 그대로, overview는 확정 실행처럼 다시 읽는다 ═══════
     already = r.get("already") or {}
-    if already.get("listAfter") or already.get("overviewAfter"):
-        out.append(f"★`already`(무쓰기)인데 재조회했다 — 목록 {already.get('listAfter')} / "
-                   f"overview {already.get('overviewAfter')} (아무것도 안 바뀌었다)")
+    if already.get("listAfter"):
+        out.append(f"★`already`인데 백업 목록을 다시 읽었다({already.get('listAfter')}회) — "
+                   f"링이 안 밀렸으므로 행은 한 줄도 안 바뀐다")
+    if already.get("overviewAfter") != 1 or already.get("mutations") != 1:
+        out.append(f"★`already`가 확정 실행의 문을 지나지 않았다 — overview "
+                   f"{already.get('overviewAfter')}회 · 통지 {already.get('mutations')}회"
+                   f"(각 1이어야 한다). 무쓰기 판정은 **봉투의 `CONFIRM_REQUIRED` 하나**이고, "
+                   f"프론트가 outcome으로 다시 판정하면 그 판정이 백엔드와 갈리는 날 화면만 "
+                   f"낡는다(P15-B §4-F ③ 개정 — 백엔드의 '무쓰기' 계약 자체는 불변)")
     if already.get("modals"):
         out.append(f"`already`에 확인창이 떴다({already.get('modals')}개)")
     if not has_key(already.get("notes") or [], "RESTORE_ALREADY"):
         out.append(f"`already`를 실패처럼 말한다: {already.get('notes')}")
-    if already.get("mutations"):
-        out.append("`already`인데 변경 통지가 나갔다 — 아무것도 안 바뀌었다")
 
     # ═══ 5 disk 대피본 ═══════════════════════════════════════════════════════
     disk = r.get("disk") or {}
@@ -246,7 +254,9 @@ def main():
     print(f"  D-07 재조회: 목록 {nested.get('listAfter')}회 · overview {nested.get('overviewAfter')}회 · "
           f"행 {(nested.get('before') or {}).get('rows')}→{nested.get('rowsAfter')} · "
           f"포화 {result.get('ring')}")
-    print(f"  already 재조회={(result.get('already') or {}).get('listAfter')}회 · "
+    print(f"  already: 백업목록 {(result.get('already') or {}).get('listAfter')}회 · overview "
+          f"{(result.get('already') or {}).get('overviewAfter')}회 · 통지 "
+          f"{(result.get('already') or {}).get('mutations')}회 · "
           f"disk note={(result.get('disk') or {}).get('notes')}")
     if bad:
         print("\nFAIL")

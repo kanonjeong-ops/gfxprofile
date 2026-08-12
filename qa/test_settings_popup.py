@@ -45,21 +45,28 @@ BYPASSES = [
     ("조회 실패에서 초기화를 원천 차단", "SettingsPopup.tsx",
      r"const resetEnabled = counts \? counts\.total > 0 \|\| counts\.excluded > 0 : !loading;",
      "const resetEnabled = counts ? counts.total > 0 || counts.excluded > 0 : false;"),
+    # ⚠️ P15-B 이후 「로딩 중 비활성」은 **두 겹**이다: `!loading`(판정 재료가 아직 없다)과
+    #   훅의 busy(마운트 조회가 안 끝났다 — §4-F ② 통합). 한 겹만 뒤집으면 화면이 그대로라
+    #   파생 한 줄 치환은 대조군이 되지 못한다 → **버튼의 활성 자체**를 열고,
+    #   그때 **로딩 판정이 잡는지**를 5번째 항목으로 못 박는다(다른 판정이 먼저 잡아도 무효).
     ("로딩 중에도 초기화를 활성으로(판정 재료가 없는데 누를 수 있다)", "SettingsPopup.tsx",
-     r"const loading = data === null && !note;", "const loading = false;"),
+     r"disabled=\{busy \|\| !resetEnabled\}", "disabled={false}",
+     "로딩 중인데 초기화가 활성이다"),
     ("카운트를 모르는데 0으로 단언", "SettingsPopup.tsx",
      r'counts \? counts\.total : t\("RESET_ZONE_UNKNOWN"\)', "counts ? counts.total : 0"),
     ("초기화 1차 호출에 토큰을 지어냄", "SettingsPopup.tsx",
-     r"return resetAll\(token, text\)", 'return resetAll(token ?? "MADE-UP-TOKEN", text)'),
+     r"resetAll\(token, text\), \"RESET_ACTION_FAILED\"",
+     'resetAll(token ?? "MADE-UP-TOKEN", text), "RESET_ACTION_FAILED"'),
     ("확정 시 받은 토큰이 아닌 값을 되돌림", "SettingsPopup.tsx",
      r"void runReset\(p\.confirm_token, value\);", 'void runReset("SOMETHING-ELSE", value);'),
     ("남은 것을 말하지 않음(무엇이 안 지워졌는지 사라진다)", "SettingsPopup.tsx",
      r'setNote\(left > 0 \? `\$\{ok\} \$\{t\("RESET_LEFT_NOTE", \{ left \}\)\}` : ok\);',
      "setNote(ok);"),
     ("치다 만 입력을 버림(가상 키보드 입력이 날아간다)", "SettingsPopup.tsx",
-     r"\n                  resetTyped,\n", '\n                  "",\n'),
+     r"\n              resetTyped,\n", '\n              "",\n'),
     ("이름 변경 RPC에 식별자 대신 표시명을 보냄", "SettingsPopup.tsx",
-     r"return setProfileName\(profile, name\)", "return setProfileName(name as never, name)"),
+     r"setProfileName\(profile, name\), \"NAME_EDIT_FAILED\"",
+     'setProfileName(name as never, name), "NAME_EDIT_FAILED"'),
     ("초기화 확인창의 ⚠ 경고 블록을 뺌", "confirmSpecs.tsx",
      r'warnBlock: <div>\{t\("RESET_CONFIRM_WARN", \{ games: params\.games, profiles: params\.profiles \}\)\}</div>,',
      ""),
@@ -218,7 +225,11 @@ def main():
             print("  " + b)
         return 1
 
-    for label, target, pattern, replacement in BYPASSES:
+    for entry in BYPASSES:
+        label, target, pattern, replacement = entry[:4]
+        #: 5번째 항목이 있으면 **그 판정이** 잡아야 한다 — 다른 판정이 잡는 것은 통과가 아니다
+        #  (한 주입이 여러 판정을 건드릴 때, 잡으려던 판정이 죽어 있어도 초록이 되는 것을 막는다).
+        expect = entry[4] if len(entry) > 4 else None
         source = (ROOT / "src" / target).read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as tmp:
             case = pathlib.Path(tmp) / "src"
@@ -237,7 +248,12 @@ def main():
                 print(f"FAIL — 위반을 주입했는데 통과했다: {label}")
                 print("       **이 테스트는 그 위반에 대해 무효다.**")
                 return 1
-            print(f"  음성 대조군 검출: {label} → {caught[0].splitlines()[0]}")
+            if expect and not any(expect in c for c in caught):
+                print(f"FAIL — 대조군이 **다른 판정**으로만 잡혔다({label}): {expect!r}가 없다")
+                print(f"       잡힌 것: {caught}")
+                return 1
+            hit = next((c for c in caught if expect and expect in c), caught[0])
+            print(f"  음성 대조군 검출: {label} → {hit.splitlines()[0]}")
 
     print("PASS")
     return 0

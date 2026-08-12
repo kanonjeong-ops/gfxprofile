@@ -448,6 +448,42 @@ export interface PopupLoader<T> {
   (): Promise<Env<T>>;
 }
 
+/** 왕복 하나를 부르는 얇은 호출자 — 인자에 화살표 타입을 쓰지 않기 위한 이름이기도 하다. */
+export interface PopupCall<R> {
+  (): Promise<Env<R>>;
+}
+
+/** 받은 봉투로 **화면 문구만** 정하는 자리(재조회·통지는 호출부의 일이 아니다). */
+export interface PopupResult<R> {
+  (res: Env<R>): void;
+}
+
+/**
+ * RPC 한 왕복을 감싸는 **문**(§4-F 개정). 호출부는 봉투를 받아 화면 문구만 정하고,
+ * busy·재조회·변경 통지·예기치 못한 실패 문구는 전부 이 문이 맡는다.
+ *
+ * ⚠️ 인자를 줄줄이 한 줄에 쓰지 않는 이유는 `PopupLoader`와 같다(`.tsx`의 `>…<` 오탐).
+ */
+export interface PopupRunner {
+  <R>(
+    call: PopupCall<R>,
+    failKey: StringKey,
+    onResult: PopupResult<R>,
+  ): Promise<void>;
+}
+
+/**
+ * **무쓰기가 보장된 응답**인가 — 토큰 발급(`CONFIRM_REQUIRED`)뿐이다(§4-F ③).
+ *
+ * ★★ 판정을 **응답**에 두는 것이 핵심이다. "미리보기 호출"·"확정 호출"은 프론트가 붙이는
+ *   이름일 뿐이고, 같은 route가 토큰 유무에 따라 둘 다 된다(삭제·초기화·복원이 전부 그렇다).
+ *   실제로 *"이번엔 아무것도 안 썼다"*를 아는 것은 백엔드가 보낸 이 코드 하나다.
+ *   그 외 응답(성공·실패·거절·예외)은 **썼는지 모른다** — 모르면 다시 읽는다.
+ */
+function isTokenIssue(res: { ok: boolean; code?: string }): boolean {
+  return !res.ok && res.code === "CONFIRM_REQUIRED";
+}
+
 /**
  * 팝업 하나의 데이터 수명 — **마운트 시 자기 RPC**를 부르고, 변이 뒤 **자기가 다시 조회**한다.
  *
@@ -457,45 +493,143 @@ export interface PopupLoader<T> {
  * ★★ 왜 팝업이 자기 재조회를 하는가(§4-F): QAM `Content`는 팝업이 떠 있는 동안 언마운트일 수
  *   있어 `onMutate`만으로는 **열려 있는 팝업 화면이 낡는다.** 통지(onMutate)와 자기 갱신은
  *   다른 일이다.
+ *
+ * ★★ **세대 가드**(§4-F ① 개정): 재조회는 겹칠 수 있고(연타·변이 뒤 자동 재조회), 먼저 나간
+ *   응답이 나중에 도착하면 **낡은 값이 새 값을 덮는다.** 응답마다 자기 세대를 들고 와서
+ *   최신 세대만 반영한다 — 빗장은 **상태가 아니라 ref**다(P12 `useCloseOnce`의 교훈:
+ *   상태로 막으면 재렌더 전에 도착한 두 번째가 낡은 값을 보고 그대로 통과한다).
+ * ★★ **busy는 문이 하나다**(§4-F ② 개정): 조회도 변이도 이 훅을 지나므로 여기서만 켜고 끈다.
+ *   예전에는 `reload()`가 busy를 안 켜서 [다시 검색] 연타가 **조회에는 무방비**였다(P14 O1).
+ *   왕복이 겹칠 수 있으니 불리언이 아니라 **진행 수**로 센다 — 하나가 끝났다고 남은 왕복 중에
+ *   화면이 열리면, 그 열린 틈이 곧 예전 버그다.
  */
 export function usePopupData<T>(
   load: PopupLoader<T>,
   failKey: StringKey,
+  /** 변이 통지 — 확정 실행이 끝나면 이 훅이 부른다(팝업이 각자 부르지 않는다). */
+  onMutate?: () => void,
 ): {
   data: T | null;
   note: string | null;
   setNote: (v: string | null) => void;
   busy: boolean;
-  setBusy: (v: boolean) => void;
   reload: () => void;
+  /** **확정 실행**(쓸 수 있는 호출). 응답이 토큰 발급이 아니면 재조회 + 변경 통지가 따라온다. */
+  runMutation: PopupRunner;
+  /** **조회**(읽기 전용 호출). busy만 같이 쓰고 재조회·통지는 하지 않는다. */
+  runQuery: PopupRunner;
 } {
   const [data, setData] = useState<T | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** 진행 중인 왕복 수(조회·변이 공용). */
+  const inFlight = useRef(0);
+  /** 조회 세대 — `reload`마다 오르고, 그보다 낡은 응답은 버린다. */
+  const generation = useRef(0);
+  /**
+   * 통지 대상은 **ref로** 든다 — 그래야 아래 문들이 **언제 만들어졌든 같게 동작**한다.
+   * (문을 매 렌더 새로 만들면서 prop을 클로저로 잡으면, 확인창 안에 갇힌 옛 문이 옛 통지를
+   * 부르게 된다. 호출부가 deps를 정확히 적어야만 옳은 구조는 언젠가 틀린다.)
+   */
+  const notify = useRef(onMutate);
+  notify.current = onMutate;
+
+  const begin = useCallback(() => {
+    inFlight.current += 1;
+    setBusy(true);
+  }, []);
+
+  const end = useCallback(() => {
+    inFlight.current -= 1;
+    if (inFlight.current <= 0) {
+      inFlight.current = 0;
+      setBusy(false);
+    }
+  }, []);
 
   const reload = useCallback(() => {
-    load().then(
-      (res) => {
-        if (!res.ok) {
-          setNote(tCode(res.code, failKey));
-          return;
-        }
-        // ★ 상태 반영보다 **먼저** — 아래 setData로 다시 그려질 때 이미 새 이름이어야 한다.
-        const payload = res.data as { profile_names?: { dock?: string; internal?: string } };
-        if (payload && payload.profile_names) setProfileNames(payload.profile_names);
-        setData(res.data);
-      },
-      () => setNote(tCode("UNEXPECTED", failKey)),
-    );
+    generation.current += 1;
+    const mine = generation.current;
+    begin();
+    return load()
+      .then(
+        (res) => {
+          // 옛 응답은 **없던 일**이다 — 화면은 이미 더 새 것을 알고 있다.
+          if (mine !== generation.current) return;
+          if (!res.ok) {
+            setNote(tCode(res.code, failKey));
+            return;
+          }
+          // ★ 상태 반영보다 **먼저** — 아래 setData로 다시 그려질 때 이미 새 이름이어야 한다.
+          const payload = res.data as { profile_names?: { dock?: string; internal?: string } };
+          if (payload && payload.profile_names) setProfileNames(payload.profile_names);
+          setData(res.data);
+        },
+        () => {
+          if (mine !== generation.current) return;
+          setNote(tCode("UNEXPECTED", failKey));
+        },
+      )
+      .finally(end);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [load, failKey]);
+  }, [load, failKey, begin, end]);
+
+  /**
+   * 두 문이 공유하는 한 벌 — `mutating`만 다르다.
+   *
+   * ★ note는 **즉시** 뜬다(§4-F ④): 재조회 응답을 기다리지 않는다. 순서를 기다릴 이유였던
+   *   *"낡은 데이터가 새 note와 어긋난다"*는 세대 가드가 구조적으로 막는다.
+   * ★ 실패(거절·예외)에도 확정 실행이면 재조회한다 — 엔진은 **쓴 뒤에** 거부할 수 있어
+   *   (체크인·부분 삭제) *"실패했는데 디스크는 바뀐"* 상태가 실재한다. 안 읽으면 화면이 그
+   *   상태에 침묵한다.
+   */
+  function runWith<R>(
+    mutating: boolean,
+    call: PopupCall<R>,
+    key: StringKey,
+    onResult: PopupResult<R>,
+  ): Promise<void> {
+    begin();
+    return call()
+      .then(
+        (res) => {
+          onResult(res);
+          if (!mutating || isTokenIssue(res)) return;
+          reload();
+          notify.current?.();
+        },
+        () => {
+          setNote(tCode("UNEXPECTED", key));
+          if (!mutating) return;
+          reload();
+          notify.current?.();
+        },
+      )
+      .finally(end);
+  }
+
+  function runMutation<R>(
+    call: PopupCall<R>,
+    key: StringKey,
+    onResult: PopupResult<R>,
+  ): Promise<void> {
+    return runWith(true, call, key, onResult);
+  }
+
+  function runQuery<R>(
+    call: PopupCall<R>,
+    key: StringKey,
+    onResult: PopupResult<R>,
+  ): Promise<void> {
+    return runWith(false, call, key, onResult);
+  }
 
   useEffect(() => {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { data, note, setNote, busy, setBusy, reload };
+  return { data, note, setNote, busy, reload, runMutation, runQuery };
 }
 
 /** 팝업 하단 note 한 줄 — 없으면 자리도 만들지 않는다(기존 "0이면 안 그림" 문법). */

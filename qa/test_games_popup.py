@@ -78,8 +78,8 @@ BYPASSES = [
     ("[다시 확인]이 아무것도 재조회하지 않음", "GamesPopup.tsx",
      r"onClick=\{\(\) => reload\(\)\}", "onClick={() => undefined}"),
     ("저장 1차 호출에 토큰을 지어냄", "GamesPopup.tsx",
-     r"return saveProfile\(appid, profile, token\)",
-     'return saveProfile(appid, profile, token ?? "MADE-UP-TOKEN")'),
+     r"runMutation\(\(\) => saveProfile\(appid, profile, token\), \"SAVE_FAILED\"",
+     'runMutation(() => saveProfile(appid, profile, token ?? "MADE-UP-TOKEN"), "SAVE_FAILED"'),
     ("확정 시 받은 토큰이 아닌 값을 되돌림", "GamesPopup.tsx",
      r"void runSave\(appid, profile, p\.confirm_token\);",
      'void runSave(appid, profile, "SOMETHING-ELSE");'),
@@ -87,7 +87,14 @@ BYPASSES = [
      r"setNote\(checkedIn \? `\$\{base\} \$\{t\(\"CHECKIN_ONE\", \{ profile: t\(profileKey\(checkedIn\)\) \}\)\}` : base\);",
      "setNote(base);"),
     ("등록 해제 뒤 상세 뷰에 머무름(없는 게임을 보고 있게 된다)", "GamesPopup.tsx",
-     r'setView\(\{ kind: "list" \}\);\n              reload\(\);', "reload();"),
+     r'setView\(\{ kind: "list" \}\);\n          return;', "return;"),
+    # ── §4-F 개정(P15-B): 확정 실행은 **성공·실패 무관** 재조회+통지다 ──────────
+    ("확정 실행을 조회 취급(실패하면 화면이 낡은 채로 남는다)", "GamesPopup.tsx",
+     r'runMutation\(\(\) => deleteGame\(appid, token\), "DELETE_ACTION_FAILED"',
+     'runQuery(() => deleteGame(appid, token), "DELETE_ACTION_FAILED"'),
+    # ── busy는 **훅**의 계약이라 대상 파일도 훅이다(팝업엔 방어 코드가 없다) ────
+    ("reload()가 busy를 안 켬(조회 연타에 무방비 — P14 O1의 재발)", "popup.tsx",
+     r"    const mine = generation\.current;\n    begin\(\);", "    const mine = generation.current;"),
     ("제외 안내를 0건에도 표시", "GamesPopup.tsx",
      r"counts && counts\.excluded > 0", "counts && counts.excluded >= 0"),
     ("설정 파일 경로 줄을 빈 값에도 그림", "confirmSpecs.tsx",
@@ -282,6 +289,31 @@ def violations(r):                                             # noqa: C901  (�
     if r.get("deleteMutations") != 1:
         out.append(f"등록 해제 뒤 변경 통지가 {r.get('deleteMutations')}회다(1이어야 한다)")
 
+    # ═══ §4-F ② busy 통합 — 조회 중에도 목록 조작이 잠긴다(P14 O1) ════════════
+    before, during, after = (r.get("busyBeforeReload") or {}, r.get("busyDuringReload") or {},
+                             r.get("busyAfterReload") or {})
+    if before.get("refresh") is not False or before.get("applies") != 3:
+        out.append(f"조회가 없을 때부터 화면이 잠겨 있다 — {before} (기대 refresh=False·빈 슬롯 3개만 비활성)")
+    if during.get("calls") != 1:
+        out.append(f"★[다시 확인]이 조회를 부르지 않았다({during.get('calls')}회) — 측정 대상에 못 닿았다")
+    elif during.get("refresh") is not True or during.get("applies") != 8 or during.get("chevrons") != 4:
+        out.append(f"★§4-F ② 조회가 도는 중인데 화면이 열려 있다 — {during} "
+                   f"(기대 refresh=True·적용 8/8·상세 4/4 비활성). `reload()`가 busy를 안 켜면 "
+                   f"[다시 확인] 연타가 **조회에는 무방비**가 된다(P14 O1)")
+    if after.get("refresh") is not False or after.get("applies") != 3:
+        out.append(f"★응답이 왔는데 화면이 잠긴 채로 남았다 — {after} (busy가 안 풀리면 팝업이 죽는다)")
+
+    # ═══ §4-F ③ 확정 실행 **실패**도 재조회+통지 (이월 대장 #4) ═══════════════
+    dfail = r.get("deleteFail") or {}
+    if not dfail.get("note"):
+        out.append(f"등록 해제 실패 사유를 화면이 말하지 않는다: {dfail}")
+    if dfail.get("modals"):
+        out.append(f"등록 해제 실패에 확인창이 떴다({dfail.get('modals')}개)")
+    if dfail.get("reloads") != 1 or dfail.get("mutations") != 1:
+        out.append(f"★§4-F ③ `DELETE_FAILED`(부분 삭제)인데 재조회 {dfail.get('reloads')}회 · "
+                   f"통지 {dfail.get('mutations')}회다(각 1이어야 한다) — 일부는 **이미 지워졌다.** "
+                   f"확정 실행은 성공·실패를 가리지 않고 다시 읽고 알린다(P15-B 개정)")
+
     # ═══ 조회 실패 — 모르는 것을 없다고 말하지 않는다 ═════════════════════════
     fail_texts = r.get("failTexts") or []
     if not any("REGISTRY_UNREADABLE" in x for x in fail_texts):
@@ -310,6 +342,9 @@ def main():
           f"(빈 슬롯 {result.get('emptySlotSaveModals')}) · ⑨ 다시 확인={result.get('refreshCalls')}회")
     print(f"  ⑤⑧ 마커={[i for i, f in enumerate(result.get('applyFaces') or []) if f['marked']]} · "
           f"⑦ 실행 중 칩={result.get('runningChipCount')} · 체크인 note={result.get('applyNote')}")
+    print(f"  §4-F ② busy: 조회 전 {result.get('busyBeforeReload')} → 조회 중 "
+          f"{result.get('busyDuringReload')} → 응답 뒤 {result.get('busyAfterReload')}")
+    print(f"  §4-F ③ 확정 실행 실패(DELETE_FAILED): {result.get('deleteFail')}")
     if bad:
         print("\nFAIL")
         for b in bad:

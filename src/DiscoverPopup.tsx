@@ -243,7 +243,10 @@ export function DiscoverPopup({
   onMutate,
   closeModal,
 }: {
-  /** 변이 성공을 QAM에 알린다(§4-F). 화면 갱신은 **이 팝업이 스스로** 한다 — 다른 일이다. */
+  /**
+   * 변이를 QAM에 알린다(§4-F ③ 개정 — 확정 실행이면 **성공·실패를 가리지 않는다**: 엔진은
+   * 쓴 뒤에 거부할 수 있다). 화면 갱신은 **이 팝업이 스스로** 한다 — 다른 일이다.
+   */
   onMutate?: () => void;
   /** `showModal`이 최상위 엘리먼트에 주입한다. */
   closeModal?: () => void;
@@ -255,7 +258,9 @@ export function DiscoverPopup({
   const [picked, setPicked] = useState<Record<string, string>>({});
 
   const load = useCallback(() => discoverGames(), []);
-  const { data, note, setNote, busy, setBusy, reload } = usePopupData<DiscoverData>(load, "LOAD_FAILED");
+  /* ★ busy·재조회·변경 통지는 **훅 한 곳**을 지난다(§4-F 개정). */
+  const { data, note, setNote, busy, reload, runMutation } =
+    usePopupData<DiscoverData>(load, "LOAD_FAILED", onMutate);
   const { gate, renderBody } = usePopupGate();
 
   const entries = data ? data.entries : [];
@@ -274,40 +279,32 @@ export function DiscoverPopup({
    *   등록한 순간 "복원할 것이 있다"를 **그 자리에서** 말해야 한다. 0이면 그 줄이 없다.
    */
   const register = useCallback(
-    (appid: string, path: string, name?: string, token?: string) => {
-      setBusy(true);
-      return addGame(appid, path, name, token)
-        .then(
-          (res) => {
-            if (!res.ok) {
-              // ⚠️ CONFIRM_REQUIRED는 **실패가 아니라 흐름 신호**다 — 오류 문구로 그리지 않는다.
-              if (res.code === "CONFIRM_REQUIRED") {
-                const p = res.params as unknown as AddGameConfirmParams;
-                gate(
-                  makeDiscoverWarnSpec(p, () => { void register(appid, path, name, p.confirm_token); }),
-                  // 확인창이 못 뜬 것이고, 그래서 **등록도 되지 않았다**(둘을 섞어 말하지 않는다).
-                  "DISCOVER_WARN_MODAL_FAILED",
-                  setNote,
-                );
-                return;
-              }
-              // `.sav`를 골라도·이미 등록된 게임이어도 여기로 온다 — 등록되지 않고 이유가 뜬다.
-              setNote(tCode(res.code, "DISCOVER_ADD_FAILED"));
-              return;
-            }
-            // 이름은 **백엔드가 확정한 값**이다. 수동 등록에는 프론트가 아는 이름이 없다.
-            setNote(res.data.backups > 0
-              ? t("DISCOVER_ADDED_HAS_BACKUPS", { name: res.data.name, n: res.data.backups })
-              : t("DISCOVER_ADDED", { name: res.data.name }));
-            reload();
-            onMutate?.();
-          },
-          () => setNote(tCode("UNEXPECTED", "DISCOVER_ADD_FAILED")),
-        )
-        .finally(() => setBusy(false));
-    },
+    (appid: string, path: string, name?: string, token?: string) =>
+      runMutation(() => addGame(appid, path, name, token), "DISCOVER_ADD_FAILED", (res) => {
+        if (!res.ok) {
+          // ⚠️ CONFIRM_REQUIRED는 **실패가 아니라 흐름 신호**다 — 오류 문구로 그리지 않는다.
+          //   무쓰기가 보장된 유일한 응답이라 재조회도 붙지 않는다(§4-F ③).
+          if (res.code === "CONFIRM_REQUIRED") {
+            const p = res.params as unknown as AddGameConfirmParams;
+            gate(
+              makeDiscoverWarnSpec(p, () => { void register(appid, path, name, p.confirm_token); }),
+              // 확인창이 못 뜬 것이고, 그래서 **등록도 되지 않았다**(둘을 섞어 말하지 않는다).
+              "DISCOVER_WARN_MODAL_FAILED",
+              setNote,
+            );
+            return;
+          }
+          // `.sav`를 골라도·이미 등록된 게임이어도 여기로 온다 — 등록되지 않고 이유가 뜬다.
+          setNote(tCode(res.code, "DISCOVER_ADD_FAILED"));
+          return;
+        }
+        // 이름은 **백엔드가 확정한 값**이다. 수동 등록에는 프론트가 아는 이름이 없다.
+        setNote(res.data.backups > 0
+          ? t("DISCOVER_ADDED_HAS_BACKUPS", { name: res.data.name, n: res.data.backups })
+          : t("DISCOVER_ADDED", { name: res.data.name }));
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [reload, onMutate, gate],
+    [gate],
   );
 
   /** 행별 파일 선택기. 시작 위치는 **그 게임의 prefix**다. 취소는 조용히 끝난다. */
@@ -352,26 +349,17 @@ export function DiscoverPopup({
 
   /** 확신 후보 일괄 등록 — 대상 수는 **봉투가 준 값**이고 프론트가 다시 세지 않는다. */
   const runBulk = useCallback(
-    () => {
-      setBusy(true);
-      return registerConfident()
-        .then(
-          (res) => {
-            if (!res.ok) {
-              setNote(tCode(res.code, "DISCOVER_ADD_FAILED"));
-              return;
-            }
-            const added = res.data.counts.added ?? 0;
-            setNote(t("DISCOVER_BULK_DONE", { added, failed: res.data.results.length - added }));
-            reload();
-            onMutate?.();
-          },
-          () => setNote(tCode("UNEXPECTED", "DISCOVER_ADD_FAILED")),
-        )
-        .finally(() => setBusy(false));
-    },
+    () =>
+      runMutation(() => registerConfident(), "DISCOVER_ADD_FAILED", (res) => {
+        if (!res.ok) {
+          setNote(tCode(res.code, "DISCOVER_ADD_FAILED"));
+          return;
+        }
+        const added = res.data.counts.added ?? 0;
+        setNote(t("DISCOVER_BULK_DONE", { added, failed: res.data.results.length - added }));
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [reload, onMutate],
+    [],
   );
 
   /**
@@ -380,26 +368,17 @@ export function DiscoverPopup({
    * 그래서 note가 **다음 경로를 병기**한다(F11·F13) — 안 그러면 "포함했는데 왜 그대로냐"가 된다.
    */
   const runInclude = useCallback(
-    (row: ExcludedRow) => {
-      setBusy(true);
-      return includeGame(row.appid)
-        .then(
-          (res) => {
-            if (!res.ok) {
-              setNote(tCode(res.code, "DISCOVER_INCLUDE_FAILED"));
-              return;
-            }
-            setNote(t("DISCOVER_INCLUDED_NOTE", { name: row.name }));
-            // 제외 목록과 후보 목록이 **함께** 바뀐다 — 봉투를 통째로 다시 읽는다(§4-F).
-            reload();
-            onMutate?.();
-          },
-          () => setNote(tCode("UNEXPECTED", "DISCOVER_INCLUDE_FAILED")),
-        )
-        .finally(() => setBusy(false));
-    },
+    // 제외 목록과 후보 목록이 **함께** 바뀐다 — 봉투를 통째로 다시 읽는다(§4-F, 훅이 붙인다).
+    (row: ExcludedRow) =>
+      runMutation(() => includeGame(row.appid), "DISCOVER_INCLUDE_FAILED", (res) => {
+        if (!res.ok) {
+          setNote(tCode(res.code, "DISCOVER_INCLUDE_FAILED"));
+          return;
+        }
+        setNote(t("DISCOVER_INCLUDED_NOTE", { name: row.name }));
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [reload, onMutate],
+    [],
   );
 
   // ── 기본 뷰 (§6-A) ─────────────────────────────────────────────────────────

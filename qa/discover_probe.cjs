@@ -640,7 +640,8 @@ function buttonOrder(root) {
     const ui = s.ui();
     out.savRefusedShown = visibleTexts(ui).some((x) => x.startsWith("SAV_REFUSED"));
     out.savAddedText = hasText(ui, "DISCOVER_ADDED");
-    out.savDiscoverReloads = s.calls.discover;          // 실패했으니 목록을 다시 안 읽는다(1)
+    // ★ 등록은 확정 실행이다 — 거부돼도 다시 읽는다(마운트 1 + 거부 뒤 1 = 2, §4-F ③ 개정).
+    out.savDiscoverReloads = s.calls.discover;
     out.savModals = s.shownModals.length;
     out.savMutations = s.mutations.length;
   }
@@ -734,7 +735,7 @@ function buttonOrder(root) {
     await settle();
     out.alreadyShown = visibleTexts(s.ui()).some((x) => x.startsWith("ALREADY_REGISTERED"));
     out.alreadyModals = s.shownModals.length;
-    out.alreadyReloads = s.calls.discover;               // 실패했으니 다시 안 읽는다(1)
+    out.alreadyReloads = s.calls.discover;               // 확정 실행이라 거부돼도 다시 읽는다(2)
   }
 
   // ═══ 조회 실패 — 모르는 것을 **없다고 말하지 않는다** ═════════════════════

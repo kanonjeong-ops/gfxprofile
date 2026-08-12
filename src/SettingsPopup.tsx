@@ -54,7 +54,8 @@ export function SettingsPopup({
 
   // 이 화면은 `disk_matches`를 쓰지 않는다 — detail을 켜면 게임마다 원본 파일 sha1을 다시 읽는다.
   const load = useCallback(() => getOverview(), []);
-  const { data, note, setNote, busy, setBusy, reload } = usePopupData<Overview>(load, "LOAD_FAILED");
+  /* ★ busy·재조회·변경 통지는 **훅 한 곳**을 지난다(§4-F 개정). */
+  const { data, note, setNote, busy, runMutation } = usePopupData<Overview>(load, "LOAD_FAILED", onMutate);
   const { gate, renderBody } = usePopupGate();
 
   const counts = data?.counts;
@@ -66,45 +67,36 @@ export function SettingsPopup({
    * ⚠️ 게임별 실패가 있어도 봉투는 `ok:true`다 — **무엇이 남았는지**를 같이 말한다(F26).
    */
   const runReset = useCallback(
-    (token?: string, text?: string) => {
-      setBusy(true);
-      return resetAll(token, text)
-        .then(
-          (res) => {
-            if (res.ok) {
-              const deleted = res.data.counts.deleted ?? 0;
-              const left = res.data.results.length - deleted;
-              const ok = t("RESET_OK", { deleted, left });
-              setNote(left > 0 ? `${ok} ${t("RESET_LEFT_NOTE", { left })}` : ok);
-              setResetTyped("");           // 성공했으면 보존할 입력도 없다
-              reload();
-              onMutate?.();
-              return;
-            }
-            if (res.code === "CONFIRM_REQUIRED") {
-              const p = res.params as unknown as ResetConfirmParams;
-              gate(
-                makeResetConfirmSpec(
-                  p,
-                  resetTyped,
-                  (value) => { void runReset(p.confirm_token, value); },
-                  setResetTyped,
-                ),
-                // 토큰이 안 돌아가면 아무것도 지워지지 않는다 — 이 문구가 참인 자리다.
-                "MANAGE_MODAL_FAILED",
-                setNote,
-              );
-              return;
-            }
-            setNote(tCode(res.code, "RESET_ACTION_FAILED"));
-            reload();
-          },
-          () => setNote(tCode("UNEXPECTED", "RESET_ACTION_FAILED")),
-        )
-        .finally(() => setBusy(false));
-    },
+    (token?: string, text?: string) =>
+      runMutation(() => resetAll(token, text), "RESET_ACTION_FAILED", (res) => {
+        if (res.ok) {
+          const deleted = res.data.counts.deleted ?? 0;
+          const left = res.data.results.length - deleted;
+          const ok = t("RESET_OK", { deleted, left });
+          setNote(left > 0 ? `${ok} ${t("RESET_LEFT_NOTE", { left })}` : ok);
+          setResetTyped("");           // 성공했으면 보존할 입력도 없다
+          return;
+        }
+        if (res.code === "CONFIRM_REQUIRED") {
+          const p = res.params as unknown as ResetConfirmParams;
+          gate(
+            makeResetConfirmSpec(
+              p,
+              resetTyped,
+              (value) => { void runReset(p.confirm_token, value); },
+              setResetTyped,
+            ),
+            // 토큰이 안 돌아가면 아무것도 지워지지 않는다 — 이 문구가 참인 자리다.
+            "MANAGE_MODAL_FAILED",
+            setNote,
+          );
+          return;
+        }
+        // 확정 실행의 거절이다 — 어디까지 지워졌는지 모르므로 재조회·통지가 따라온다(§4-F ③).
+        setNote(tCode(res.code, "RESET_ACTION_FAILED"));
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [reload, onMutate, gate, resetTyped],
+    [gate, resetTyped],
   );
 
   /**
@@ -112,28 +104,19 @@ export function SettingsPopup({
    * 상한 자르기·빈 값이면 기본값 복귀)한 **결과를 그대로** 받아 i18n에 반영한다.
    */
   const runRename = useCallback(
-    (profile: Profile, name: string) => {
-      setBusy(true);
-      return setProfileName(profile, name)
-        .then(
-          (res) => {
-            if (!res.ok) {
-              setNote(tCode(res.code, "NAME_EDIT_FAILED"));
-              return;
-            }
-            setProfileNames(res.data.profile_names);
-            const saved = res.data.profile_names[profile];
-            setNote(saved ? t("NAME_EDIT_OK_NOTE", { name: saved }) : t("NAME_EDIT_RESET_NOTE"));
-            setNameTyped((prev) => ({ ...prev, [profile]: undefined }));
-            reload();
-            onMutate?.();
-          },
-          () => setNote(tCode("UNEXPECTED", "NAME_EDIT_FAILED")),
-        )
-        .finally(() => setBusy(false));
-    },
+    (profile: Profile, name: string) =>
+      runMutation(() => setProfileName(profile, name), "NAME_EDIT_FAILED", (res) => {
+        if (!res.ok) {
+          setNote(tCode(res.code, "NAME_EDIT_FAILED"));
+          return;
+        }
+        setProfileNames(res.data.profile_names);
+        const saved = res.data.profile_names[profile];
+        setNote(saved ? t("NAME_EDIT_OK_NOTE", { name: saved }) : t("NAME_EDIT_RESET_NOTE"));
+        setNameTyped((prev) => ({ ...prev, [profile]: undefined }));
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [reload, onMutate],
+    [],
   );
 
   /**

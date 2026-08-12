@@ -45,7 +45,12 @@ const SCENE = {
   applyResult: null,
   saveResult: null,
   deleteResult: null,
+  /** 조회 응답을 **손에 쥐고 있는다** — busy가 켜져 있는 그 순간의 화면을 재기 위해서다. */
+  holdOverview: false,
 };
+
+/** 붙잡아 둔 조회 응답을 놓아 주는 손잡이(없으면 붙잡은 조회가 없다는 뜻이다). */
+let releaseOverview = null;
 
 const calls = { overview: [], apply: [], save: [], del: [], list: [] };
 const shownModals = [];
@@ -83,7 +88,11 @@ const modules = {
     setProfileNames: () => {},
   },
   "./rpc": {
-    getOverview: (...a) => { calls.overview.push(a); return Promise.resolve(overviewEnvelope()); },
+    getOverview: (...a) => {
+      calls.overview.push(a);
+      if (!SCENE.holdOverview) return Promise.resolve(overviewEnvelope());
+      return new Promise((resolve) => { releaseOverview = () => resolve(overviewEnvelope()); });
+    },
     applyProfile: (...a) => { calls.apply.push(a); return Promise.resolve(SCENE.applyResult); },
     saveProfile: (...a) => { calls.save.push(a); return Promise.resolve(SCENE.saveResult(a)); },
     deleteGame: (...a) => { calls.del.push(a); return Promise.resolve(SCENE.deleteResult(a)); },
@@ -310,6 +319,60 @@ function applyFace(b) {
     out.deleteModalTextsNoPath = run.modal ? texts(run.modal) : [];
     const modal = run.modal ? find(run.modal, "ConfirmModal") : null;
     if (modal) modal.node.props.onCancel();
+    toList(main.ui);
+  }
+
+  // ═══ §4-F ② busy 통합 — **조회 중에도** 목록 조작이 잠긴다 ═══════════════
+  //
+  // 예전에는 `reload()`가 busy를 안 켜서 [다시 확인] 연타가 조회에 무방비였다(P14 O1).
+  // 응답을 손에 쥔 채 화면을 찍는다 — 잠기는 순간이 곧 재는 대상이다.
+  {
+    toList(main.ui);
+    SCENE.holdOverview = true;
+    releaseOverview = null;
+    resetCalls();
+    const beforeBtn = byPrefix(main.ui(), /^REFRESH\b/)[0];
+    out.busyBeforeReload = {
+      refresh: beforeBtn.disabled,
+      applies: byPrefix(main.ui(), /^APPLY_SHORT/).filter((b) => b.disabled).length,
+    };
+    beforeBtn.onClick();
+    await settle();
+    out.busyDuringReload = {
+      refresh: byPrefix(main.ui(), /^REFRESH\b/)[0].disabled,
+      // 전부 잠긴다(빈 슬롯 비활성과 섞이지 않게 **전수**로 본다 — 8개 중 8개)
+      applies: byPrefix(main.ui(), /^APPLY_SHORT/).filter((b) => b.disabled).length,
+      chevrons: byPrefix(main.ui(), /^$/).filter((b) => b.disabled).length,
+      calls: calls.overview.length,
+    };
+    // 응답이 도착하면 문이 다시 열린다 — 잠금이 **영구**가 되면 그것도 결함이다.
+    SCENE.holdOverview = false;
+    if (releaseOverview) releaseOverview();
+    await settle();
+    out.busyAfterReload = {
+      refresh: byPrefix(main.ui(), /^REFRESH\b/)[0].disabled,
+      applies: byPrefix(main.ui(), /^APPLY_SHORT/).filter((b) => b.disabled).length,
+    };
+  }
+
+  // ═══ §4-F ③ 확정 실행 **실패**도 재조회+통지 (이월 대장 #4) ═══════════════
+  //
+  // `DELETE_FAILED`는 **부분 삭제**다 — 일부는 이미 지워졌는데 화면이 낡으면 지워진 게임이
+  // 목록에 그대로 남는다. 성공 경로에만 통지를 붙이던 비대칭을 여기서 잠근다.
+  {
+    SCENE.deleteResult = () => ({ ok: false, code: "DELETE_FAILED", params: {} });
+    resetCalls();
+    toList(main.ui);
+    const names = cardNames(main.ui());
+    byPrefix(main.ui(), /^$/)[names.indexOf("Zeta")].onClick();
+    byPrefix(main.ui(), /^UNREGISTER_GAME\b/)[0].onClick();
+    await settle();
+    out.deleteFail = {
+      note: texts(main.ui()).filter((x) => /DELETE_FAILED/.test(x)),
+      modals: shownModals.length,
+      reloads: calls.overview.length,
+      mutations: mutations.length,
+    };
     toList(main.ui);
   }
 
