@@ -4,8 +4,8 @@
 ⚠️ **P14에서 대상이 바뀌었다**: 전체화면 「게임 추가」 탭 → **팝업 D**(`src/DiscoverPopup.tsx`).
    프로브도 자체 하네스에서 공용 `qa/probe_kit.cjs`로 옮겼다. **기존 판정은 전량 살아 있고**
    (아래 ①~⑧), 설계가 새로 요구한 것(⑨~⑬)이 더해졌다.
-   전체화면 탭 자체는 P15에서 사라진다 — 그때까지 남는 `DiscoverTab.tsx`는 ①(타이핑 0회)만
-   계속 검사한다(그 화면의 흐름 검사는 팝업으로 이관했다).
+   전체화면 탭은 **P15에서 삭제됐다** — 전환기 대상은 더 이상 없고, 검사는 팝업 D와
+   선택기만 본다.
 
 ### 잠그는 것 — 13판정
     ① **타이핑 0회** — 소스에 입력 컴포넌트가 없고, **렌더 결과에도** 입력 요소가 없다.
@@ -82,10 +82,9 @@ TYPING_COMPONENTS = (
     "window.prompt", "designMode",
 )
 
-#: 타이핑 0회를 지켜야 하는 파일. **없으면 실패**인 것(감지 화면과 선택기)과, P15까지만
-#: 공존하는 전환기 파일(`DiscoverTab.tsx`)을 가른다 — 전자가 사라지면 검사가 대상을 잃은 것이다.
+#: 타이핑 0회를 지켜야 하는 파일 — **없으면 실패**다(감지 화면과 선택기가 사라졌다면
+#: 검사가 대상을 잃은 것이다). P15까지 공존하던 전환기 파일 목록은 그 파일이 삭제되며 없앴다.
 TYPING_REQUIRED = ("DiscoverPopup.tsx", "filepicker.ts")
-TYPING_TRANSITIONAL = ("DiscoverTab.tsx",)
 
 
 def run_probe(n, src_dir=None):
@@ -105,10 +104,10 @@ def check_no_typing():
     for name in TYPING_REQUIRED:
         if not (ROOT / "src" / name).is_file():
             bad.append(f"{name}이 없다 — 타이핑 0회 검사가 대상을 잃었다(판정 불가는 통과가 아니다)")
-    for name in TYPING_REQUIRED + TYPING_TRANSITIONAL:
+    for name in TYPING_REQUIRED:
         path = ROOT / "src" / name
         if not path.is_file():
-            continue                      # 전환기 파일은 P15에서 사라진다 — 그때는 대상이 아니다
+            continue                      # 위 루프가 이미 "대상을 잃었다"로 실패시켰다
         src = path.read_text(encoding="utf-8")
         for needle in TYPING_COMPONENTS:
             if needle in src:

@@ -75,7 +75,7 @@ def main_test():
             ov_f = rpc(main, "get_overview")
             if not ov_f.get("ok"):
                 P("[%s] get_overview(detail=false)가 손상 meta에 죽었다 — %s" % (kind, ov_f.get("code")))
-            ov_t = rpc(main, "get_overview", True)               # StatusPage(현황 탭)가 쓰는 경로
+            ov_t = rpc(main, "get_overview", True)               # 게임 목록 화면이 쓰는 경로
             if not ov_t.get("ok"):
                 P("★[%s] get_overview(detail=true=현황 탭)가 손상 meta 하나로 통째 죽었다 — %s"
                   % (kind, ov_t.get("code")))

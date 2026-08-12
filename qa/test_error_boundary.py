@@ -12,7 +12,9 @@
     T5 경계가 **react 말고 아무것도 import하지 않는다** — 의존이 늘면 폴백의 전제가 무너진다
     T6 `componentDidCatch`가 `[gfxprofile] boundary where=…` 진단을 남긴다(cef_log 유일 레벨)
     T7 **정상 자식은 그대로 통과**한다 — 경계가 정상 렌더를 가로채지 않는다
-    T8 **두 진입점이 모두 감싸여 있다** — QAM `content`와 route 컴포넌트(설계 E13)
+    T8 **진입점이 감싸여 있다** — QAM `content`(설계 E13). 전체 화면 route는 P15에서
+       사라졌고, 팝업 3종의 경계(`popup-g|d|s`)는 `test_popup_shell` ①이 **DialogBody
+       안쪽 배치까지** 렌더로 잰다 — 여기서 겹쳐 세지 않는다
 
 ★ 반증(§B): 경계를 깨뜨린 사본에서 실제로 FAIL하는지 대조군으로 확인한다.
 """
@@ -77,7 +79,7 @@ def check_behaviour(r):
     return bad
 
 
-# ── T8. 두 진입점 래핑 (의미 기반 정적 판정) ─────────────────────────────────
+# ── T8. 진입점 래핑 (의미 기반 정적 판정) ────────────────────────────────────
 def _balanced(text, start, opener, closer):
     """`start` 위치의 여는 기호부터 짝이 맞는 닫는 기호까지."""
     depth = 0
@@ -92,10 +94,11 @@ def _balanced(text, start, opener, closer):
 
 
 def check_entrypoints(source):
-    """QAM `content`와 route가 **둘 다** 경계 안에 있는가.
+    """QAM `content`가 경계 안에 있는가.
 
-    ★ `<ErrorBoundary`가 파일 어딘가에 있는지 세지 않는다 — 그러면 한 곳만 감싸도 통과한다.
-      각 진입점의 **값 표현식**을 따로 떼어 그 안에 경계가 있는지 본다.
+    ★ `<ErrorBoundary`가 파일 어딘가에 있는지 세지 않는다 — 그러면 팝업 쪽 경계 하나로
+      QAM이 무방비인 상태가 통과한다. 진입점의 **값 표현식**을 떼어 그 안에서 본다.
+    ★ P15 이전에는 route 컴포넌트도 여기서 함께 봤다. route가 사라져 진입점은 하나다.
     """
     bad = []
 
@@ -108,19 +111,6 @@ def check_entrypoints(source):
     if "<ErrorBoundary" not in value:
         bad.append(f"QAM content가 ErrorBoundary로 감싸이지 않았다 ★E13 위반 — {value.strip()[:80]!r}")
 
-    # (2) route — `addRoute(ROUTE, <컴포넌트>)`의 그 컴포넌트가 경계를 그리는가
-    match = re.search(r"routerHook\.addRoute\(\s*[A-Za-z_$][\w$]*\s*,\s*([A-Za-z_$][\w$]*)", source)
-    if not match:
-        return bad + ["routerHook.addRoute 호출을 못 찾았다 — 검사가 대상에 닿지 못했다"]
-    component = match.group(1)
-    decl = re.search(r"function\s+%s\s*\([^)]*\)\s*\{" % re.escape(component), source)
-    if not decl:
-        bad.append(f"route에 넘긴 {component}가 이 파일에 정의돼 있지 않다 — "
-                   "경계 적용 여부를 판정할 수 없다(정적으로 추적 가능해야 한다)")
-    else:
-        body = _balanced(source, decl.end() - 1, "{", "}")
-        if "<ErrorBoundary" not in body:
-            bad.append(f"route 컴포넌트 {component}가 ErrorBoundary로 감싸이지 않았다 ★E13 위반")
     return bad
 
 
@@ -181,7 +171,6 @@ def falsify():
         index_src = INDEX.read_text(encoding="utf-8")
         for label, old, new in (
             ("QAM content 래핑 제거", "      <ErrorBoundary where=\"qam\">", "      <>"),
-            ("route 래핑 제거", "    <ErrorBoundary where=\"route\">", "    <>"),
         ):
             if index_src.count(old) != 1:
                 bad.append(f"§B 진입점 변이 앵커가 없다({label})")
@@ -218,7 +207,7 @@ def main():
           f"태그 {r['fallbackTags']} · import {r['imports']} · 진단 {len(r['diagLogs'])}건")
 
     problems += check_entrypoints(INDEX.read_text(encoding="utf-8"))
-    print("T8 두 진입점(QAM content · route 컴포넌트) 래핑")
+    print("T8 진입점(QAM content) 래핑")
 
     report, fals_bad = falsify()
     print("\n§B 반증 (깨뜨렸을 때 FAIL이 나는가)")

@@ -30,7 +30,7 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
  */
 
 interface Props {
-  /** 어느 진입점인가 — 로그에서 QAM 패널과 전체 화면을 가르는 값이다. 화면에 뜨지 않는다. */
+  /** 어느 진입점인가 — 로그에서 QAM 패널과 팝업 3종을 가르는 값이다. 화면에 뜨지 않는다. */
   where: string;
   children: ReactNode;
 }

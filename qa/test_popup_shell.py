@@ -9,8 +9,6 @@
   ③ **두 렌더러가 같은 spec을 같은 요소로**(중첩/폴백): 문구 집합 동일 + **입력형 2종**의
      TextField 상태 → `okDisabled` **동적 재평가** → `onOK(value)` 전달(R-1 회귀 잠금)
      + **단일 종료**(두 번 눌러도 한 번만 — D-05 ②)
-  ③′ **spec화 전후 동일성**: 현행 확인창 7종을 **파라미터 조합별로 신구 각각 렌더**해 대조
-     (문구·입력 초기값·OK 비활성). 손실만 실패, 추가는 허용 — P15에서 legacy가 삭제되면 은퇴한다
   ③″ **모달 생명주기**(D-05 ②③): 닫기가 정확히 1회(실물 ConfirmModal이 자기 경로에서도
      `closeModal`을 부른다) · 발화 뒤 취소 잠금 · **`onOK`가 던져도 창은 닫힌다**
   ④ **게이트 실패**: `showModal`이 죽으면 **호출부가 준 failKey 문구**가 뜨고 `onOK`는 안 나간다
@@ -31,6 +29,9 @@
 ⚠️ 범위 밖(정직하게): `onMutate()` **발화**는 팝업 화면(P13·P14)이 변이 성공 뒤에 부르는
    계약이라 그 단계 프로브의 몫이다. 여기서는 화면이 그 통지를 만들 재료 —
    **자기 재조회(`reload`)가 실제로 RPC를 다시 부른다** — 까지만 잠근다.
+⚠️ **은퇴 항목(P15)**: ③′ "spec화 전후 동일성"(전체 화면 시절 확인창 7종 × 26 파라미터 조합의
+   신구 렌더 대조)은 비교 대상인 legacy 컴포넌트가 삭제되어 은퇴했다 — 예고된 처분(P12 게이트
+   C4 · 설계 §12)이다. 사유와 "스냅샷으로 바꾸지 않는" 근거는 프로브 해당 자리의 주석에 있다.
 ⚠️ 실효가 실기 몫인 것도 명시: `preferredFocus`·`MAINTAIN_X`·`onCancelButton`은 **타입에
    실재하고 폴백이 무해**하다는 것까지가 여기서 잴 수 있는 전부다(§16-③④가 런타임 판정).
 """
@@ -259,42 +260,6 @@ def main():                                                    # noqa: C901  (�
     if not gate["closeModalForwarded"]:
         P("★③ 중첩 렌더러가 closeModal을 그대로 전달하지 않는다(D-05 ①)")
 
-    # ═══ ③′ spec화 **전후 동일성** — 파라미터 조합별 신구 렌더 대조 (§17 완료 기준) ═══
-    #
-    #   현행 확인창 컴포넌트와 spec을 **같은 파라미터로 각각 렌더**해서 화면 글자·입력 초기값·
-    #   OK 비활성을 대조한다. 옮기다 한 줄이 빠지거나 분기가 뒤집히면 *사용자에게 덜 말하거나
-    #   다른 것을 말하는 확인창*이 되는데, 새 것끼리만 보면 그 손실이 안 보인다.
-    #
-    #   ⚠️ **손실만 실패**다(추가는 허용): P13이 §9·§7·§5-C의 신설 문구를 spec에 얹을 예정이라
-    #     추가까지 막으면 그 단계에서 이 검사가 통째로 거짓말을 한다.
-    #   ⚠️ 입력 초기값·OK 비활성은 **양방향 일치**를 요구한다 — 그 둘은 "더 말하기"가 성립하지
-    #     않는 값이고, 프리필 규칙(C2)·challenge 판정이 여기서 갈리면 조용한 오작동이다.
-    #   ⚠️ **처분 예고**: P15에서 legacy 확인창이 삭제되면 이 대조는 **은퇴한다**(비교 대상이
-    #     사라진다) — 스냅샷 고정으로 전환하거나 삭제한다. P15의 결정 사항으로 넘긴다.
-    parity_lost = {}
-    # 조합을 추가하면 이 상수를 의식적으로 갱신하라 — 하한 방식은 검사 범위가 조용히
-    # 줄어드는 경로였다(P13 게이트 C3). `<20`이던 시절엔 조합을 하나 지워도 통과했다.
-    if len(r["parity"]) != 26:
-        P(f"③′ 대조 조합이 {len(r['parity'])}개다(고정 26) — 분기를 흔들지 않으면 이 검사는 "
-          f"**한 갈래만 보고** 통과한다. 늘렸다면 이 상수를 함께 갱신하라")
-    for case in r["parity"]:
-        label, legacy, spec_face = case["label"], case["legacy"], case["spec"]
-        if case.get("legacyCaptured") is False or legacy is None:
-            P(f"★③′ {label}: 현행 확인창을 못 꺼냈다 — 대조가 항진식이다"
-              f"(버튼 라벨={case.get('addButtonLabel')})")
-            continue
-        lost = [x for x in legacy["texts"] if x not in spec_face["texts"]]
-        if lost:
-            parity_lost[label] = lost
-            P(f"★③′ {label}: spec화하며 문구가 사라졌거나 달라졌다 — {lost}\n"
-              f"      spec={spec_face['texts']}")
-        if legacy["field"] != spec_face["field"]:
-            P(f"★③′ {label}: 입력 초기값이 다르다 — 현행 {legacy['field']!r} / spec "
-              f"{spec_face['field']!r} (프리필 규칙이 갈렸다)")
-        if legacy["okDisabled"] != spec_face["okDisabled"]:
-            P(f"★③′ {label}: OK 비활성 판정이 다르다 — 현행 {legacy['okDisabled']} / spec "
-              f"{spec_face['okDisabled']}")
-
     # ═══ ③″ 모달 생명주기 방어 (D-05 ②③) ═════════════════════════════════════
     life = r["lifecycle"]
     if life["nestedCloses"] != 1:
@@ -375,8 +340,6 @@ def main():                                                    # noqa: C901  (�
           f"{vw['firstChildIsBack']} · B 배선={vw['hasOnCancelButton']}")
     print(f"  ③ 문구 동일 3종 · okDisabled {gate['resetBefore']['nestedOkDisabled']}→"
           f"{gate['resetAfter']['nestedOkDisabled']} · onOK 값={gate['resetValues']}")
-    print(f"  ③′ spec화 전후: 파라미터 조합 {len(r['parity'])}건 신구 렌더 대조 · 손실="
-          f"{parity_lost or '없음'}")
     print(f"  ③″ 생명주기: 닫기 {life['nestedCloses']}회 · onOK {life['okFiredOnce']}회 · "
           f"throw에도 닫힘(중첩 {life['throwClosedNested']}/폴백 {life['throwClosedFallback']})")
     print(f"  ④ 중첩 모달={nested['modalsShown']} / 폴백 오버레이={fallback['overlayShown']}"

@@ -30,8 +30,8 @@ const HEADER_ICON_STYLE = { display: "inline-flex", marginRight: "6px", vertical
  * 중앙 팝업 하나. **크기를 지정하지 않는다**(A10 — `popupWidth`/`popupHeight`/`bAllowFullSize` 금지).
  *
  * ★★ `ErrorBoundary`는 **`DialogBody` 안쪽**이다(R-4). `showModal`은 `closeModal`을
- *   **최상위 엘리먼트에만** 주입하므로(`index.tsx:141-143`·`ManageTab.tsx:53-54`가 계약으로
- *   문서화한 사실), 최상위를 경계로 감싸면 주입이 경계에서 삼켜져 **닫기 배선이 죽는다.**
+ *   **최상위 엘리먼트에만** 주입하므로(구 화면들이 계약으로 문서화해 둔 실측 사실),
+ *   최상위를 경계로 감싸면 주입이 경계에서 삼켜져 **닫기 배선이 죽는다.**
  *   한계도 정직하게: **ModalRoot 자체의 렌더 실패는 이 경계가 못 가둔다** — 그건 호출부의
  *   `showModal` try/catch가 실패 고지로 받는다(§3-A 문법, 이 파일의 `useConfirmGate`와 동형).
  *
@@ -157,7 +157,7 @@ export const CARD_INNER_STYLE = {
  * 목록 스크롤 컨테이너(§4-D) — 높이 상한과 하단 완충이 **한 곳**에서 온다.
  *
  * ★ 행마다 패딩을 두지 않는다: 값이 두 곳에 있으면 새 목록이 생길 때 한쪽을 빠뜨리고,
- *   빠뜨린 목록에서 GP#15가 그대로 재발한다(`LIST_BOTTOM_PADDING`의 교훈 그대로).
+ *   빠뜨린 목록에서 GP#15가 그대로 재발한다(전체 화면 시절 하단 여백 상수의 교훈 그대로).
  */
 export function PopupScrollList({ children }: { children: ReactNode }) {
   return (
@@ -404,7 +404,7 @@ export function ConfirmOverlay({ spec, onClose }: { spec: ConfirmSpec; onClose: 
  * ★ `renderBody`를 통해서만 본문을 그리게 해서, 폴백 모드에서 *"오버레이와 원 콘텐츠가 동시에
  *   떠 있는"* 상태를 **호출부가 만들 수 없게** 한다(구조로 예외를 없앤다).
  * ★ `showModal`이 죽는 경우(런타임에 undefined일 수 있다)는 **화면이 말한다** — 안전한 것과
- *   진단 가능한 것은 다른 요건이다(`ManageTab.openModal`이 세운 문법 그대로).
+ *   진단 가능한 것은 다른 요건이다(구 화면의 확인창 열기가 세운 문법 그대로).
  */
 export function usePopupGate(): {
   gate: ConfirmGate;

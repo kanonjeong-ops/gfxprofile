@@ -45,20 +45,9 @@ const deckyui = {
 const modules = {
   react,
   "./deckyui": deckyui,
-  // 현행 확인창들이 사는 파일(`ManageTab`·`DiscoverTab`)이 끌어오는 RPC — 이 프로브는
-  // **확인창의 모양**만 재므로 전부 무동작 목이다(호출되면 영원히 대기하는 약속을 준다).
-  "./rpc": {
-    getOverview: () => new Promise(() => {}),
-    listBackups: () => new Promise(() => {}),
-    deleteGame: () => new Promise(() => {}),
-    resetAll: () => new Promise(() => {}),
-    restoreBackup: () => new Promise(() => {}),
-    saveProfile: () => new Promise(() => {}),
-    setProfileName: () => new Promise(() => {}),
-    discoverGames: () => new Promise(() => {}),
-    addGame: () => new Promise(() => {}),
-    registerConfident: () => new Promise(() => {}),
-  },
+  // ⚠️ `./rpc` 목은 두지 않는다(P15): 여기서 로드하는 것은 `popup.tsx`·`confirmSpecs.tsx`뿐이고
+  //   둘 다 rpc를 **타입으로만** 참조한다(트랜스파일에서 사라진다). 실제로 부르는 코드가
+  //   생기면 로더가 `unmocked: ./rpc`로 **소리 내어** 죽는다 — 조용히 통과하지 않는다.
   "./ui/ErrorBoundary": null,       // 실물을 쓴다(경계 배치가 판정 대상이다) — 아래에서 채운다
   "./i18n": {
     t: (k, p) => (p ? `${k} ${Object.values(p).join(" ")}` : String(k)),
@@ -313,200 +302,19 @@ const lifecycle = (() => {
   };
 })();
 
-// ── ③′ spec화 **전후 동일성** — 파라미터 조합별 **신구 렌더 대조** ──────────
+// ── ③′ spec화 전후 동일성(신구 렌더 대조) — **은퇴**(P15) ──────────────────
 //
-// ★★ 왜 키 대조가 아니라 렌더 대조인가(2026-08-12 P12 게이트 C4): 소스에서 뽑은 **키 집합**은
-//   *"어느 분기에서 어떤 값과 함께 그려지는가"*를 못 본다. 그래서 분기를 뒤집거나(빈 슬롯↔저장됨),
-//   파라미터를 바꿔 넣거나, 프리필 규칙을 빠뜨려도 키 집합은 그대로라 **검사가 눈감았다**
-//   (게이트가 변이로 실증했다). → 현행 컴포넌트와 spec을 **같은 파라미터로 각각 렌더해서**
-//   화면에 나오는 글자·입력 초기값·OK 비활성까지 대조한다.
+// 이 자리에는 전체 화면 시절의 확인창 컴포넌트(구 「현황」·「관리」·「게임 추가」 화면과
+// 저장 확인창 파일에 살던 7종)와 spec을 **같은 파라미터로 각각 렌더해** 대조하는 26조합
+// 검사가 있었다. 그 컴포넌트들이
+// P15에서 삭제되어 **비교 대상 자체가 사라졌다** — 예고된 처분(P12 게이트 C4 · 설계 §12)대로
+// 은퇴한다. "옮기는 동안 잃은 것이 없다"는 이 검사의 유일한 일이었고, 그 이사는 끝났다.
 //
-// ⚠️ 처분 예고: **P15에서 legacy 확인창 컴포넌트가 삭제되면 이 대조는 은퇴한다** —
-//   그때 비교 대상이 사라지므로 스냅샷 고정으로 전환하거나 검사를 삭제한다(P15 결정).
-//   그 전까지는 "옮기는 동안 잃은 것이 없다"를 잠그는 것이 이 검사의 유일한 일이다.
-// ⚠️ **손실만 실패**로 본다(추가는 허용): P13이 §9·§7·§5-C의 신설 문구를 spec에 얹을 예정이라,
-//   추가까지 막으면 그 단계에서 이 검사가 통째로 거짓말을 하게 된다.
+// ⚠️ 스냅샷 고정으로 바꾸지 않는 이유: 신 코드끼리의 대조는 ③(양 렌더러 동일성)이 이미
+//   하고 있고, spec 문구 자체는 `test_wording_10a`(값 바이트 고정)와 팝업별 프로브가 잡는다.
+//   여기서 렌더 결과를 다시 박제하면 **문구를 고칠 때마다 갱신해야 하는 사본**이 하나 더
+//   생길 뿐이다(고정 대상이 늘면 계획된 개정을 검사가 막는다 — 이월 대장 #10과 같은 성질).
 
-/** 확인창 하나의 관측면 — 글자·입력 초기값·OK 비활성. 신구를 이 셋으로 대조한다. */
-function faceOf(node) {
-  const field = find(node, "TextField");
-  const modal = find(node, "ConfirmModal");
-  const okBtn = buttons(node)[0];
-  return {
-    texts: texts(node).slice().sort(),
-    field: field ? field.node.props.value : null,
-    okDisabled: modal ? !!modal.node.props.bOKDisabled : (okBtn ? okBtn.disabled : null),
-  };
-}
-
-/** 두 렌더러(현행 컴포넌트 / spec)를 같은 파라미터로 돌려 관측면을 나란히 놓는다. */
-function parityCase(label, drawLegacy, spec, typed) {
-  const legacyHost = makeHost(drawLegacy);
-  let legacyNode = legacyHost.render();
-  const specRun = renderNested(spec);
-  let specNode = specRun.node;
-  if (typed !== undefined) {
-    // 입력형: **같은 글자를 쳐 넣고** 다시 본다 — okDisabled의 동적 평가가 신구 같은지까지 잰다.
-    const lf = find(legacyNode, "TextField");
-    const sf = find(specNode, "TextField");
-    if (lf) lf.node.props.onChange({ target: { value: typed } });
-    if (sf) sf.node.props.onChange({ target: { value: typed } });
-    legacyNode = legacyHost.output;
-    specNode = specRun.host.output;
-  }
-  return { label, legacy: faceOf(legacyNode), spec: faceOf(specNode) };
-}
-
-const noop = () => {};
-const DELETE_BASE = {
-  confirm_token: "T", appid: "1", name: "Game", has_dock: true, has_internal: true,
-  saved_at: { dock: "2026-08-10 09:00", internal: "2026-08-09 08:00" }, backups: 2,
-  config_path: "/cfg",
-};
-const RESTORE_BASE = {
-  appid: "1", backup_id: "b1", kind: "profile_dock", stamp: "20260810-090000",
-  stamp_label: "2026-08-10 09:00", filename: "video.ini", size: 10, disk_state: "unknown",
-};
-const RESET_BASE = {
-  confirm_token: "T", games: 3, profiles: 6, named: 1, excluded: 2, challenge: "delete",
-};
-const SAVE_BASE = {
-  confirm_token: "T", size: 1234, sha1_short: "abc0123", saved_at: "2026-08-10T09:00:00+0900",
-  disk_state: "unknown",
-};
-
-// 현행 확인창들 — `ManageTab`의 것은 **모듈 private**이라 사본에 export를 덧붙여 꺼낸다.
-const legacyManage = load("ManageTab.tsx", (src) => src +
-  "\nexport { DeleteConfirm, ResetConfirm, RestoreConfirm, RestoreFollowUp, NameEditModal };\n");
-const legacySave = load("saveConfirm.tsx");
-
-const parity = [];
-
-// ① 저장(덮어쓰기) — 프로필 2 × 디스크 상태 4
-[["dock"], ["internal"]].forEach(([profile]) => {
-  [
-    { disk_state: "other_profile", matched_profile: "dock" },
-    { disk_state: "unknown" },
-    { disk_state: "missing" },
-    { disk_state: "lookup_failed" },
-  ].forEach((variant) => {
-    const params = { ...SAVE_BASE, ...variant };
-    parity.push(parityCase(
-      `Save[${profile}/${variant.disk_state}]`,
-      () => h(legacySave.SaveConfirmModal, { params, profile, onConfirm: noop }),
-      specs.makeSaveConfirmSpec(params, profile, noop),
-    ));
-  });
-});
-
-// ② 등록 해제 — 슬롯 유무 4조합 + 저장 시각 미상 + 백업 0건
-[
-  { has_dock: true, has_internal: true },
-  { has_dock: false, has_internal: false, backups: 0 },
-  { has_dock: true, has_internal: false, saved_at: { dock: "", internal: "" } },
-  { has_dock: false, has_internal: true, backups: 0 },
-].forEach((variant, i) => {
-  const params = { ...DELETE_BASE, ...variant };
-  parity.push(parityCase(
-    `Delete[${i}]`,
-    () => h(legacyManage.DeleteConfirm, { params, onConfirm: noop }),
-    specs.makeDeleteConfirmSpec(params, noop),
-  ));
-});
-
-// ③ 전체 초기화 — 표시명 유/무 × (입력 전 / challenge 입력 후)
-[1, 0].forEach((named) => {
-  const params = { ...RESET_BASE, named };
-  parity.push(parityCase(
-    `Reset[named=${named}]`,
-    () => h(legacyManage.ResetConfirm, { params, onConfirm: noop }),
-    specs.makeResetConfirmSpec(params, "", noop),
-  ));
-  parity.push(parityCase(
-    `Reset[named=${named}/typed]`,
-    () => h(legacyManage.ResetConfirm, { params, onConfirm: noop }),
-    specs.makeResetConfirmSpec(params, "", noop),
-    params.challenge,
-  ));
-});
-// challenge와 다른 입력 — OK가 계속 잠겨 있어야 한다(신구 같은 판정인가)
-parity.push(parityCase(
-  "Reset[typed=wrong]",
-  () => h(legacyManage.ResetConfirm, { params: RESET_BASE, onConfirm: noop }),
-  specs.makeResetConfirmSpec(RESET_BASE, "", noop),
-  "delet",
-));
-
-// ④ 복원 — 대피본 종류 4 × 디스크 상태
-[
-  { kind: "profile_dock", disk_state: "other_profile", matched_profile: "internal" },
-  { kind: "profile_internal", disk_state: "unknown" },
-  { kind: "disk", disk_state: "missing" },
-  { kind: "unknown", disk_state: "lookup_failed" },
-].forEach((variant) => {
-  const params = { ...RESTORE_BASE, ...variant };
-  parity.push(parityCase(
-    `Restore[${variant.kind}]`,
-    () => h(legacyManage.RestoreConfirm, { params, onConfirm: noop }),
-    specs.makeRestoreConfirmSpec(params, noop),
-  ));
-});
-
-// ⑤ 복원 후속 제안 — 프로필 2
-["dock", "internal"].forEach((profile) => {
-  parity.push(parityCase(
-    `RestoreFollowUp[${profile}]`,
-    () => h(legacyManage.RestoreFollowUp, { profile, onConfirm: noop }),
-    specs.makeRestoreFollowUpSpec(profile, noop),
-  ));
-});
-
-// ⑥ 표시 이름 편집 — ★ **프리필 규칙**(기본 이름이면 빈 칸, 사용자 이름이면 채운 채)
-[
-  { current: "PROFILE_DOCK", note: "기본 이름 = 빈 칸" },
-  { current: "내 독", note: "사용자 이름 = 채운 채" },
-].forEach(({ current }) => {
-  parity.push(parityCase(
-    `NameEdit[${current}]`,
-    () => h(legacyManage.NameEditModal, {
-      profile: "dock", current, fallback: "PROFILE_DOCK", maxLen: 20, onConfirm: noop,
-    }),
-    specs.makeNameEditSpec({ profile: "dock", current }, noop),
-  ));
-});
-
-// ⑦ 등록 경고 — 현행은 `DiscoverTab` 안의 클로저라 **화면을 태워서** 꺼낸다.
-const discoverWarn = (() => {
-  const entry = {
-    appid: "500", name: "Warned Game", library: "/lib", confident: true, registered: false,
-    candidate_count: 1, best: { path: "/lib/x.ini", tier: 1, size: 10, mtime_label: "m" },
-    candidates: [],
-  };
-  const warnParams = {
-    confirm_token: "T", warnings: ["WARN_OUTSIDE_SCAN_ROOTS", "WARN_NOT_DISCOVER_CANDIDATE"],
-    name: entry.name, config_path: entry.best.path,
-  };
-  modules["./filepicker"] = { pickConfigFile: () => Promise.resolve(null) };
-  // ⚠️ **제자리 갱신**이다 — 새 객체로 바꾸면 이미 로드된 `ManageTab`이 옛 목을 붙든 채로 남는다.
-  Object.assign(modules["./rpc"], {
-    discoverGames: () => Promise.resolve({
-      ok: true,
-      data: {
-        entries: [entry],
-        counts: { total: 1, registered: 0, unregistered: 1, confident_unregistered: 1 },
-        libraries: ["/lib"], excluded: [],
-      },
-    }),
-    addGame: () => Promise.resolve({ ok: false, code: "CONFIRM_REQUIRED", params: warnParams }),
-    registerConfident: () => Promise.resolve({ ok: true, data: { results: [], counts: {} } }),
-  });
-  const discover = load("DiscoverTab.tsx");
-  const discoverHost = makeHost(() => h(discover.DiscoverTab, {}));
-  discoverHost.render();
-  return { host: discoverHost, warnParams };
-})();
-
-// ── ④ 게이트 두 모드 + 실패 note ─────────────────────────────────────────────
 
 // ── ④ 게이트 두 모드 + 실패 note ─────────────────────────────────────────────
 function driveGate(mod, spec) {
@@ -623,23 +431,6 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
     restoredInitial: find(restored.node, "TextField").node.props.value,
   };
 
-  // ⑦ 등록 경고 — 화면이 데이터를 받은 뒤 [추가]를 눌러야 현행 확인창이 뜬다.
-  await settle();
-  const addButton = buttons(discoverWarn.host.output)
-    .find((b) => /^DISCOVER_ADD\b|^DISCOVER_ADD_ONE\b/.test(b.label));
-  shownModals.length = 0;
-  if (addButton && addButton.onClick) addButton.onClick();
-  await settle();
-  const legacyWarn = shownModals[shownModals.length - 1] || null;
-  parity.push({
-    label: "DiscoverWarn",
-    legacy: legacyWarn ? faceOf(legacyWarn) : null,
-    spec: faceOf(renderNested(specs.makeDiscoverWarnSpec(discoverWarn.warnParams, noop)).node),
-    // 현행 확인창을 못 꺼냈으면 **대조가 항진식**이다 — 판정부가 이 값을 보고 FAIL시킨다.
-    legacyCaptured: !!legacyWarn,
-    addButtonLabel: addButton ? addButton.label : null,
-  });
-
   // ── ⑤′ §4-F 개정: 세대 가드 · busy 문 하나 · 확정 실행 재조회 규칙 ─────────
   //
   // 여기서 재는 것은 **훅 자체**다. 팝업 화면을 거치지 않는 이유: 이 계약은 세 팝업이
@@ -747,7 +538,6 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
     views: viewReport,
     gate: gateReport,
     lifecycle,
-    parity,
     nestedGate: nestedGateReport,
     fallbackGate: fallbackGateReport,
     failure: failureReport,

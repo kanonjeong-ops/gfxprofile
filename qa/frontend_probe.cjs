@@ -87,8 +87,6 @@ const modules = {
   },
   "@decky/api": {
     definePlugin: (fn) => fn,
-    // 전체 화면 route 등록. 프로브는 QAM 패널만 렌더하므로 호출 사실만 받아 둔다.
-    routerHook: { addRoute: () => {}, removeRoute: () => {} },
     toaster: { toast: () => {} },
     useQuickAccessVisible: () => true,
   },
@@ -137,7 +135,6 @@ const modules = {
     ButtonItem: { __kind: "ButtonItem" },
     ConfirmModal: { __kind: "ConfirmModal" },
     Focusable: { __kind: "Focusable" },
-    Navigation: { Navigate: () => {} },
     ToggleField: { __kind: "ToggleField" },
     DialogButton: { __kind: "DialogButton" },
     ModalRoot: { __kind: "ModalRoot" },

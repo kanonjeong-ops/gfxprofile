@@ -60,7 +60,6 @@ const modules = {
   react,
   "@decky/api": {
     definePlugin: (fn) => fn,
-    routerHook: { addRoute: () => {}, removeRoute: () => {} },
     toaster: { toast: (v) => { calls.toasts.push(v); } },
     useQuickAccessVisible: () => true,
   },
@@ -116,8 +115,6 @@ const modules = {
       return new Promise((resolve) => { releaseApply = () => resolve(answer()); });
     },
   },
-  // 죽은 코드(P15-D에서 제거) — 이 화면의 판정 대상이 아니라 목으로 세운다.
-  "./StatusPage": { StatusPage: { __kind: "StatusPage" } },
   // 팝업 3종은 **열리는 사실과 받은 prop**만 본다. 내부는 각자의 프로브가 잰다.
   "./GamesPopup": { GamesPopup: { __kind: "GamesPopup" } },
   "./DiscoverPopup": { DiscoverPopup: { __kind: "DiscoverPopup" } },

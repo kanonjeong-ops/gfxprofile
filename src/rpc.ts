@@ -104,7 +104,8 @@ export interface Overview {
   profile_names: Record<Profile, string>;
 }
 
-// `detail`을 켜면 게임별 `disk_matches`(sha1 대조)까지 온다. QAM은 안 쓰고 전체 화면만 쓴다 —
+// `detail`을 켜면 게임별 `disk_matches`(sha1 대조)까지 온다. QAM·설정 팝업은 안 쓰고
+// **팝업 G(게임 목록)만** 쓴다 —
 // 200게임에서 그 계산은 파일 크기에 좌우돼 예산을 예측할 수 없다(설계 §0-A·§9-F A-3).
 export const getOverview = rpc<[detail?: boolean], Overview>("get_overview");
 

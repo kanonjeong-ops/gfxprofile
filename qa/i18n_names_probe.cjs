@@ -69,8 +69,10 @@ out.bulkLabel = i18n.t("BULK_APPLY", { profile: i18n.t("PROFILE_DOCK") });
 out.applyShort = i18n.t("APPLY_SHORT", { profile: i18n.t("PROFILE_DOCK") });
 out.saveShort = i18n.t("SAVE_SHORT", { profile: i18n.t("PROFILE_DOCK") });
 // ★ 덮어쓰기의 사정거리 — 다른 키는 하나도 안 변해야 한다(식별자·문구 오염 방지).
-out.unrelatedKey = i18n.t("TAB_MANAGE");
-out.unrelatedMatchesTable = out.unrelatedKey === ko.TAB_MANAGE;
+// (P15: 옛 대조 키 `TAB_MANAGE`는 전체화면 탭과 함께 사라졌다 — 프로필 이름과 무관한
+//  아무 키나 되지만, **자리표시자가 없는 키**여야 대조가 값 그대로 성립한다.)
+out.unrelatedKey = i18n.t("GAMES_TITLE");
+out.unrelatedMatchesTable = out.unrelatedKey === ko.GAMES_TITLE;
 
 // ── 되돌리기: 공백만 입력은 기본 이름 ────────────────────────────────────────
 i18n.setProfileNames({ dock: "   ", internal: "내장" });

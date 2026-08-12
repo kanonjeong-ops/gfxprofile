@@ -1,4 +1,4 @@
-import { definePlugin, routerHook, toaster, useQuickAccessVisible } from "@decky/api";
+import { definePlugin, toaster, useQuickAccessVisible } from "@decky/api";
 import { useCallback, useEffect, useState, type ReactElement, type ReactNode } from "react";
 import {
   applyAll,
@@ -14,7 +14,6 @@ import { ensureLang, setProfileNames, t, tCode, type StringKey } from "./i18n";
 import { PLUGIN_VERSION } from "./version";
 import { BulkApplyButton } from "./BulkApplyButton";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
-import { StatusPage } from "./StatusPage";
 import { GamesPopup } from "./GamesPopup";
 import { DiscoverPopup } from "./DiscoverPopup";
 import { SettingsPopup } from "./SettingsPopup";
@@ -34,10 +33,6 @@ import {
 // 없으면 과거 부팅의 태그와 구분할 수 없다(설계 E6). 세 태그 전부에 fn을 붙인다.
 // 이 문자열들은 **의도적으로 번역하지 않는다** — 번역되면 진단 grep이 언어에 따라 깨진다.
 
-// 전체 화면 route. `onDismount`에서 반드시 제거한다 — 플러그인을 껐다 켜면 중복 등록된다.
-// ⚠️ P15-C 현재: QAM에는 **더 이상 이 route로 가는 입구가 없다**(§3-A 재편으로 제거됐다).
-//   route 자체·`StatusPage`·구 탭 파일은 P15-D에서 원자적으로 제거한다 — 죽은 코드로 공존한다.
-const ROUTE = "/gfxprofile";
 const FN = Math.random().toString(36).slice(2, 6);
 
 // ★ [실측 2026-08-05] Steam CEF에서 **`console.error`만 `cef_log.txt`에 실린다.**
@@ -169,8 +164,8 @@ function buildSummary(
  *   주 동작이고, 붙이면 "저장 덮어쓰기·삭제 급"과 시각 언어가 뭉개진다. C 묶음 재검토 등재분.
  * ★ **OK는 항상 활성**이다. `running_refused`는 고지 줄에만 쓰이고 활성 조건에 절대 들어가지
  *   않는다 — 조건이 되는 순간 E1(실행 중 게임이 일괄 적용을 막지 않는다)이 모달 층에서 뒤집힌다.
- * ★ 무정보 상시 줄(`APPLY_ALL_CONFIRM_NOTE`)은 §3-E D04로 **삭제**됐다 — 「예상:」 접두가
- *   이미 같은 말을 한다. (키 자체의 제거는 P15-D 일괄 정리 소관이다.)
+ * ★ 무정보 상시 줄은 §3-E D04로 **삭제**됐다 — 「예상:」 접두가 이미 같은 말을 한다.
+ *   (그 문구 키 `APPLY_ALL_CONFIRM_NOTE`도 P15에서 번역표에서 제거됐다.)
  */
 function ApplyAllConfirm({
   params,
@@ -701,24 +696,10 @@ function Content() {
   );
 }
 
-/**
- * 전체 화면 route를 경계로 감싼 것 (설계 E13).
- * `routerHook.addRoute`는 **컴포넌트**를 받으므로 인라인 JSX가 아니라 이 래퍼가 필요하다.
- *
- * ⚠️ P15-C 현재 QAM에는 이 화면으로 가는 입구가 없다 — 제거는 P15-D 소관이다.
- */
-function RoutedStatusPage() {
-  return (
-    <ErrorBoundary where="route">
-      <StatusPage />
-    </ErrorBoundary>
-  );
-}
-
 export default definePlugin(() => {
-  // ★ 두 진입점을 **각각** 감싼다(설계 E13). 하나만 감싸면 다른 쪽 렌더 실패가 그대로 트리를
-  //   무너뜨리고, 그 화면은 Game Mode에서 아무 단서도 남기지 않는다.
-  routerHook.addRoute(ROUTE, RoutedStatusPage, { exact: true });
+  // ★ 진입점은 **QAM 하나**다(P15 — 전체 화면 route 제거). 그 하나를 경계로 감싼다(설계 E13):
+  //   감싸지 않으면 렌더 실패가 트리를 통째로 무너뜨리고, Game Mode에서 아무 단서도 안 남는다.
+  //   팝업 3종은 각자 자기 `DialogBody` 안쪽에 경계를 세운다(§4-A, R-4).
   return {
     name: "eGPU Game Config Swap",
     // titleClass()는 staticClasses가 없어도 TypeError를 내지 않는다(deckyui.ts).
@@ -734,8 +715,7 @@ export default definePlugin(() => {
         <path d="M2 3h12v8H9v2h2v1H5v-1h2v-2H2V3zm1 1v6h10V4H3z" />
       </svg>
     ),
-    onDismount() {
-      routerHook.removeRoute(ROUTE);
-    },
+    // ★ `onDismount`를 두지 않는다(P15): 정리할 전역 등록이 하나도 없다. 빈 훅을 남겨 두면
+    //   "여기서 무언가 정리한다"는 거짓 신호가 되고, 로더는 없으면 부르지 않는다.
   };
 });
