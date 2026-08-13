@@ -22,12 +22,12 @@ import { ErrorBoundary } from "./ui/ErrorBoundary";
  */
 
 const COLUMN_STYLE = { display: "flex", flexDirection: "column", gap: "10px" } as const;
-const NOTE_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
+const NOTE_STYLE = { fontSize: "12px", color: "#9aa0a6", wordBreak: "keep-all" } as const;
 /**
  * 동작 note 아래에 붙는 **보조 줄**(P15-E R4) — 지금은 "다시 읽지 못했다" 한 종류다.
  * 한 단계 작은 글자라 *"방금 한 일"*과 *"화면이 낡았을 수 있다"*가 시각적으로 갈린다.
  */
-const SUB_NOTE_STYLE = { fontSize: "11px", color: "#9aa0a6" } as const;
+const SUB_NOTE_STYLE = { fontSize: "11px", color: "#9aa0a6", wordBreak: "keep-all" } as const;
 
 /** 아이콘이 제목과 같은 줄에 설 때의 자리. 색은 주변을 따라간다(아이콘은 currentColor다). */
 const HEADER_ICON_STYLE = { display: "inline-flex", marginRight: "6px", verticalAlign: "-0.1em" } as const;
@@ -60,6 +60,26 @@ export const ICON_SLOT_STYLE = {
   display: "inline-flex", width: "1em", justifyContent: "center", marginRight: "4px",
   verticalAlign: "-0.125em",
 } as const;
+
+/**
+ * **한국어 낱말 보존**(`word-break: keep-all`) — `ButtonItem`의 `description` 슬롯 전용 관용구.
+ *
+ * ★★ 왜 필요한가: CSS 기본 줄바꿈은 한국어를 **글자 단위**로 끊는다. QAM 잔글씨 컨테이너는
+ *   268px뿐이라 한 문장이 두 줄로 감기는데, 그 자리가 낱말 한가운데다 —
+ *   실기에서 "…게임만 대상 / 으로 합니다."로 갈라진 것이 접수 경위다(2026-08-13).
+ *   `keep-all`은 낱말 경계에서만 끊게 하는 표준 속성이고, 문장을 짧게 다듬는 땜빵과 달리
+ *   **그 자리를 쓰는 모든 한국어 문장이 함께** 고쳐진다.
+ *
+ * ★ 다른 잔글씨 슬롯은 이 상수를 쓰지 않는다 — 자기 스타일 상수에 속성을 직접 실었다.
+ *   여기에 상수가 따로 있는 이유는 **`description`이 style을 받지 않는 prop**이기 때문이다:
+ *   `<ButtonItem description={<span style={KEEP_ALL_STYLE}>{…}</span>}>`가 유일한 통로다.
+ *   소비자는 둘 — QAM의 진입 버튼(`index.tsx`)과 일괄 적용 버튼의 사유 줄(`BulkApplyButton`).
+ *
+ * ⚠️ **경로·파일명 슬롯에는 걸지 않는다**(`GAME_CONFIG_PATH`·`BACKUP_ROW_META`·후보 경로).
+ *   끊을 낱말 경계가 없는 문자열이라 넘칠 수 있다 — 그 자리는 `PATH_STYLE` 계열이 맡고,
+ *   `word-break`가 **상속되는 속성**이라 그쪽은 `normal`을 명시해 조상의 값을 되돌린다.
+ */
+export const KEEP_ALL_STYLE = { wordBreak: "keep-all" } as const;
 
 // ── 골격 (§4-A) ──────────────────────────────────────────────────────────────
 

@@ -26,7 +26,15 @@ import type {
  */
 
 const COLUMN_STYLE = { display: "flex", flexDirection: "column", gap: "10px" } as const;
-const META_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
+/* 확인창 잔글씨 — **한국어 문장**이라 낱말 중간 줄바꿈을 막는다(정본: `popup.tsx`의
+   `KEEP_ALL_STYLE`). 확인창은 팝업보다 넓지만 규칙을 화면마다 갈라 두면 언젠가 어긋난다. */
+const META_STYLE = { fontSize: "12px", color: "#9aa0a6", wordBreak: "keep-all" } as const;
+/**
+ * 경로 줄 — **낱말 보존을 걸지 않는** 잔글씨다(`GamesPopup`의 같은 이름과 같은 판단).
+ * `wordBreak`는 상속되므로 `normal`을 명시해 조상의 `keep-all`을 되돌린다.
+ * 소비자는 하나 — 등록 해제 확인창의 `DELETE_CONFIRM_PATH`.
+ */
+const PATH_STYLE = { ...META_STYLE, wordBreak: "normal" } as const;
 const WARN_STYLE = { color: "#ffb454" } as const;
 
 function profileKey(p: Profile) {
@@ -116,7 +124,7 @@ export function makeDeleteConfirmSpec(
             **삭제 전의 registry뿐**이다. 지우기 직전이 그 경로를 보여줄 마지막 기회다.
             ⚠️ 빈 문자열이 올 수 있다(unsafe-key 분기는 entry를 읽지 않는다 — `remove.py:118-123`).
               **빈 값이면 줄 자체를 그리지 않는다**(R-11 — 기존 "0이면 안 그림" 문법). */}
-        {params.config_path ? <div style={META_STYLE}>{t("DELETE_CONFIRM_PATH", { path: params.config_path })}</div> : null}
+        {params.config_path ? <div style={PATH_STYLE}>{t("DELETE_CONFIRM_PATH", { path: params.config_path })}</div> : null}
         {/* ★ §9-① 재등록·복원 경로 예고 — "삭제 = 등록 해제 + 감지 제외"(A9)라 이 게임은
             다음 감지 목록에서도 사라진다. 되돌아오는 길을 **지우기 전에** 말해 둔다. */}
         <div>{t("DELETE_CONFIRM_REDISCOVER")}</div>

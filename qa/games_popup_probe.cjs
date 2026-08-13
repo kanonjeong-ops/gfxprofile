@@ -397,6 +397,9 @@ function applyFace(b) {
   // 3개라고 약속**하는 갈래다. 표시 조건(excluded≥1)에 raw를 쓰는 것은 옳고, 틀린 것은
   // **같은 수를 약속에 재사용한 것**이었다. 그래서 이 장면은 *"안내가 어떤 수도 말하지 않는가"*를
   // 잰다 — 수를 안 말하면 D의 `DISCOVER_EXCLUDED_OPEN({n})`과 **모순할 자리 자체가 없다.**
+  // ★ 12판(§5-A): 같은 이유로 *"볼 수 있습니다"* 라는 **가시성 약속도 위치 진술로 낮췄다**
+  //   (손상 기록만 남으면 rows가 0이라 약속이 거짓이 된다). **경로는 그대로 남는다** —
+  //   되찾는 동선이 사라지면 안 되므로 "「제외한 게임」에 있습니다"는 유지다. 판정은 불변.
   SCENE.games = GAMES;
   SCENE.counts = { total: 4, dock_ready: 3, internal_ready: 2, running: 1, incomplete: 2, excluded: 3 };
   resetCalls();

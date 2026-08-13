@@ -28,8 +28,10 @@ import {
  */
 
 const COLUMN_STYLE = { display: "flex", flexDirection: "column", gap: "10px" } as const;
-const META_STYLE = { fontSize: "11px", color: "#9aa0a6" } as const;
-const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
+/* 잔글씨 2종은 전부 **한국어 문장**을 그린다(이 화면에는 경로·파일명 슬롯이 없다) —
+   `wordBreak: "keep-all"`로 낱말 중간 줄바꿈을 막는다(정본: `popup.tsx`의 `KEEP_ALL_STYLE`). */
+const META_STYLE = { fontSize: "11px", color: "#9aa0a6", wordBreak: "keep-all" } as const;
+const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6", wordBreak: "keep-all" } as const;
 const SECTION_STYLE = { marginTop: "16px", paddingTop: "10px", borderTop: "1px solid #3a3f44" } as const;
 const SECTION_TITLE_STYLE = { fontSize: "14px", fontWeight: "bold", marginBottom: "6px" } as const;
 const ROW_STYLE = { display: "flex", alignItems: "center", gap: "8px", padding: "6px 0" } as const;

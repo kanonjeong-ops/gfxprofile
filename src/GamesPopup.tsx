@@ -40,15 +40,29 @@ import {
 
 // ── 스타일 (한 곳에 모은다 — 카드가 세 뷰에서 같은 모양이어야 한다) ──────────
 const COLUMN_STYLE = { display: "flex", flexDirection: "column", gap: "10px" } as const;
-const META_STYLE = { fontSize: "11px", color: "#9aa0a6" } as const;
+/* 잔글씨 3종(META·DESC·HINT)은 **한국어 문장**을 그린다 — `wordBreak: "keep-all"`로 낱말
+   중간 줄바꿈을 막는다(사유·제외 규칙의 정본은 `popup.tsx`의 `KEEP_ALL_STYLE` 주석). */
+const META_STYLE = { fontSize: "11px", color: "#9aa0a6", wordBreak: "keep-all" } as const;
+/**
+ * 경로·파일명 줄 — **낱말 보존을 걸지 않는** 잔글씨다(위 `META_STYLE`과 갈라지는 지점).
+ *
+ * ★★ 왜 상수를 따로 두는가: 같은 회색 11px인데 **줄바꿈 규칙만** 다르다. 호출부에서
+ *   `{...META_STYLE, wordBreak:"normal"}`로 덧쓰면 예외가 슬롯마다 흩어지고 하나를 빠뜨리는
+ *   날이 온다 — *"경로를 그리는 자리"*라는 개념에 이름을 주어 **예외가 생길 자리 자체를 없앤다.**
+ * ★ `normal`을 **명시한다**: `wordBreak`는 상속되는 속성이라 조상이 `keep-all`이면 여기까지
+ *   내려오고, 경로에는 끊을 낱말 경계가 없어 그러면 줄이 통째로 넘친다.
+ * 소비자는 둘 — 상세 뷰의 `GAME_CONFIG_PATH`, 백업 목록 행의 `BACKUP_ROW_META`(파일명).
+ */
+const PATH_STYLE = { ...META_STYLE, wordBreak: "normal" } as const;
 /**
  * 동작 버튼 아래 설명 줄 — 들여쓰기가 버튼의 가로 패딩과 같아 **라벨과 축을 공유**한다(§4-G 3항).
  * 이 상수는 `ActionButton`의 desc 전용이다(다른 설명 줄과 섞어 쓰지 말 것 — 축 공유가 깨진다).
  */
 const DESC_STYLE = {
   fontSize: "11px", color: "#9aa0a6", margin: "2px 0 6px", paddingLeft: STACKED_DESC_PAD,
+  wordBreak: "keep-all",
 } as const;
-const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
+const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6", wordBreak: "keep-all" } as const;
 
 /* 카드(§5-A)의 두 상수는 **`popup.tsx`에 있다** — 팝업 D의 후보 행과 같은 모양이어야 하고,
    값이 두 곳에 있으면 한쪽만 손대는 날 같은 목록이 화면마다 달라진다(P14 공용화). */
@@ -483,7 +497,11 @@ export function GamesPopup({
               **원본 키 수**(raw)이고, 이 안내가 가리키는 제외 뷰는 **손상 항목을 격리한 뒤의 rows**를
               보여 준다(설계 §15-D E5). 조건에 raw를 쓰는 것은 옳지만(A9 ④ 도달성), 같은 수를
               *"거기서 볼 수 있습니다"*라는 약속에 재사용하면 그 약속이 어긋난다.
-              수를 아예 안 말하면 **어긋날 자리가 소멸한다** — 문구에 자리표시자가 없다. */}
+              수를 아예 안 말하면 **어긋날 자리가 소멸한다** — 문구에 자리표시자가 없다.
+            ★★ 12판(§5-A): 같은 이유가 *"볼 수 있습니다"* 에도 적용돼 **가시성 약속을 위치 진술로
+              낮췄다**(손상 기록만 남으면 제외 화면에 그릴 행이 0이라 약속이 거짓이 된다).
+              ⚠️ **경로를 지운 것이 아니다** — 제외된 게임을 되찾는 유일한 동선이므로
+              "[게임 감지]의 「제외한 게임」에 있습니다"는 그대로 남는다(행이 0이어도 참이다). */}
         {counts && counts.excluded > 0 ? (
           <div style={META_STYLE}>{t("GAMES_EXCLUDED_NOTE")}</div>
         ) : null}
@@ -538,11 +556,16 @@ export function GamesPopup({
             "고장"으로 읽힌다. 판정은 백엔드(meta sha 대조)이고 화면은 사실만 말한다. */}
         {game.profiles_identical ? <div style={HINT_STYLE}>{t("PROFILES_IDENTICAL")}</div> : null}
         {/* 경로가 정상 상태가 아니면 백엔드가 빈 문자열을 준다 — 그때는 줄을 그리지 않는다. */}
-        {game.config_path ? <div style={META_STYLE}>{t("GAME_CONFIG_PATH", { path: game.config_path })}</div> : null}
-        {/* ★ H3-ⓐ: 게임별 재촉이 아니라 **조작 방법 설명**이다(F10 성격 — A6와 무관). */}
-        <div style={HINT_STYLE}>
-          {t("SAVE_GUIDE", { dock: t("PROFILE_DOCK"), internal: t("PROFILE_INTERNAL") })}
-        </div>
+        {game.config_path ? <div style={PATH_STYLE}>{t("GAME_CONFIG_PATH", { path: game.config_path })}</div> : null}
+        {/* ★ H3-ⓐ: 게임별 재촉이 아니라 **조작 방법 설명**이다(F10 성격 — A6와 무관).
+            ★★ 12판: 한 키 두 문장을 **두 키·두 요소**로 나눴다(§5-B) — 값에 개행을 넣어도
+              `white-space` 미지정이라 한 줄로 이어붙었다. 순서는 **아래 저장 버튼 2개와 같다**
+              (dock → internal): 어긋나면 사용자가 줄과 버튼을 짝짓지 못한다.
+            ★ "게임을 종료하고"가 핵심이다 — 게임은 종료할 때 설정 파일을 다시 쓰므로, 실행 중에
+              저장하면 디스크에 남은 옛 값이 저장될 수 있다. 사후 방어(`SAVE_DESC_RUNNING`)는
+              그대로 두되, 안내가 미리 말하면 실수 자체가 생기지 않는다. */}
+        <div style={HINT_STYLE}>{t("SAVE_GUIDE_DOCK", { dock: t("PROFILE_DOCK") })}</div>
+        <div style={HINT_STYLE}>{t("SAVE_GUIDE_INTERNAL", { internal: t("PROFILE_INTERNAL") })}</div>
 
         {(["dock", "internal"] as const).map((p) => (
           <ActionButton
@@ -607,7 +630,8 @@ export function GamesPopup({
               <div style={{ ...CARD_INNER_STYLE, ...ROW_STYLE }}>
                 <div style={{ flex: "1 1 auto", minWidth: 0 }}>
                   <div style={{ fontSize: "14px" }}>{kindText(row)}</div>
-                  <div style={META_STYLE}>
+                  {/* 파일명이 들어가는 줄이라 `PATH_STYLE`이다 — 문장이 아니라 식별자다. */}
+                  <div style={PATH_STYLE}>
                     {t("BACKUP_ROW_META", {
                       stamp: row.stamp_label || t("BACKUP_STAMP_UNKNOWN"),
                       size: row.size,

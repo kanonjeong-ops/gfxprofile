@@ -16,7 +16,7 @@ import { ensureLang, setProfileNames, t, tCode, type StringKey } from "./i18n";
 import { PLUGIN_VERSION } from "./version";
 import { BulkApplyButton } from "./BulkApplyButton";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
-import { CARD_STYLE, ICON_SLOT_STYLE, useDataDoor } from "./popup";
+import { CARD_STYLE, ICON_SLOT_STYLE, KEEP_ALL_STYLE, useDataDoor } from "./popup";
 import { GamesPopup } from "./GamesPopup";
 import { DiscoverPopup } from "./DiscoverPopup";
 import { SettingsPopup } from "./SettingsPopup";
@@ -302,7 +302,16 @@ function setLastFailure(next: Failure | null) {
   statusListeners.forEach((notify) => notify());
 }
 
-const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
+/**
+ * QAM 잔글씨 — 설명 줄(§3-D)과 카운트 줄(§3-C)이 쓴다.
+ *
+ * ★★ `wordBreak: "keep-all"`은 **낱말 중간 줄바꿈**을 막는다(2026-08-13 실기 접수). 이 자리의
+ *   컨테이너는 268px이라 36자 문장이 반드시 두 줄로 감기는데, CSS 기본값은 한국어를 글자
+ *   단위로 끊어 `QAM_ABOUT`이 "…게임만 대상 / 으로 합니다."로 갈라졌다. 문장을 짧게 다듬는
+ *   대신 속성을 거는 이유는 **이 자리를 쓰는 모든 한국어 문장이 함께 고쳐지기** 때문이다.
+ *   사유·소비자·제외 규칙의 정본은 `popup.tsx`의 `KEEP_ALL_STYLE` 주석이다.
+ */
+const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6", wordBreak: "keep-all" } as const;
 
 const MUTED_COLOR = "#9aa0a6";
 /** 주의색은 **주황 하나**다 — 빨강은 쓰지 않는다(A8). */
@@ -335,6 +344,10 @@ const STATUS_CARD_STYLE = {
   display: "flex",
   flexDirection: "column",
   gap: "6px",
+  // ★ 위 `HINT_STYLE`과 같은 사유 — 이 카드의 줄들도 268px 안에서 감기는 한국어 문장이다.
+  //   (D4가 이 자리의 붕괴였다. 배치는 그때 고쳤고, **낱말이 갈라지는 것**은 이 속성이 막는다.)
+  //   ⚠️ 상속되는 속성이지만 이 카드 안에는 경로·파일명 슬롯이 없다 — QAM은 경로를 그리지 않는다.
+  wordBreak: "keep-all",
 } as const;
 
 /**
@@ -384,17 +397,22 @@ function stampOf(at: number): string {
 /**
  * 일괄 버튼 아래 **사유 한 줄**(§3-A ⓑ · M1). `ButtonItem`의 `description` 슬롯으로 그린다.
  *
- * ★★ 이 식에는 **`running`이 들어가지 않는다.** 파생 재료는 `total`·`ready`뿐이다 —
- *   실행 중인 게임은 일괄 적용을 막지 않으므로(E1) *"왜 못 누르는가"*의 사유가 될 수 없고,
+ * ★★ 12판 규칙 — **「숫자가 말하지 못하는 것만 말한다」**: `total === 0`일 때만 줄이 선다.
+ *   `total > 0 && ready === 0`은 라벨의 `(0개)`가 이미 같은 말을 하므로 **줄을 그리지 않는다**
+ *   (중복 제거 — 그래서 `BULK_NO_PROFILES`는 소비자가 0이 되어 폐기됐다).
+ *   갈 곳 안내는 카운트 줄의 `NO_GAMES`가 전담한다(§3-C).
+ * ★★ 이 식에는 **`running`이 들어가지 않는다**(E1). 파생 재료는 이제 **`total` 하나**다 —
+ *   `ready`는 라벨이 전담하므로 재료가 줄었고, 그만큼 그 보증은 오히려 강해졌다.
+ *   실행 중인 게임은 일괄 적용을 막지 않으므로 *"왜 못 누르는가"*의 사유가 될 수 없고,
  *   여기서 한 번 running을 읽으면 그 값이 활성 조건으로 새어 들어갈 길이 생긴다.
  * ★ `counts`가 아직 없으면 **아무 말도 하지 않는다**(D01) — 등록 수를 모르는 동안
- *   "등록된 게임이 없습니다"라고 말하면 화면이 거짓을 말한다.
+ *   "적용할 게임이 없습니다"라고 말하면 화면이 거짓을 말한다.
+ * ★ 두 버튼이 **같은 값**을 받는 것이 계약이다 — 그래서 `profile` 인자가 없다.
  */
-function bulkHint(counts: OverviewCounts | undefined, profile: Profile): string | undefined {
+function bulkHint(counts: OverviewCounts | undefined): string | undefined {
   if (!counts) return undefined;
-  if (counts.total === 0) return t("NO_GAMES");
-  const ready = profile === "dock" ? counts.dock_ready : counts.internal_ready;
-  return ready === 0 ? t("BULK_NO_PROFILES") : undefined;
+  if (counts.total === 0) return t("BULK_NO_GAMES");
+  return undefined;
 }
 
 /**
@@ -419,7 +437,14 @@ function EntryButton({
       {/* ★ 아이콘은 **children 안**이다(§3-A 10판 정오 — D2). `icon` prop은 버튼 내용이 아니라
           Field의 라벨 슬롯이라 `layout="below"`+라벨 없음에서 버튼 위 26px에 고아로 뜬다.
           관용구는 프로젝트에 하나 — `ICON_SLOT_STYLE`(popup.tsx). */}
-      <ButtonItem layout="below" description={desc} onClick={onOpen}>
+      {/* ★ 설명은 **span으로 감싸 넘긴다** — `description`은 style을 받지 않는 prop이라
+          한국어 낱말 보존(`KEEP_ALL_STYLE`)을 거는 통로가 이것뿐이다. 감싸도 슬롯은 그대로
+          Field의 설명 자리이고, 글자·배치는 변하지 않는다. */}
+      <ButtonItem
+        layout="below"
+        description={<span style={KEEP_ALL_STYLE}>{desc}</span>}
+        onClick={onOpen}
+      >
         <span style={ICON_SLOT_STYLE}>{icon}</span>{label}
       </ButtonItem>
     </PanelSectionRow>
@@ -695,9 +720,12 @@ function Content() {
   const runningNote = counts?.running ? t("BULK_RUNNING_NOTE", { n: counts.running }) : null;
 
   /**
-   * **시작 안내 조건**(§3-B ④ · §3-D ② — H2). 두 줄이 이 하나의 식을 공유한다:
-   * 조건을 각자 두면 프로필이 처음 생긴 날 한 줄만 사라진다.
-   * 프로필이 하나라도 생기면 영구히 거짓이 된다.
+   * **프로필이 아직 하나도 없는 상태**(§3-D 판정표 3행 — H2). 프로필이 하나라도 생기면
+   * 영구히 거짓이 된다.
+   *
+   * ★ 12판: 상태박스 ④ 시작 안내 슬롯이 폐기되면서(§3-B) 이 식의 소비자는 **설명 줄 한 곳**만
+   *   남았다. "조건이 한 곳이어야 두 줄이 함께 사라진다"는 규율은 **구조적으로 달성**됐고,
+   *   설명 줄의 3행/4행은 별개 식이 아니라 **같은 식의 참/거짓**이다(신설 조건 금지).
    */
   const noProfilesYet =
     !!counts && counts.total > 0 && counts.dock_ready + counts.internal_ready === 0;
@@ -746,10 +774,12 @@ function Content() {
         </div>,
       );
     }
-    // ④ 시작 안내(H2) — 특정 게임을 겨냥하지 않으므로 A6(재촉 금지)에 저촉되지 않는다.
-    if (noProfilesYet) {
-      now.push(<div key="start" style={{ color: MUTED_COLOR }}>{t("NO_PROFILES_YET")}</div>);
-    }
+    // ★ 12판: ④ 시작 안내 슬롯(`NO_PROFILES_YET`)은 폐기됐다(§3-B) — 그 안내가 하던 일을
+    //   §3-D 설명 줄이 겸하게 되어 같은 사실을 두 자리에서 말하던 상태가 해소됐고, 안내가
+    //   *"일어난 일을 말하는 자리"*에 있던 어긋남도 함께 사라졌다.
+    //   ⚠️ **미렌더 조건은 그대로다 — 프로필 수는 조건이 아니다.** ② `runningNote`는
+    //   `counts.running`만 보고 프로필 유무를 보지 않으며, 과거군도 마찬가지다. "프로필 0 +
+    //   게임 실행 중"은 §5-B 저장 안내가 유도하는 **정상 흐름**이라, 그때 상태박스는 선다.
 
     const past: ReactNode[] = [];
     if (summary) {
@@ -816,27 +846,39 @@ function Content() {
             실행 중인 게임 수는 여기 절대 들어가지 않는다 — 들어가면 게임 하나가 켜져 있다는
             이유로 아무것도 적용되지 않고, 그건 M1 불변식("하나만 거부하고 나머지는 적용")의
             정면 위반이다. running은 상태박스 고지 한 줄에서 **표시로만** 쓴다.
+
+          ★★ 12판 C-1 — **`ready`는 counts가 없으면 `undefined`다**(`?? 0` 폴백 폐기): 옛 폴백은
+            조회 전·조회 실패 화면에 `(0개)`를 그려 *"적용할 게임이 하나도 없다"*고 단언했다.
+            같은 화면의 카운트 줄("")·설명 줄(미렌더)·사유 줄(undefined)은 전부 침묵하는데
+            **라벨만 D01을 어기고 있었다.** "counts 도착"이라는 문 하나가 네 슬롯을 똑같이
+            지배한다 — 모르면 넷 다 말하지 않는다. 괄호 부재·비활성 처리는 버튼이 진다.
         */}
         {(["dock", "internal"] as const).map((profile) => (
           <BulkApplyButton
             key={profile}
             profile={profile}
-            ready={(profile === "dock" ? counts?.dock_ready : counts?.internal_ready) ?? 0}
-            hint={bulkHint(counts, profile)}
+            ready={counts ? (profile === "dock" ? counts.dock_ready : counts.internal_ready) : undefined}
+            hint={bulkHint(counts)}
             /* 잠금은 **조회까지 포함한 문**으로 판단한다(위 `locking` 주석 — P16 C4). */
             busy={locking}
             onApply={runApplyAll}
           />
         ))}
 
-        {/* 설명 영역(§3-D) — ①은 상시, ②는 시작 안내와 **같은 조건**에서만 뜬다(U-5). */}
-        <PanelSectionRow>
-          <div style={HINT_STYLE}>{t("QAM_ABOUT")}</div>
-        </PanelSectionRow>
-        {noProfilesYet && (
+        {/* 설명 영역(§3-D 12판 판정표) — **어느 상태에서든 한 줄만** 그린다(상시+조건부 누적
+            구조 폐기). 위에서부터 먼저 참인 행 하나:
+              1행 `!counts`(로딩 · 조회 실패 · 실패 승계 재개방) → **줄 자체가 없다**(D01 —
+                   모르는 상태에서 단언하지 않는다. 조회 실패는 `overview`를 만들지 않는다)
+              2행 등록 0 → 없다(그 상태의 안내는 카운트 줄 `NO_GAMES`가 전담 — 손가락 하나)
+              3행 프로필 0 → `QAM_ABOUT_GUIDE`   4행 그 외 → `QAM_ABOUT`
+            ★ 자리(placeholder)를 잡지 않는다: 1·2행에서는 **영구히 없는 줄**이라 빈 칸이 상주하면
+              "말할 게 없으면 그리지 않는다"와 어긋난다.
+            ★ 키를 변수로 넘기지 않는다 — 리터럴 두 갈래로 써야 §10-B′의 참조 0 키 grep과
+              `i18n_jsx_scan`이 두 키를 고아로 오판하지 않는다. */}
+        {!counts || counts.total === 0 ? null : (
           <PanelSectionRow>
             <div style={HINT_STYLE}>
-              {t("QAM_ABOUT_GUIDE", { dock: t("PROFILE_DOCK"), internal: t("PROFILE_INTERNAL") })}
+              {noProfilesYet ? t("QAM_ABOUT_GUIDE") : t("QAM_ABOUT")}
             </div>
           </PanelSectionRow>
         )}

@@ -4,9 +4,11 @@
  *
  * 재는 것
  *   ① 상태박스(§3-B): 슬롯 조건 · 두 군 분리 · 시각 표기 · busy 투명도 · 승계(요약·실패) ·
- *      `NO_PROFILES_YET` 소멸 조건 · **counts 미도착에 NO_GAMES 미표시**(D01)
- *   ② 카운트 줄(§3-C)과 일괄 버튼 hint(§3-A ⓑ)
- *   ③ 설명 영역(§3-D): `QAM_ABOUT` 상시 · `QAM_ABOUT_GUIDE`는 **④와 같은 조건**(U-5)
+ *      **counts 미도착에 NO_GAMES 미표시**(D01) ·
+ *      **12판: ④ 시작 안내 슬롯 폐기** — 달리 말할 것이 없으면 박스가 통째로 미렌더되지만,
+ *      **미렌더 조건에 프로필 수는 들어가지 않는다**(`noProfilesRunning` 장면이 그 음성 대조군)
+ *   ② 카운트 줄(§3-C)과 일괄 버튼 라벨 괄호·hint(§3-A ⓑ — 12판: 괄호는 0도 숫자로 그린다)
+ *   ③ 설명 영역(§3-D 판정표): **어느 상태에서도 0줄 또는 1줄**([없음, 없음, GUIDE, ABOUT])
  *   ④ 팝업 3종 배선(§4-A): 어느 컴포넌트를 여는가 · `onMutate` 전달 · 실패 고지 3종 ·
  *      **onMutate 멱등**(P15-B 인계 ① — 거부에도 발화한다)
  *   ⑤ 일괄 적용 확인창 게이트(§3-E): 무토큰 1차 → 확인창 → 토큰 재호출 ·
@@ -295,10 +297,34 @@ function slotIcon(node) {
   return icon ? icon.name : null;
 }
 
+/**
+ * 라벨 — **children만** 편다.
+ *
+ * ★★ 왜 `flatten(node)`가 아닌가: `walk`는 **prop으로 넘어간 엘리먼트까지** 화면의 일부로
+ *   훑는다(그 자체는 옳다 — 설명 슬롯도 사용자가 읽는다). 그런데 설명이 엘리먼트가 된
+ *   2026-08-13 이후에는 그 글자가 **라벨에 붙어** `"OPEN_GAMES OPEN_GAMES_DESC"`가 된다.
+ *   라벨과 설명은 다른 슬롯이므로 읽는 자리도 갈라야 한다 — props를 비운 사본을 훑어
+ *   children만 본다(판정 항목은 그대로다: 라벨이 무엇인가).
+ */
+const childText = (node) => flatten({ ...node, props: {} });
+
+/**
+ * 설명 슬롯의 **글자**. 문자열이면 그대로, 엘리먼트면 펴서 읽는다.
+ *
+ * ★ 2026-08-13: 한국어 낱말 보존(`KEEP_ALL_STYLE`)을 걸려면 `description`이 style을 받아야
+ *   하는데 그 prop에는 자리가 없어 실물이 `<span>`으로 감싸 넘긴다. `String(엘리먼트)`는
+ *   `"[object Object]"`가 되므로 — **글자가 아닌 것을 글자로 재는** 상태가 된다 — 편다.
+ *   판정 항목은 그대로다: 그 슬롯에 무슨 말이 서 있는가(없으면 여전히 `null`이다).
+ */
+function descText(d) {
+  if (d === undefined || d === null) return null;
+  return typeof d === "object" ? flatten(d) : String(d);
+}
+
 function buttonItems(root) {
   return findAll(root, "ButtonItem").map(({ node }) => ({
-    label: flatten(node),
-    description: node.props.description === undefined ? null : String(node.props.description),
+    label: childText(node),
+    description: descText(node.props.description),
     disabled: !!node.props.disabled,
     icon: slotIcon(node),
     onClick: node.props.onClick,
@@ -380,6 +406,9 @@ async function driveApply(scene, profile) {
       lines: s.view.lines.map((l) => ({ key: l.key, text: l.text })),
       count: s.view.count,
       hints: s.view.bulk.map((b) => b.description),
+      labels: s.view.bulk.map((b) => b.label),
+      // ★ C-1: counts 미도착에서는 **누를 수 없어야** 한다(모르는 채 활성이 더 나쁜 거짓이다).
+      disabled: s.view.bulk.map((b) => b.disabled),
       texts: s.view.texts,
     };
   }
@@ -391,6 +420,7 @@ async function driveApply(scene, profile) {
       lines: s.view.lines.map((l) => ({ key: l.key, text: l.text, color: l.color })),
       count: s.view.count,
       hints: s.view.bulk.map((b) => b.description),
+      labels: s.view.bulk.map((b) => b.label),
       bulkIcons: s.view.bulk.map((b) => b.icon),
       bulkDisabled: s.view.bulk.map((b) => b.disabled),
       entries: s.view.entries.map((b) => ({ label: b.label, desc: b.description, icon: b.icon })),
@@ -398,32 +428,53 @@ async function driveApply(scene, profile) {
     };
   }
 
-  // ═══ ④ 시작 안내(H2) — NO_PROFILES_YET과 QAM_ABOUT_GUIDE는 **같은 조건** ══
+  // ═══ ③-D 설명 줄 3갈래(§3-D 판정표) · ④ 폐기 확인 ════════════════════════
   {
+    // 등록 있음 · 프로필 0 · **실행 중 0 · 실패 없음 · 직전 결과 없음** —
+    // 달리 말할 것이 없으므로 상태박스가 통째로 미렌더되고, 설명 줄은 GUIDE 하나다.
     const s = await snapshot({ overview: { ok: true, counts: counts({ dock_ready: 0, internal_ready: 0 }) } });
     out.noProfiles = {
       keys: keysOf(s.view.lines),
+      boxNull: s.view.box === null,
       count: s.view.count,
       hints: s.view.bulk.map((b) => b.description),
+      labels: s.view.bulk.map((b) => b.label),
       texts: s.view.texts,
     };
   }
   {
-    // 프로필이 **하나** 생긴 순간 두 줄이 함께 사라져야 한다(조건 공유의 실증).
+    // ★★ N-d **음성 대조군 전용 장면**: 위 장면에 `running:1`만 더한 것이다.
+    //   프로필 수는 미렌더 조건이 아니므로 여기서는 상태박스가 `BULK_RUNNING_NOTE` 한 줄로
+    //   **선다.** "프로필 0 → 무조건 null"이라는 오독을 잡는 유일한 표본이고, 이 조합은 드문
+    //   것이 아니라 §5-B 저장 안내("게임에서 옵션을 맞춘 뒤 종료하고 저장")가 유도하는
+    //   흐름 그 자체다 — 사용자가 게임을 켠 채 QAM을 여는 순간이 정확히 이 상태다.
+    const s = await snapshot({
+      overview: { ok: true, counts: counts({ dock_ready: 0, internal_ready: 0, running: 1 }) },
+    });
+    out.noProfilesRunning = {
+      boxNull: s.view.box === null,
+      lines: s.view.lines.map((l) => ({ key: l.key, text: l.text })),
+      texts: s.view.texts,
+    };
+  }
+  {
+    // 프로필이 **하나** 생긴 순간 설명 줄이 GUIDE에서 ABOUT으로 갈아탄다(같은 식의 참/거짓).
     const s = await snapshot({ overview: { ok: true, counts: counts({ dock_ready: 1, internal_ready: 0 }) } });
     out.oneProfile = {
       keys: keysOf(s.view.lines),
       hints: s.view.bulk.map((b) => b.description),
+      labels: s.view.bulk.map((b) => b.label),
       texts: s.view.texts,
     };
   }
   {
-    // 등록 0 — 카운트 자리가 NO_GAMES를 맡고, 시작 안내·설명 ②는 뜨지 않는다.
+    // 등록 0 — 카운트 자리가 NO_GAMES를 맡고(갈 곳 안내 전담), 설명 줄은 **아예 없다**.
     const s = await snapshot({ overview: { ok: true, counts: counts({ total: 0, dock_ready: 0, internal_ready: 0 }) } });
     out.noGames = {
       keys: keysOf(s.view.lines),
       count: s.view.count,
       hints: s.view.bulk.map((b) => b.description),
+      labels: s.view.bulk.map((b) => b.label),
       texts: s.view.texts,
     };
   }
@@ -434,6 +485,13 @@ async function driveApply(scene, profile) {
     out.loadFailed = {
       lines: s.view.lines.map((l) => ({ key: l.key, text: l.text, color: l.color, stamped: l.stamped })),
       count: s.view.count,
+      // ★ C-1: 조회 실패도 **counts 미도착**이다 — 라벨 괄호 부재·비활성을 로딩과 같은 잣대로 잰다.
+      labels: bulkOf(s.ui.ui()).map((b) => b.label),
+      disabled: bulkOf(s.ui.ui()).map((b) => b.disabled),
+      // ★ 12판(N-e): 조회 실패도 §3-D 판정표 **1행**(`!counts`)이 덮는 상태다 — 실패는
+      //   `overview`를 만들지 않으므로 `counts`가 없다. 여기서 `texts`를 모으지 않던 탓에
+      //   *"조회 실패에서 설명 줄이 되살아나도 초록불"*인 구멍이 있었다.
+      texts: s.view.texts,
     };
 
     // **같은 모듈을 다시 마운트** = QAM을 닫았다 다시 연 것이다(F20 승계).
@@ -441,6 +499,8 @@ async function driveApply(scene, profile) {
     const again = mount(s.mod);
     await settle();
     out.failureCarried = boxLines(again.ui()).map((l) => ({ key: l.key, text: l.text }));
+    // ★ 12판(N-e): **실패 승계 재개방**도 판정표 1행이 덮는 상태다(새 조회는 아직 안 왔다).
+    out.failureCarriedTexts = seen(again.ui());
 
     // 새 로드가 성공하면 승계된 실패는 거둔다(§3-B 수명).
     SCENE.hang = false;
@@ -627,6 +687,65 @@ async function driveApply(scene, profile) {
     await settle();
     await settle();
     out.summaryCarried = boxLines(again.ui()).map((l) => ({ key: l.key, text: l.text }));
+  }
+
+  // ═══ 프로필 0 + **직전 일괄 결과** — 미렌더 조건의 두 번째 축 ══════════════
+  //
+  // ★★ 왜 장면이 하나 더 필요한가: `noProfilesRunning`은 **현재군**(실행 중 고지)이 프로필 수와
+  //   무관함만 잰다. 그래서 *"프로필 0이면 숨긴다 — 단 실행 중일 때만 예외"*로 좁힌 구현
+  //   (`if (noProfilesYet && !runningNote) return null;`)이 **전 검사를 통과했다.** §3-B의 계약은
+  //   *"현재군·과거군 줄이 모두 0일 때만 미렌더"*이고 과거군도 프로필 수를 보지 않으므로,
+  //   그 축을 잴 표본이 없으면 검사가 계약보다 좁아진다.
+  // ★ 이 상태는 실사용에서 도달한다: **일괄 적용을 한 뒤 등록을 전부 해제하면** 프로필 0인데
+  //   직전 결과는 남아 있다. 기존 「요약 승계」와 같은 결과 주입을 쓰되, **재개방 시점의 현황만**
+  //   프로필 0으로 바꾼다(`lastSummary`는 모듈 변수라 승계된다 — §3-B 수명).
+  {
+    const run = await driveApply({
+      previewTotal: 2,
+      overview: { ok: true, counts: counts() },
+      applyResult: () => ({
+        ok: true,
+        data: {
+          results: [{ appid: "1", name: "게임 하나", outcome: "applied", code: null, note: "" }],
+          counts: { applied: 1 },
+          checkin: [],
+        },
+      }),
+    }, "dock");
+    SCENE.overview = {
+      ok: true,
+      counts: counts({ dock_ready: 0, internal_ready: 0, running: 0 }),
+    };
+    const again = mount(run.s.mod);
+    await settle();
+    await settle();
+    out.noProfilesSummary = {
+      boxNull: statusBox(again.ui()) === null,
+      lines: boxLines(again.ui()).map((l) => ({ key: l.key, text: l.text })),
+      count: countLine(again.ui()),
+      texts: seen(again.ui()),
+    };
+  }
+
+  // ═══ 프로필 0 + **실패 줄** — 미렌더 조건의 세 번째 축 ════════════════════
+  //
+  // ★ `failureCarried`로는 이 축을 못 덮는다: 거기는 **counts 미도착** 상태라(승계된 실패 +
+  //   새 조회 없음) "프로필 0"이라는 사실 자체가 화면에 없다. 여기서는 조회가 성공해 counts가
+  //   도착해 있고(프로필 0), 그 위에서 팝업을 못 띄워 실패 줄이 선다 — 두 사실이 동시에 참인
+  //   유일한 표본이다. 실패도 프로필 수를 보지 않으므로 상태박스는 선다.
+  {
+    const s = await snapshot({
+      modalThrows: true,
+      overview: { ok: true, counts: counts({ dock_ready: 0, internal_ready: 0, running: 0 }) },
+    });
+    entriesOf(s.ui.ui())[0].onClick();
+    await settle();
+    out.noProfilesFailure = {
+      boxNull: statusBox(s.ui.ui()) === null,
+      lines: boxLines(s.ui.ui()).map((l) => ({ key: l.key, text: l.text })),
+      texts: seen(s.ui.ui()),
+    };
+    SCENE.modalThrows = false;
   }
 
   // ═══ ④ 팝업 3종 배선 + onMutate 멱등 ═════════════════════════════════════

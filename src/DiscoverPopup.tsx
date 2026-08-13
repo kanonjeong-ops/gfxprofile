@@ -35,11 +35,15 @@ import {
  */
 
 const COLUMN_STYLE = { display: "flex", flexDirection: "column", gap: "10px" } as const;
-const META_STYLE = { fontSize: "11px", color: "#9aa0a6" } as const;
-const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
+/* 잔글씨 3종은 전부 **한국어 문장**을 그린다 — `wordBreak: "keep-all"`로 낱말 중간
+   줄바꿈을 막는다(사유·제외 규칙의 정본은 `popup.tsx`의 `KEEP_ALL_STYLE` 주석).
+   ⚠️ 이 파일에서 **경로를 그리는 자리**는 `CANDIDATE_PATH_STYLE` 하나뿐이고 거기는 뺐다. */
+const META_STYLE = { fontSize: "11px", color: "#9aa0a6", wordBreak: "keep-all" } as const;
+const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6", wordBreak: "keep-all" } as const;
 /** [파일 직접 고르기] 아래 설명 줄 — 버튼 가로 패딩과 같은 들여쓰기로 축을 공유한다(§4-G 3항). */
 const DESC_STYLE = {
   fontSize: "11px", color: "#9aa0a6", margin: "2px 0 6px", paddingLeft: STACKED_DESC_PAD,
+  wordBreak: "keep-all",
 } as const;
 const SUMMARY_ROW_STYLE = {
   display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "8px", fontSize: "13px",
@@ -84,8 +88,14 @@ const CANDIDATE_ROW_STYLE = {
 const CANDIDATE_FILE_STYLE = {
   fontSize: "13px", fontWeight: "bold", overflow: "hidden", textOverflow: "ellipsis",
 } as const;
+/**
+ * 후보 경로 줄 — **낱말 보존을 걸지 않는 슬롯**이다(위 잔글씨 3종과 갈라지는 지점).
+ * `wordBreak`는 상속되는 속성이라 조상이 `keep-all`이면 여기까지 내려온다. 경로에는 끊을
+ * 낱말 경계가 없어 그러면 한 줄이 통째로 넘치므로, `normal`을 **명시해** 되돌린다.
+ */
 const CANDIDATE_PATH_STYLE = {
   fontSize: "11px", color: "#9aa0a6", overflow: "hidden", textOverflow: "ellipsis",
+  wordBreak: "normal",
 } as const;
 
 function tierKey(tier: number) {

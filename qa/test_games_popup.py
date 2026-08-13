@@ -111,9 +111,12 @@ BYPASSES = [
     ("제외 안내에 raw 수를 되실음(가서 보면 다른 수다 — §15-D E5)", "GamesPopup.tsx",
      r'<div style=\{META_STYLE\}>\{t\("GAMES_EXCLUDED_NOTE"\)\}</div>',
      '<div style={META_STYLE}>{t("GAMES_EXCLUDED_NOTE", { n: counts.excluded })}</div>'),
+    # ★ 2026-08-13: 경로 줄의 스타일이 `META_STYLE` → `PATH_STYLE`로 갈렸다(한국어 낱말 보존을
+    #   문장 잔글씨에만 걸고 경로는 뺀 조치). **표본을 함께 옮긴다** — 옛 철자로 두면 주입이
+    #   조용히 실패하고 이 갈래의 검사가 죽는다(실제로 그렇게 FAIL이 났다).
     ("설정 파일 경로 줄을 빈 값에도 그림", "confirmSpecs.tsx",
-     r"\{params\.config_path \? <div style=\{META_STYLE\}>\{t\(\"DELETE_CONFIRM_PATH\", \{ path: params\.config_path \}\)\}</div> : null\}",
-     '<div style={META_STYLE}>{t("DELETE_CONFIRM_PATH", { path: params.config_path })}</div>'),
+     r"\{params\.config_path \? <div style=\{PATH_STYLE\}>\{t\(\"DELETE_CONFIRM_PATH\", \{ path: params\.config_path \}\)\}</div> : null\}",
+     '<div style={PATH_STYLE}>{t("DELETE_CONFIRM_PATH", { path: params.config_path })}</div>'),
 ]
 
 
@@ -128,6 +131,14 @@ def run_probe(src_dir):
 def has_key(texts, key):
     """그 키를 **참조해서** 그린 줄이 있는가. 목의 `t()`가 키를 그대로 돌려주므로 접두로 본다."""
     return any(x == key or x.startswith(key + " ") for x in texts)
+
+
+def index_of(texts, key):
+    """그 키로 그린 **첫 줄의 자리**(없으면 -1). 존재가 아니라 **순서**를 잴 때 쓴다."""
+    for i, x in enumerate(texts):
+        if x == key or x.startswith(key + " "):
+            return i
+    return -1
 
 
 def violations(r):                                             # noqa: C901  (판정 나열)
@@ -171,6 +182,9 @@ def violations(r):                                             # noqa: C901  (�
     # (설계 §15-D E5). 두 수는 각자 옳지만, raw를 *"거기서 볼 수 있습니다"* 약속에 실으면
     # **가서 보면 다른 수**가 된다. 수를 아예 안 말하면 어긋날 자리가 소멸한다 —
     # 그래서 판정도 "그 수가 맞는가"가 아니라 **"어떤 수도 말하지 않는가"**다.
+    # ★ 12판(§5-A): 같은 이유가 *"볼 수 있습니다"* 에도 적용돼 **가시성 약속을 위치 진술로
+    #   낮췄다**. ⚠️ **경로를 지운 것이 아니다** — "[게임 감지]의 「제외한 게임」에 있습니다"는
+    #   행이 0이어도 참이라 그대로 남는다(되찾는 동선을 잃으면 안 된다). 판정은 불변이다.
     skew = r.get("excludedSkew") or {}
     note = skew.get("note")
     if note is None:
@@ -288,9 +302,23 @@ def violations(r):                                             # noqa: C901  (�
         out.append("설정 파일 경로를 상시 표시하지 않는다(복구 렌즈의 요구 — §5-B)")
     if has_key(empty, "GAME_CONFIG_PATH"):
         out.append("경로가 빈 값인데 그 줄을 그린다 — 빈 값이면 안 그린다(D-08)")
+    # ═══ H3-ⓐ 저장 안내 — **2줄**이고 **저장 버튼과 같은 순서**다 (12판 §5-B) ══════════
+    #
+    # 11판은 한 키(`SAVE_GUIDE`)에 두 문장이었는데, 값에 개행을 넣어도 `white-space` 미지정이라
+    # 렌더에서 줄이 나뉘지 않았다 — 그래서 키를 둘로 쪼갰다.
+    # ★ **존재만 보면 순서가 뒤바뀌어도 통과한다.** 안내 순서가 아래 저장 버튼 2개(dock →
+    #   internal)와 어긋나면 사용자가 줄과 버튼을 짝짓지 못하므로, 자리(index)로 함께 잠근다.
+    WANT_ORDER = ("SAVE_GUIDE_DOCK", "SAVE_GUIDE_INTERNAL",
+                  "SAVE_SHORT PROFILE_DOCK", "SAVE_SHORT PROFILE_INTERNAL")
     for name, view in (("Zeta", zeta), ("Mid", mid), ("Empty", empty)):
-        if not has_key(view, "SAVE_GUIDE"):
-            out.append(f"{name} 상세에 저장 방법 안내가 없다(H3-ⓐ)")
+        for key in ("SAVE_GUIDE_DOCK", "SAVE_GUIDE_INTERNAL"):
+            if not has_key(view, key):
+                out.append(f"{name} 상세에 저장 방법 안내 {key}가 없다(H3-ⓐ — §5-B는 2줄이다)")
+        at = [index_of(view, k) for k in WANT_ORDER]
+        if all(i >= 0 for i in at) and at != sorted(at):
+            out.append(f"★{name} 상세의 저장 안내·버튼 순서가 어긋났다: "
+                       f"{list(zip(WANT_ORDER, at))} — 안내 2줄은 dock → internal 순서로 서고 "
+                       f"그 아래 저장 버튼 2개가 같은 순서로 와야 짝이 읽힌다(§5-B)")
     empty_buttons = {b["label"]: b["disabled"] for b in (r.get("detailEmpty") or {}).get("buttons", [])}
     for lbl, want in (("SAVE_SHORT PROFILE_DOCK", False), ("SAVE_SHORT PROFILE_INTERNAL", False),
                       ("OPEN_BACKUPS 0", True)):

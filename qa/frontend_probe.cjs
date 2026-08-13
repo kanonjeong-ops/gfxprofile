@@ -230,9 +230,13 @@ function findBlocked(node, blocked) {
 const buttons = allButtons.filter((b) => textOf(b.children).trim().startsWith("BULK_APPLY"));
 const labels = buttons.map((b) => textOf(b.children).trim());
 // hint(§3-A ⓑ)는 `description` 슬롯으로 온다 — **`running`이 새어 들었는지**를 여기서 관측한다.
+// ★ 2026-08-13: 사유 줄은 한국어 낱말 보존(`KEEP_ALL_STYLE`)을 걸려고 `<span>`으로 감싸
+//   넘어온다 — `description`이 style을 받지 않는 prop이라 그 통로뿐이다. `String(엘리먼트)`는
+//   `"[object Object]"`라 **비어 있어야 할 자리가 항상 채워진 것으로 보인다**(= 이 판정이
+//   조용히 거짓말을 시작한다). 글자로 읽는다 — 판정 항목은 그대로다.
 const hints = buttons.map((b) => {
   const d = b.props.description;
-  return d === undefined || d === null ? "" : String(d);
+  return d === undefined || d === null ? "" : textOf(d);
 });
 // ★ 눌러 본다. `disabled=false`인데 아무 일도 안 하는 버튼은 **눌리지 않는 것과 같다.**
 buttons.forEach((b) => {

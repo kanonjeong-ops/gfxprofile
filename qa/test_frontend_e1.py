@@ -50,8 +50,10 @@ BYPASSES = [
         # **분리 후 남는 가장 현실적인 위반 형태**다(값을 넣어 주는 쪽에서 막는 것).
         "ready 값 오염(호출부)",
         "index.tsx",
-        r"ready=\{\(profile === \"dock\" \? counts\?\.dock_ready : counts\?\.internal_ready\) \?\? 0\}",
-        'ready={(counts?.running ?? 0) > 0 ? 0 : ((profile === "dock" ? counts?.dock_ready : counts?.internal_ready) ?? 0)}',
+        # ⚠️ 12판 C-1로 표적 식이 바뀌었다(`?? 0` 폴백 폐기 → `counts ? … : undefined`).
+        #   표적을 갱신하지 않으면 정규식이 안 맞아 **주입이 실패하고 검사가 스스로 무효를 선언한다**.
+        r"ready=\{counts \? \(profile === \"dock\" \? counts\.dock_ready : counts\.internal_ready\) : undefined\}",
+        'ready={counts ? ((counts.running ?? 0) > 0 ? 0 : (profile === "dock" ? counts.dock_ready : counts.internal_ready)) : undefined}',
     ),
     (
         "onClick 무력화(버튼은 활성인데 아무 일도 안 함)",
@@ -84,12 +86,13 @@ BYPASSES = [
         # ★ P15-C(§15-A): **hint(사유 한 줄)가 `running`을 읽는 형태.** 활성 조건은 그대로라
         #   `disabled`만 보는 검사는 통과하지만, 화면은 *"실행 중이라 못 누른다"*고 말하게 된다 —
         #   E1이 **문구 층**에서 뒤집히는 자리다(라벨이 거짓말을 하면 사용자는 게임을 끈다).
-        #   hint는 `ready`·`total`만의 함수여야 한다(설계 §3-A ⓑ).
+        #   hint는 **`total`만의 함수**여야 한다(설계 §3-A ⓑ 12판 — `ready`는 라벨이 전담하게
+        #   되면서 파생 재료가 하나로 줄었다. 재료가 줄었으므로 running 배제 보증은 더 강하다).
         "hint에 running 유입(사유 줄이 실행 중을 말한다)",
         "index.tsx",
-        r'  if \(counts\.total === 0\) return t\("NO_GAMES"\);',
+        r'  if \(counts\.total === 0\) return t\("BULK_NO_GAMES"\);',
         '  if (counts.running > 0) return t("BULK_RUNNING_NOTE", { n: counts.running });\n'
-        '  if (counts.total === 0) return t("NO_GAMES");',
+        '  if (counts.total === 0) return t("BULK_NO_GAMES");',
     ),
     (
         # ⚠️ 스프레드는 **`disabled=` 뒤에** 놓아야 이긴다. 앞에 두면 뒤의 disabled가 덮어써

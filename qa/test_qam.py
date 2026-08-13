@@ -105,14 +105,92 @@ BYPASSES = [
      r"      // 새 로드 성공 = 다음 동작의 시작이다 — 승계해 온 실패를 여기서 거둔다\(§3-B 수명\)\.\n      setFailure\(null\);\n",
      "",
      "새 로드가 성공했는데"),
-    ("H2 조건 붕괴(프로필이 생겨도 시작 안내가 남는다)", "index.tsx",
+    # 12판: 이 식의 소비자는 **설명 줄 한 곳**만 남았다(상태박스 ④ 폐기). 변이는 그대로 두고
+    # 기대 판정만 이관한다 — 프로필이 생겼는데 설명 줄이 GUIDE에서 안 갈아탄다.
+    ("H2 조건 붕괴(프로필이 생겨도 설명 줄이 GUIDE에 머문다)", "index.tsx",
      r"counts\.dock_ready \+ counts\.internal_ready === 0",
      "counts.dock_ready * counts.internal_ready === 0",
      "프로필이 생겼는데"),
-    ("설명 ②에 별도 조건 신설(두 줄의 조건이 갈린다 — 정합 ⓐ)", "index.tsx",
-     r"\{noProfilesYet && \(\n          <PanelSectionRow>\n            <div style=\{HINT_STYLE\}>\n              \{t\(\"QAM_ABOUT_GUIDE\"",
-     '{true && (\n          <PanelSectionRow>\n            <div style={HINT_STYLE}>\n              {t("QAM_ABOUT_GUIDE"',
-     "설명 ②"),
+    # ★ 11판의 "설명 ②에 별도 조건 신설" 변이는 **소스 패턴이 사라져 조용히 죽는다**(누적 구조
+    #   폐기). 같은 자리를 12판 판정표로 다시 겨눈다 — **2행(등록 0 갈래)을 지우는** 변이다.
+    ("판정표 2행 삭제(등록이 0인데 설명 줄이 뜬다)", "index.tsx",
+     r"\{!counts \|\| counts\.total === 0 \? null : \(",
+     "{!counts ? null : (",
+     "등록이 0인데 설명 줄"),
+    # ── 12판 신설 음성 대조군 5종(N-a·N-b·N-c·N-d·N-e) ────────────────────────
+    # N-a: 라벨 괄호를 0에서만 다른 키로 갈라 그리던 형태(= 제거된 `BULK_NONE`)로 되돌린다.
+    #      이 계약을 잡는 검사가 없어 그 키가 5개월을 살아남았다.
+    #      ★ 기대 장면은 **counts가 도착한 쪽**이다(프로필0·등록0에서 `ready===0`이 실재한다) —
+    #        미도착 장면의 괄호 부재는 아래 C-1 대조군이 따로 잰다.
+    ("라벨 괄호를 0에서 다른 키로 갈라 그림(BULK_NONE 복원)", "BulkApplyButton.tsx",
+     r"        \{ready === undefined \? null : t\(\"BULK_COUNT\", \{ n: ready \}\)\}",
+     '        {(ready ?? 0) > 0 ? t("BULK_COUNT", { n: ready }) : t("BULK_NONE")}',
+     "라벨의 괄호가 계약과 다르다(프로필0)"),
+    # ── C-1 음성 대조군 2종: "counts 도착"이라는 문이 라벨·활성 양쪽을 지배하는가 ──────
+    # ⓐ 호출부의 `?? 0` 폴백 부활 — 모르는 채 `(0개)`를 단언하던 형태.
+    ("counts 미도착에 ready 0 폴백 부활(모르는데 (0개)라 단언)", "index.tsx",
+     r"ready=\{counts \? \(profile === \"dock\" \? counts\.dock_ready : counts\.internal_ready\) : undefined\}",
+     'ready={(profile === "dock" ? counts?.dock_ready : counts?.internal_ready) ?? 0}',
+     "라벨의 괄호가 계약과 다르다(로딩)"),
+    # ⓑ 활성 조건의 폴백 제거 — `undefined`가 활성이 되어 **모르는 채 눌리는 버튼**이 된다.
+    #    ★ 기대 장면은 **조회 실패**다: 로딩 중에는 `locking`이 이미 잠그고 있어(§4-F 문) 이
+    #      회귀가 드러나지 않는다. 조회가 **끝났는데 counts가 없는** 상태 — 실패 갈래 — 만이
+    #      `ready`의 폴백이 유일한 방어선인 자리다. 로딩 장면의 같은 판정은 그대로 두되(잠금이
+    #      풀리는 날 그쪽도 잡는다), 실증의 무게는 여기에 있다.
+    ("비활성 폴백 제거(counts 미도착인데 버튼이 눌린다)", "BulkApplyButton.tsx",
+     r"        disabled=\{\(ready \?\? 0\) === 0 \|\| busy\}",
+     "        disabled={ready === 0 || busy}",
+     "counts 미도착(조회 실패)인데 일괄 적용 버튼이 눌린다"),
+    # N-b: 사유 줄이 다시 `ready`를 읽는 형태 — 라벨의 `(0개)`와 같은 말을 두 번 한다.
+    ("사유 줄이 ready를 본다(라벨과 같은 말을 두 번 한다)", "index.tsx",
+     r'  if \(counts\.total === 0\) return t\("BULK_NO_GAMES"\);',
+     '  if (counts.total === 0) return t("BULK_NO_GAMES");\n'
+     '  if (counts.dock_ready + counts.internal_ready === 0) return t("BULK_NO_GAMES");',
+     "사유 줄이 붙었다"),
+    # N-c: 11판의 **누적 구조**(①상시 + ②조건부)로 되돌린다 — 두 키가 한 화면에 동시에 선다.
+    ("설명 영역을 상시+조건부 누적 구조로 되돌림(두 줄이 함께 뜬다)", "index.tsx",
+     r"\{!counts \|\| counts\.total === 0 \? null : \(\n"
+     r"          <PanelSectionRow>\n"
+     r"            <div style=\{HINT_STYLE\}>\n"
+     r"              \{noProfilesYet \? t\(\"QAM_ABOUT_GUIDE\"\) : t\(\"QAM_ABOUT\"\)\}\n"
+     r"            </div>\n"
+     r"          </PanelSectionRow>\n"
+     r"        \)\}",
+     '<PanelSectionRow>\n'
+     '          <div style={HINT_STYLE}>{t("QAM_ABOUT")}</div>\n'
+     '        </PanelSectionRow>\n'
+     '        {noProfilesYet && (\n'
+     '          <PanelSectionRow>\n'
+     '            <div style={HINT_STYLE}>{t("QAM_ABOUT_GUIDE")}</div>\n'
+     '          </PanelSectionRow>\n'
+     '        )}',
+     "배타성 위반"),
+    # N-d: **미렌더 조건에 프로필 수를 넣는** 형태. `noProfiles` 장면만 보면 통과하고,
+    #      `running:1`을 더한 대조군에서만 드러난다.
+    ("상태박스 미렌더 조건에 프로필 수를 넣음(실행 중 고지가 사라진다)", "index.tsx",
+     r"  function renderStatusBox\(\): ReactNode \{\n    const now: ReactNode\[\] = \[\];",
+     "  function renderStatusBox(): ReactNode {\n    if (noProfilesYet) return null;\n"
+     "    const now: ReactNode[] = [];",
+     "프로필 0 + 실행 중"),
+    # ★★ 위 변이를 **N-d만 피해 가게 좁힌** 형태(QA 게이트 적발 — 이것이 전 검사를 통과했다).
+    #    "실행 중일 때만 예외"로 두면 현재군 한 슬롯은 살아나지만 **과거군·실패가 사라진다.**
+    #    두 형태를 각각 다른 판정으로 겨눠, 어느 축의 표본이 죽어도 드러나게 한다.
+    ("미렌더 조건에 프로필 수 + running만 예외(직전 결과가 사라진다)", "index.tsx",
+     r"  function renderStatusBox\(\): ReactNode \{\n    const now: ReactNode\[\] = \[\];",
+     "  function renderStatusBox(): ReactNode {\n"
+     "    if (noProfilesYet && !runningNote) return null;\n"
+     "    const now: ReactNode[] = [];",
+     "직전 일괄 결과가 화면에서 사라졌다"),
+    ("호출부에서 프로필 0을 통째로 숨김(실패 줄까지 사라진다)", "index.tsx",
+     r"        \{renderStatusBox\(\)\}",
+     "        {noProfilesYet && !counts?.running ? null : renderStatusBox()}",
+     "실패 줄이 사라졌다"),
+    # N-e: 판정표 1행을 **로딩만 덮게** 좁힌다 — 조회 실패·실패 승계에서 설명 줄이 되살아난다.
+    #      (`?.`는 좁힌 뒤에도 렌더가 죽지 않게 하는 것뿐이다 — 실제 회귀도 그렇게 생긴다.)
+    ("판정표 1행을 로딩만 덮게 좁힘(조회 실패에서 설명 줄이 되살아난다)", "index.tsx",
+     r"\{!counts \|\| counts\.total === 0 \? null : \(",
+     "{(!overview && !failure) || counts?.total === 0 ? null : (",
+     "counts 미도착"),
     ("D01 위반 — 카운트 줄이 조회 전에 '게임 없음'을 단언", "index.tsx",
      r'  const countText = !counts\n    \? ""', '  const countText = !counts\n    ? t("NO_GAMES")',
      "조회 전인데 카운트 줄이"),
@@ -192,6 +270,33 @@ def has(texts, key):
     return any(x == key or x.startswith(key + " ") for x in texts)
 
 
+#: 일괄 버튼 라벨의 **끝 괄호**. 규칙은 두 층이다(§2-B 12판 + C-1 정정):
+#:   ⓐ **counts 도착 여부**가 괄호의 유무를 정한다 — 미도착이면 괄호가 **아예 없다**(D01).
+#:   ⓑ 도착한 뒤에는 `ready`가 0이어도 `BULK_COUNT`로 그린다 — 0에서만 다른 키로 갈라 그리면
+#:      같은 자리·같은 종류의 수가 한쪽만 숫자라 `(3개)`↔`(0개)` 비교가 깨진다.
+#: ⚠️ **이 계약을 잡는 검사가 지금까지 하나도 없었다**(라벨 접두 `BULK_APPLY`만 봤다) —
+#:   미등재 승계 키 `BULK_NONE`이 5개월 안 걸린 이유다.
+LABEL_COUNT = re.compile(r"^BULK_APPLY \S+ BULK_COUNT (\d+)$")
+LABEL_BARE = re.compile(r"^BULK_APPLY \S+$")
+
+
+def label_counts(labels):
+    """라벨을 세 갈래로 읽는다 — **`int`**=괄호 안의 수 · **`None`**=괄호 없음(counts 미도착의
+    정직한 표현) · **원문 문자열**=그 밖의 무엇이든(다른 키로 갈라 그렸다). 세 번째를 `None`과
+    뭉치면 *"모른다고 말한 것"*과 *"거짓말한 것"*이 판정에서 같아진다."""
+    out = []
+    for label in labels:
+        label = label or ""
+        m = LABEL_COUNT.match(label)
+        if m:
+            out.append(int(m.group(1)))
+        elif LABEL_BARE.match(label):
+            out.append(None)
+        else:
+            out.append(label)
+    return out
+
+
 def violations(r):                                             # noqa: C901  (판정 나열)
     out = []
 
@@ -204,8 +309,22 @@ def violations(r):                                             # noqa: C901  (�
                    f"(모르는 것을 0으로 말하면 화면이 거짓을 말한다)")
     if any(h for h in load["hints"]):
         out.append(f"★D01 위반 — 조회 전인데 일괄 버튼 사유가 채워졌다: {load['hints']}")
-    if not has(load["texts"], "QAM_ABOUT"):
-        out.append("③ 설명 ①(QAM_ABOUT)이 상시가 아니다 — 조회 전 화면에서 사라졌다")
+
+    # ═══ N-e ③-D 판정표 1행이 덮는 **상태 전부**에서 설명 줄 부재 ════════════════
+    #
+    # 1행(`!counts`)은 한 조건이 여러 화면 상태를 덮는다: **로딩 · 조회 실패 · 실패 승계
+    # 재개방**. 조회 실패는 `overview`를 만들지 않으므로(`onLoadFail`이 `setFailure`만 한다)
+    # `counts`가 없다 — 실물의 그 사실에 기대는 갈래다.
+    # ★ "장면 하나(로딩)"로 줄이면 **조회 실패에서 설명 줄이 되살아나도 초록불**이다. 모르는
+    #   상태에서 화면이 단언하면 그것이 D01 위반이고, 세 장면을 다 들어야 그 구멍이 닫힌다.
+    for scene, texts_ in (("로딩", load["texts"]),
+                          ("조회 실패", r["loadFailed"]["texts"]),
+                          ("실패 승계 재개방", r["failureCarriedTexts"])):
+        for key in ("QAM_ABOUT", "QAM_ABOUT_GUIDE"):
+            if has(texts_, key):
+                out.append(f"★③-D 1행 위반 — counts 미도착({scene}) 화면인데 설명 줄 {key}가 "
+                           f"섰다. 등록 수도 프로필 수도 모르는 상태에서 그 문장은 참인지 "
+                           f"거짓인지조차 알 수 없다(D01)")
 
     # ═══ ② 정상 화면 ═════════════════════════════════════════════════════════
     nm = r["normal"]
@@ -232,33 +351,108 @@ def violations(r):                                             # noqa: C901  (�
     if has(nm["texts"], "OPEN_FULL_SCREEN"):
         out.append("★구 전체화면 입구가 QAM에 남아 있다 — §3-A 재편에서 제거된 버튼이다")
 
-    # ═══ ④·③-D H2 조건 공유 ══════════════════════════════════════════════════
+    # ═══ ④ 폐기 · ③-D 3갈래 · N-a 라벨 괄호 ═══════════════════════════════════
     npf = r["noProfiles"]
-    if "start" not in npf["keys"]:
-        out.append(f"④ 프로필이 하나도 없는데 시작 안내가 없다: {npf['keys']}")
+    if not npf["boxNull"]:
+        out.append(f"★④ 폐기 확인 — 달리 말할 것이 없는 화면(등록 있음·프로필 0·실행 중 0·"
+                   f"실패 없음·직전 결과 없음)인데 상태박스가 섰다: {npf['keys']}. 12판에서 "
+                   f"시작 안내 슬롯이 사라져 이 상태에서는 박스가 통째로 미렌더된다(잔글씨 5 → 2)")
     if not has(npf["texts"], "QAM_ABOUT_GUIDE"):
-        out.append("③-D ② 프로필이 하나도 없는데 설명 ②가 없다(U-5 조건 재사용)")
-    if npf["hints"] != ["BULK_NO_PROFILES", "BULK_NO_PROFILES"]:
-        out.append(f"③-A ⓑ 프로필이 없을 때의 사유가 BULK_NO_PROFILES가 아니다: {npf['hints']}")
+        out.append("③-D 3행 — 프로필이 하나도 없는데 설명 줄이 QAM_ABOUT_GUIDE가 아니다")
+    if has(npf["texts"], "QAM_ABOUT"):
+        out.append("★③-D 배타성 위반 — 프로필 0 화면에 QAM_ABOUT이 함께 떴다. 설명 영역은 "
+                   "어느 상태에서도 **0줄 또는 1줄**이다(상시+조건부 누적 구조는 12판에서 폐기)")
+    if npf["hints"] != [None, None]:
+        out.append(f"★③-A ⓑ 프로필이 없다는 이유로 사유 줄이 붙었다: {npf['hints']} — 라벨의 "
+                   f"`(0개)`가 이미 같은 말을 한다(12판: 숫자가 말하지 못하는 것만 말한다)")
+
+    # ═══ N-d 미렌더의 **음성 대조군** — 프로필 수는 미렌더 조건이 아니다 ═════════
+    #
+    # 위 장면에 `running:1`만 더한 것이다. `runningNote`는 `counts.running`만 보고 프로필
+    # 유무를 보지 않으므로 상태박스가 **선다.** "프로필 0 → 무조건 null"로 오독한 구현은
+    # 여기서만 드러나고, 그 조합은 §5-B 저장 안내가 유도하는 정상 흐름 그 자체다.
+    npr = r["noProfilesRunning"]
+    if npr["boxNull"] or keys(npr["lines"]) != ["running"]:
+        out.append(f"★프로필 0 + 실행 중인데 상태박스가 서지 않는다(box null={npr['boxNull']}, "
+                   f"{keys(npr['lines'])}) — 미렌더 조건에 **프로필 수**를 넣었다는 뜻이다. "
+                   f"조건은 '현재군·과거군 줄이 모두 0'이고 프로필 수는 거기 없다(§3-B). "
+                   f"프로필이 없다는 이유로 실행 중 고지를 숨기면 화면이 거짓을 말한다")
+    elif not npr["lines"][0]["text"].startswith("BULK_RUNNING_NOTE"):
+        out.append(f"★프로필 0 + 실행 중의 그 한 줄이 실행 중 고지가 아니다: {npr['lines']}")
+
+    # ═══ 미렌더 조건의 **나머지 두 축** — 과거군·실패도 프로필 수를 보지 않는다 ═══
+    #
+    # ★★ 위 N-d는 **현재군 한 슬롯**(실행 중 고지)만 잰다. 그래서 *"프로필 0이면 숨긴다 — 단
+    #   실행 중일 때만 예외"*로 좁힌 구현이 검사를 통째로 통과했다(QA 게이트 적발). §3-B의
+    #   계약은 *"현재군·과거군 줄이 **모두** 0일 때만 미렌더"*이므로, 축마다 표본이 있어야
+    #   검사가 계약만큼 넓어진다 — **검사가 계약보다 좁은데 문서가 넓게 위임하는** 형태를
+    #   이 프로젝트는 다섯 번 겪었다.
+    nps = r["noProfilesSummary"]
+    if nps["boxNull"] or "result" not in keys(nps["lines"]):
+        out.append(f"★프로필 0인데 **직전 일괄 결과가 화면에서 사라졌다**(box null="
+                   f"{nps['boxNull']}, {keys(nps['lines'])}) — 미렌더 조건에 프로필 수가 들어갔다는 "
+                   f"뜻이다. 과거군은 `lastSummary` 하나만 보고 프로필 유무를 보지 않는다. "
+                   f"일괄 적용 뒤 등록을 전부 해제하면 실사용에서 바로 도달하는 상태이고, "
+                   f"거기서 결과를 숨기면 *무슨 일이 있었는지*가 화면에서 사라진다(§3-B)")
+    npx = r["noProfilesFailure"]
+    if npx["boxNull"] or keys(npx["lines"]) != ["failure"]:
+        out.append(f"★프로필 0인데 **실패 줄이 사라졌다**(box null={npx['boxNull']}, "
+                   f"{keys(npx['lines'])}) — 실패도 프로필 수와 무관하다. ⚠️ 이 축은 "
+                   f"`failureCarried`(counts 미도착)로는 못 덮는다: 거기서는 '프로필 0'이라는 "
+                   f"사실 자체가 화면에 없다. 조회가 성공해 counts가 도착한 위에서 실패가 뜨는 "
+                   f"이 표본만이 두 사실을 동시에 참으로 만든다")
 
     one = r["oneProfile"]
-    if "start" in one["keys"]:
-        out.append("★H2 위반 — 프로필이 생겼는데 시작 안내가 남아 있다(영구 소멸 조건)")
     if has(one["texts"], "QAM_ABOUT_GUIDE"):
-        out.append("★정합 ⓐ 위반 — 설명 ②가 시작 안내와 **다른 조건**으로 남아 있다 "
-                   "(두 줄은 조건 하나를 공유해야 함께 사라진다)")
-    if one["hints"] != [None, "BULK_NO_PROFILES"]:
-        out.append(f"③-A ⓑ 프로필별 사유가 갈리지 않는다: {one['hints']}")
+        out.append("★프로필이 생겼는데 설명 줄이 여전히 QAM_ABOUT_GUIDE다 — 3행과 4행은 "
+                   "**같은 식의 참/거짓**이라 프로필이 하나 생기는 순간 갈아타야 한다")
+    if not has(one["texts"], "QAM_ABOUT"):
+        out.append("③-D 4행 — 프로필이 있는데 설명 줄이 QAM_ABOUT이 아니다")
+    if one["hints"] != [None, None]:
+        out.append(f"③-A ⓑ 등록이 있는데 사유 줄이 붙었다: {one['hints']} — 프로필이 없는 쪽의 "
+                   f"사정은 라벨의 `(0개)`가 말한다")
 
     ng = r["noGames"]
     if ng["count"] != "NO_GAMES":
         out.append(f"③-C 등록 0인데 카운트 자리가 안내를 맡지 않았다: {ng['count']!r}")
-    if ng["hints"] != ["NO_GAMES", "NO_GAMES"]:
-        out.append(f"③-A ⓑ 등록 0의 사유가 NO_GAMES가 아니다: {ng['hints']}")
-    if "start" in ng["keys"]:
-        out.append("④ 등록이 0인데 시작 안내가 떴다 — 만들 게임 자체가 없다")
-    if has(ng["texts"], "QAM_ABOUT_GUIDE"):
-        out.append("③-D ② 등록 0에서는 설명 ②를 띄우지 않는다(그 상태의 안내는 NO_GAMES 몫)")
+    if ng["hints"] != ["BULK_NO_GAMES", "BULK_NO_GAMES"]:
+        out.append(f"③-A ⓑ 등록 0의 사유가 BULK_NO_GAMES가 아니다: {ng['hints']} — 갈 곳 안내는 "
+                   f"카운트 줄의 NO_GAMES가 전담하고, 사유 줄은 '적용할 게임이 없다'만 말한다")
+    for key in ("QAM_ABOUT", "QAM_ABOUT_GUIDE"):
+        if has(ng["texts"], key):
+            out.append(f"★③-D 2행 위반 — 등록이 0인데 설명 줄 {key}가 떴다. 그 상태의 안내는 "
+                       f"카운트 줄 NO_GAMES가 전담한다([게임 감지]를 가리키는 손가락은 하나다)")
+
+    # ═══ N-a 라벨 괄호 — counts 도착이 유무를, 수가 내용을 정한다(§2-B 12판 + C-1) ═══
+    #
+    # ★ counts **도착** 장면(정상·프로필0·프로필1·등록0)이 "0도 숫자로 그린다"의 증거이고,
+    #   counts **미도착** 장면(로딩·조회 실패)이 "모르면 괄호가 없다"의 증거다. 두 축을 한
+    #   판정으로 함께 잠근다 — 한쪽만 두면 나머지 한쪽이 조용히 뒤집힌다.
+    for scene, snap, want in (("로딩", load, [None, None]),
+                              ("조회 실패", r["loadFailed"], [None, None]),
+                              ("정상", nm, [9, 8]), ("프로필0", npf, [0, 0]),
+                              ("프로필1", one, [1, 0]), ("등록0", ng, [0, 0])):
+        got = label_counts(snap["labels"])
+        if got != want:
+            out.append(f"★③-A 라벨의 괄호가 계약과 다르다({scene}): {snap['labels']} → {got} "
+                       f"(기대 {want}). ⓐ counts 미도착이면 괄호가 **없다** — 모르는 것을 `(0개)`로 "
+                       f"말하면 같은 화면의 카운트 줄·설명 줄·사유 줄이 지키는 D01을 라벨만 어긴다. "
+                       f"ⓑ 도착한 뒤에는 0도 숫자로 그린다 — 0에서만 다른 키로 갈라 그리면 같은 "
+                       f"자리의 수가 한쪽만 숫자라 `(3개)`↔`(0개)` 비교가 깨진다(버튼 괄호는 "
+                       f"**상태 수치**다 — §7 관례 정본: 0에서 침묵하는 것은 **사건 서술**이다)")
+
+    # ═══ C-1 counts 미도착이면 **누를 수 없다** ═══════════════════════════════════
+    #
+    # ★★ 라벨의 거짓 표시보다 나쁜 것이 **모르는 채 눌리는 버튼**이다: 그 상태로 누르면 백엔드는
+    #   방금 읽고 있던 것과 **다른 현황** 위에서 쓰기를 시작한다(§4-F가 문을 하나로 합친 이유).
+    #   `ready`를 옵셔널로 바꾸면서 `disabled={ready === 0 || busy}`는 `undefined`에서 **활성**이
+    #   되므로, 폴백(`(ready ?? 0) === 0`)이 빠지는 순간을 잡을 판정이 반드시 있어야 한다.
+    for scene, snap in (("로딩", load), ("조회 실패", r["loadFailed"])):
+        if snap["disabled"] != [True, True]:
+            out.append(f"★C-1 counts 미도착({scene})인데 일괄 적용 버튼이 눌린다: "
+                       f"{snap['disabled']} — 대상 수를 모르는 채 활성이면 사용자는 무엇에 적용되는지 "
+                       f"모르고 누르고, 백엔드는 방금 읽던 것과 다른 현황 위에서 쓰기를 시작한다. "
+                       f"모르면 잠근다(`(ready ?? 0) === 0`)")
 
     # ═══ ③ 실패 줄 · 승계 · 소거 ══════════════════════════════════════════════
     lf = r["loadFailed"]
@@ -573,7 +767,14 @@ def main():
     bad = violations(r)
     print("QAM 재편 — 상태박스·카운트·설명·배선·확인창 (렌더+클릭으로 측정)")
     print(f"  상태박스 슬롯: 로딩={keys(r['loading']['lines'])} · 정상={keys(r['normal']['lines'])} · "
-          f"프로필0={r['noProfiles']['keys']} · 프로필1={r['oneProfile']['keys']}")
+          f"프로필0={r['noProfiles']['keys']}(box null={r['noProfiles']['boxNull']}) · "
+          f"프로필0+실행중={keys(r['noProfilesRunning']['lines'])} · 프로필1={r['oneProfile']['keys']}")
+    print(f"  미렌더 조건 3축(프로필 수는 조건이 아니다): 실행중={keys(r['noProfilesRunning']['lines'])} · "
+          f"직전결과={keys(r['noProfilesSummary']['lines'])} · 실패={keys(r['noProfilesFailure']['lines'])}")
+    print(f"  설명 줄 3갈래: 로딩·조회실패·승계=없음 · 등록0=없음 · "
+          f"프로필0={'GUIDE' if has(r['noProfiles']['texts'], 'QAM_ABOUT_GUIDE') else '없음'} · "
+          f"프로필1={'ABOUT' if has(r['oneProfile']['texts'], 'QAM_ABOUT') else '없음'} · "
+          f"라벨 괄호={label_counts(r['normal']['labels'])}/{label_counts(r['noProfiles']['labels'])}")
     print(f"  결과: 문제 있음={keys(r['resultProblem']['lines'])} / 문제 0={keys(r['resultClean']['lines'])} · "
           f"승계(실패/요약)={keys(r['failureCarried'])}/{keys(r['summaryCarried'])}")
     # ⚠️ 요약 줄은 **측정이 없었던 회차에도 죽지 않는다**(E10과 같은 처분). 상태박스가 통째로

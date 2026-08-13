@@ -8,6 +8,9 @@
 
 지금 검사하는 것:
     1. en.json 키 집합 == ko.json 키 집합 (양방향)
+    1′. ★ **폐기한 키가 되살아나지 않았는가**(§15-B ⑫ — 12판 신설). 1번과 2번은 *양쪽 JSON에
+       남은 고아 키를 통과시킨다* — 키 제거가 회귀 잠금 밖에 있었다. 이 파일 머리말이 거부한
+       것은 **개수 세기**이고 이것은 **집합 관계**(`∩ == ∅`)라 문법이 어긋나지 않는다.
     2. src/에서 t("…")로 참조하는 키 ⊆ 양쪽 키 집합
     3. 값의 {placeholder} 집합이 두 언어에서 같다
        — 번역하면서 자리표시자를 빠뜨리면 화면에 "{n}"이 그대로 남거나 숫자가 사라진다.
@@ -67,6 +70,26 @@ for lang in ("en", "ko"):
 en_keys, ko_keys = set(tables["en"]), set(tables["ko"])
 if en_keys != ko_keys:
     fail.append(f"키 집합 불일치 — en에만 {sorted(en_keys - ko_keys)} / ko에만 {sorted(ko_keys - en_keys)}")
+
+# ── 1′. 12판이 폐기한 키가 되살아나지 않았는가 (§15-B ⑫) ─────────────────────
+#    위 1번(집합 항등)도 아래 2번(부르는 키 ⊆ 집합)도 **양쪽 JSON에 나란히 남은 고아 키를
+#    통과시킨다** — 그래서 지금까지 "키를 지웠다"는 계약은 사람 grep에만 걸려 있었고, 다음
+#    커밋에서 조용히 되살아날 수 있었다. 총 키 수 상수를 두는 방식은 이 파일 머리말("개수를
+#    세지 않는다")과 정면 충돌하므로 채택하지 않는다 — 여기서 거는 것은 **집합 관계**다.
+#
+#    ★ 등재 기준(다음 개정이 목록을 무한정 늘리지 않도록): *그 키를 부르던 컴포넌트가 아직
+#      살아 있는* 제거만 올린다. 아래 4키는 전부 그렇다(`index.tsx`·`BulkApplyButton.tsx`·
+#      `GamesPopup.tsx` 생존 — 한 줄 되살리면 부활한다). P15의 제거 18종은 **컴포넌트째**
+#      삭제돼 부활 경로가 없으므로 소급 등재하지 않는다.
+REMOVED_R12 = {"NO_PROFILES_YET", "BULK_NONE", "BULK_NO_PROFILES", "SAVE_GUIDE"}
+for lang, keys in (("en", en_keys), ("ko", ko_keys)):
+    revived = sorted(REMOVED_R12 & keys)
+    if revived:
+        fail.append(f"★{lang}.json에 12판이 폐기한 키가 살아 있다 — {revived}. "
+                    f"NO_PROFILES_YET=상태박스 ④ 슬롯 폐기(§3-B) · BULK_NONE=라벨 괄호 단일화"
+                    f"(§2-B, 미등재 승계 키) · BULK_NO_PROFILES=사유 줄 새 규칙에서 참조 0"
+                    f"(§3-A ⓑ) · SAVE_GUIDE=2키로 분할(§5-B). 집합 검사는 양쪽에 남은 고아 키를 "
+                    f"통과시키므로 이 판정이 유일한 잠금이다(§15-B ⑫)")
 
 # ── 2. src가 부르는 키가 전부 등재돼 있다 ────────────────────────────────────
 used = {}
@@ -226,6 +249,7 @@ def check_hardcode_allowlist():
 fail += check_hardcode_allowlist()
 
 print(f"키 {len(en_keys)}종 / src 참조 {len(used)}종 / 두 언어 자리표시자 대조 완료")
+print(f"폐기 키 부재 계약(§15-B ⑫): {sorted(REMOVED_R12)} — 양쪽 JSON에 0건이어야 한다")
 print(f"가시 문자열 검사: {scanned}개 파일 (t() 밖 리터럴 0건이어야 한다) · AST 위반 {ast_hits}건 · "
       f"허용 예외 {allowed_hits}건 in {sorted(HARDCODE_ALLOWED)}")
 print(f"에러 코드 대조: codes.py {len(code_set)}종 ⊆ en/ko 키 (부분 등재 불가)")
