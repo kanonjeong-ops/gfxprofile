@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback, useEffect, useRef, useState, type ComponentProps, type ReactNode,
+} from "react";
 import {
   ConfirmModal, DialogBody, DialogButton, DialogHeader, Focusable, ModalRoot,
   NavEntryPositionPreferences, TextField, showModal,
@@ -29,6 +31,35 @@ const SUB_NOTE_STYLE = { fontSize: "11px", color: "#9aa0a6" } as const;
 
 /** 아이콘이 제목과 같은 줄에 설 때의 자리. 색은 주변을 따라간다(아이콘은 currentColor다). */
 const HEADER_ICON_STYLE = { display: "inline-flex", marginRight: "6px", verticalAlign: "-0.1em" } as const;
+
+/**
+ * **버튼 라벨 앞 아이콘 자리**(§3-A 10판) — 고정 폭이라 아이콘 유무로 버튼 폭이 흔들리지 않는다(GP#2).
+ *
+ * ★★ 아이콘 관용구는 프로젝트에 **하나**다: `<span style={ICON_SLOT_STYLE}><Icon/></span>{label}`.
+ *   `ButtonItem`의 `icon` prop은 버튼 내용이 아니라 **Field의 라벨 슬롯**이라 아이콘이 버튼 **위**에
+ *   고아로 뜨고(D2 실측) 그 슬롯의 부모 높이가 아이콘을 16×20으로 구긴다(D6) — 그래서 QAM도
+ *   팝업과 같은 이 관용구를 쓴다.
+ * ★ 왜 여기 있는가: P16까지 `GamesPopup`·`SettingsPopup`·`DiscoverPopup`이 **같은 값을 각자** 들고
+ *   있었다. 한쪽만 손대는 날 아이콘 배치가 화면마다 갈린다 — `CARD_STYLE`을 여기로 모은 것과 같은
+ *   판단이다. 소비자는 다섯이다: 팝업 3종 + QAM의 `index.tsx`·`BulkApplyButton.tsx`.
+ *
+ * ★★ `verticalAlign`을 **반드시** 준다 — 빠뜨리면 아이콘이 버튼 중심보다 위로 뜬다(2026-08-13 반려).
+ *   inline-flex 상자의 기본값은 `baseline`이고, 그 상자의 baseline은 첫 flex 항목인 svg의
+ *   **하단 margin edge**다. 즉 아이콘 밑변이 글자 baseline에 앉는데, 글자의 시각 중심은 baseline보다
+ *   위(=`(A−D)/2`, A·D는 폰트 ascent·descent)에 있으므로 **아이콘만 상대적으로 떠오른다.**
+ *   QAM 실측(버튼 h40 · svg top +10 · h16)으로 이 폰트의 `(A−D)/2 = 0.375em`이 나왔고,
+ *   필요한 하강량 = `(A−D)/2 − 0.5em` = **−0.125em**이다(길이 오프셋은 양수가 위로 올린다).
+ *   이 값이 em인 것이 핵심이다 — 오차의 정체가 **폰트 비례량**이라 QAM(16px)과 팝업 버튼(13px)에
+ *   같은 상수 하나로 맞는다. 위 항등식은 line-height와 무관하므로 줄 높이가 달라져도 유효하다.
+ *   ⚠️ `verticalAlign:"middle"`은 답이 아니다: 아이콘 중심을 `baseline − x-height/2`에 놓는데
+ *   이 폰트는 x-height ≈ 0.52em이라 필요한 0.75em에 못 미쳐 **오차가 −2px에서 +1.8px로 뒤집힐 뿐**이다
+ *   (산술 검증 — 실기 rect로 재판정한다). 바로 위 `HEADER_ICON_STYLE`이 같은 계열의 −0.1em을
+ *   경험적으로 들고 있는 것도 같은 원인의 흔적이다.
+ */
+export const ICON_SLOT_STYLE = {
+  display: "inline-flex", width: "1em", justifyContent: "center", marginRight: "4px",
+  verticalAlign: "-0.125em",
+} as const;
 
 // ── 골격 (§4-A) ──────────────────────────────────────────────────────────────
 
@@ -74,6 +105,60 @@ export function GfxPopup({
     </ModalRoot>
   );
 }
+
+// ── 버튼 (§4-G) ──────────────────────────────────────────────────────────────
+
+/**
+ * **팝업 층의 버튼은 전부 이것으로 그린다**(§4-G 10판 신설 — D1).
+ *
+ * ★★ 왜 래퍼인가: Steam 본체 CSS가 `button.DialogButton { width:100% }`를 **전역**으로 건다.
+ *   블록 부모만의 이야기가 아니다 — flex 자식에도 발현한다(`flex-basis:auto`가 width를 읽는다).
+ *   실기 실측: 목록 행의 적용 버튼이 각각 **584.7px**로 부풀고, 그 옆 게임 이름 div는
+ *   **0px로 붕괴**해 식별 불가가 됐다. [내장 적용]과 chevron은 모달 오른쪽 **밖**으로 밀렸다.
+ *   진단 초안은 "블록 부모 4곳만 오염"으로 봤는데 그건 실측으로 반증됐다.
+ *
+ * ★★ 그래서 **문을 하나로 만든다.** 네 자리를 골라 고치면 다음에 추가되는 버튼이 같은 함정에
+ *   빠지고, 그때는 아무도 이 사실을 기억하지 못한다. 래퍼 + `build.sh` grep ⑤(DialogButton
+ *   직접 사용은 이 파일만 허용)로 **빠뜨릴 자리 자체를 없앤다** — E1을 텍스트 검사에서 구조로
+ *   옮긴 것과 같은 판단이다(「구조로 예외를 없애라」).
+ *
+ * ★ `fit-content`를 호출부 style **뒤에** 병합하는 이유: 먼저 병합하면 호출부가 무심코
+ *   width를 얹어 문이 샌다. 호출부는 width를 지정하지 않는다 — minWidth·flex·padding·색만.
+ *   팝업 층에서 전폭 버튼이 필요한 자리는 실측상 0곳이다.
+ *
+ * ⚠️ 미니 프로브는 이 계열을 **원리적으로 못 잡는다**(Steam 스타일시트가 프로브에 없다).
+ *   폭의 판정은 실기 CDP 스타일 조회나 스샷뿐이다 — 회귀 초록불을 폭의 증거로 읽지 말 것.
+ *
+ * ⚠️ 타입은 `ComponentProps<typeof DialogButton>`이다. `DialogButtonProps`를 `@decky/ui`에서
+ *   직접 import하면 **build.sh grep ①(단일 관문) 위반**이고 `deckyui.ts`는 그 타입을
+ *   재수출하지 않는다.
+ * ⚠️ `children`은 **구조분해해 JSX 자식으로 넘긴다.** `{...props}`에 남겨 prop으로 넘기면
+ *   `probe_kit.cjs`가 children **prop**을 스킵하고(:172) JSX 자리에서만 라벨을 읽어(:208)
+ *   전 버튼 라벨이 ""가 된다 — 회귀 4종이 깨진다(실측).
+ * ⚠️ `ref`는 투과되지 않는다(`ComponentProps`에 RefAttributes가 없다). 현 호출부에 ref 사용이
+ *   0이라 무해하고, 필요해지는 날 forwardRef로 확장한다 — **지금 만들지 않는다.**
+ */
+export function PopupButton({ style, children, ...props }: ComponentProps<typeof DialogButton>) {
+  return <DialogButton {...props} style={{ ...style, width: "fit-content" }}>{children}</DialogButton>;
+}
+
+/**
+ * **세로 스택 동작 버튼**의 자리(§4-G 3항) — 설명 줄을 아래에 거느리는 버튼이다.
+ *
+ * ★ 좌측 정렬인 이유: 현행은 버튼 글자가 가운데, 바로 아래 설명은 왼쪽이라 **축이 어긋난다.**
+ *   `fit-content`로 폭이 접히면 그 어긋남이 더 크게 보인다.
+ * ⚠️ 가로 행 버튼은 대상이 아니다(이름 바꾸기 2 · [다시 검색]·[모두 추가] 줄 · 목록 행 버튼) —
+ *   그것들은 행 안에서 제 폭만 접으면 된다.
+ */
+export const STACKED_BUTTON_STYLE = {
+  alignSelf: "flex-start", textAlign: "left", justifyContent: "flex-start",
+} as const;
+
+/**
+ * 세로 스택 버튼의 **설명 줄 들여쓰기** — 버튼의 가로 패딩과 같은 값이라 라벨과 설명이
+ * **정렬 축을 공유**한다. 값이 두 곳에 살면 한쪽만 고치는 날 축이 다시 갈린다.
+ */
+export const STACKED_DESC_PAD = "10px";
 
 // ── 내부 뷰 (§4-B) ───────────────────────────────────────────────────────────
 
@@ -121,13 +206,13 @@ export function PopupSubView({
       onCancelActionDescription={t("BACK")}
       style={COLUMN_STYLE}
     >
-      <DialogButton
+      <PopupButton
         preferredFocus
         onClick={onBack}
         style={{ alignSelf: "flex-start", minWidth: "96px", padding: "6px 10px", fontSize: "13px" }}
       >
         {t("BACK")}
-      </DialogButton>
+      </PopupButton>
       {children}
     </Focusable>
   );
@@ -317,12 +402,34 @@ function specBody(
           value={value}
           /* 빅픽처에서 텍스트 필드가 포커스를 받아야 가상 키보드가 뜬다(U20 ① 실기 대상). */
           focusOnMount
+          style={INPUT_FACE_STYLE}
           onChange={(e) => setValue(e.target.value)}
         />
       ) : null}
     </div>
   );
 }
+
+/**
+ * **입력형 확인창의 입력면**(§4-C 10판 — 실기 신규 소견 ⓐ).
+ *
+ * ★★ Steam `TextField`의 기본값은 **흰 통짜 면**이다. 어두운 다이얼로그 한가운데서 그것만
+ *   튀어 "이 창의 일부가 아닌 것"처럼 보인다(실기 확인). 계약은 *"입력면은 주변 다이얼로그
+ *   배경과 같은 어두운 계열이고, 경계는 미세 대비 또는 1px 윤곽으로 식별된다"*이다.
+ * ★ 이 자리가 하나인 이유: 중첩(`SpecConfirmModal`)과 폴백(`ConfirmOverlay`)이 **같은
+ *   `specBody`를 그린다.** 두 렌더러가 같은 것을 그린다는 §4-C 계약이 있으므로, 시각도 그
+ *   한 곳에 산다 — 각자 칠하면 언젠가 두 모드의 입력창이 달라 보인다.
+ * ★ 윤곽 색은 새로 지어낸 값이 아니다 — 9판 상태박스 테두리가 쓰던 값을 그대로 물려받았다.
+ *   글자색만 명시한다: 면이 어두워졌으므로 상속에 맡기면 안 읽힐 수 있다.
+ * ⚠️ 판정은 실기 스샷이다(§16-⑮ ⓖ) — 미니 프로브는 실물 CSS를 모른다.
+ */
+const INPUT_FACE_STYLE = {
+  background: "rgba(0,0,0,0.35)",
+  color: "#ffffff",
+  border: "1px solid rgba(255,255,255,0.15)",
+  borderRadius: "4px",
+  padding: "6px 8px",
+} as const;
 
 /** 입력형 확인창의 최소 폭(lsfg dist:912 선례) — 비입력형에는 걸지 않는다(§4-D). */
 function specWrapStyle(spec: ConfirmSpec) {
@@ -348,6 +455,49 @@ function useCloseOnce(closeModal?: () => void) {
 }
 
 /**
+ * 중첩 확인창의 **비활성 OK 라벨 면**(F-2 ①, 10판) — 폴백의 `overlayButtonStyle`과 같은 값이다.
+ *
+ * ★ 두 렌더러가 같은 것을 그린다는 §4-C 계약은 **잠긴 모습**에도 적용된다. 다만 같게 만드는
+ *   것은 *적어 넣는 숫자*가 아니라 **화면에 나오는 값**이다 — 아래 산술이 그 차이다.
+ *
+ * ★★ 왜 0.25인가(실측 유도): Steam의 `Disabled` 클래스가 **버튼 전체에 `opacity:0.4`를 곱한다.**
+ *   그래서 1차 시도의 `0.10` 면은 화면에서 `0.10 × 0.4 = 0.04` 상당으로 눌렸고, 실기 대비는
+ *   Δ10.28 — 여전히 면으로 식별되지 않았다(합성 검산 일치 확인). 곱해질 것을 알고 **미리
+ *   나눠 둔다**: `0.25 × 0.4 = 0.10` 유효.
+ * ★ 폴백(`overlayButtonStyle`)도 **같은 0.25**를 쓴다. 두 렌더러가 같은 것을 그리려면 **적어
+ *   넣는 숫자가 아니라 화면에 나오는 값**이 같아야 하는데, 폴백 버튼 역시 `DialogButton`의
+ *   `disabled`라 같은 `Disabled` dimming이 걸린다 — 그러니 같은 숫자가 곧 같은 유효값이다.
+ *   ⚠️ **이건 가정이다**: 폴백 경로는 `showModal`이 죽었을 때만 진입하므로 실기에서 재현해
+ *     재보지 못했다(중첩 쪽 ×0.4만 실측). 같은 컴포넌트·같은 prop이라는 근거뿐이고, 만약
+ *     폴백에 dimming이 없다면 그쪽이 두 배 밝게 보인다 — 확인되면 폴백만 0.10으로 되돌린다.
+ * ⚠️ 여기엔 `opacity`를 걸지 않는다 — Steam이 이미 흐리게 그린다(실기 Δ10.5는 *너무 흐린*
+ *   것이 아니라 **면이 없는** 것이 문제였다). 우리가 또 흐리게 하면 이중으로 죽는다.
+ */
+const OK_DISABLED_FACE_STYLE = {
+  display: "inline-block",
+  background: "rgba(255,255,255,0.25)",
+  padding: "2px 10px",
+  borderRadius: "4px",
+} as const;
+
+/**
+ * 중첩 모드의 OK 라벨 — **비활성일 때만** 면을 가진 span으로 감싼다.
+ *
+ * ★★ 실기에서 type-to-confirm 미완 상태의 [전체 초기화]가 배경 대비 **Δ10.5**로 면이 식별되지
+ *   않았다(옆 [취소]는 면이 있다). 버튼이 "잠겨 있다"가 아니라 **"죽은 텍스트"**로 읽힌다.
+ *   버튼 자체는 Steam `ConfirmModal` 내부라 우리 손이 닿지 않지만, **라벨 자리는 우리 것**이다 —
+ *   `strOKButtonText`가 `ReactNode`를 받는다(`Modal.ts:78` 실측). 그 자리에 면을 그린다.
+ * ★ 활성일 때는 **문자열 그대로** 돌려준다: 평소 모습을 바꾸지 않는다는 것이 이 수정의 조건이다.
+ *   (부수 효과로 `probe_kit`의 가시 문자열 수집도 활성 경로에서는 지금과 완전히 동일하다.)
+ * ⚠️ 이것은 **실험**이다 — 면이 라벨 자리에만 생기므로 버튼 전체 면과는 다르게 보일 수 있다.
+ *   판정은 실기 스샷(§16-⑮ ⓗ)이고, 불충분으로 판명되면 "중첩 모드 비활성 Primary 시각은
+ *   Steam 소유"로 §15-D에 알려진 한계 1행을 등재하고 종결한다(개정안 F-2).
+ */
+function okFace(label: string, disabled: boolean): ReactNode {
+  return disabled ? <span style={OK_DISABLED_FACE_STYLE}>{label}</span> : label;
+}
+
+/**
  * **중첩 렌더러** — `showModal`로 팝업 위에 `ConfirmModal`을 띄운다(lsfg dist:1647 선례).
  *
  * ★ `closeModal`은 `showModal`이 최상위에 주입한 것이다(D-05 ①) — **1회 래퍼를 씌워**
@@ -367,7 +517,7 @@ export function SpecConfirmModal({
     <ConfirmModal
       strTitle={spec.title}
       strDescription={<div style={specWrapStyle(spec)}>{specBody(spec, gate.value, gate.setValue)}</div>}
-      strOKButtonText={spec.okText}
+      strOKButtonText={okFace(spec.okText, gate.okDisabled)}
       strCancelButtonText={spec.cancelText ?? t("CANCEL")}
       bOKDisabled={gate.okDisabled}
       /* 발화 뒤에는 취소도 잠근다 — OK와 취소가 **상호 배타**라는 계약을 화면에서도 지킨다. */
@@ -386,17 +536,56 @@ export function SpecConfirmModal({
  *   **렌더하지 않는다**(`usePopupGate().renderBody`). 숨김이나 포커스 차단 로직으로 막으면
  *   그 로직이 틀린 날 뒤 콘텐츠가 조작 가능해진다 — 갈 수 있는 경로 자체를 없앤다.
  */
+/**
+ * 폴백 확인창 푸터 버튼의 시각 — **비활성이어도 면을 유지한다**(F-2, 10판).
+ *
+ * ★★ 실기에서 type-to-confirm 미완 상태의 [전체 초기화]가 **면 없이 흐린 글자만**으로
+ *   렌더됐다(옆 [취소]는 면이 있었다). 그러면 *"여기 버튼이 있고 지금은 잠겨 있다"*가 아니라
+ *   **"죽은 텍스트"**로 읽힌다 — 사용자는 무엇을 하면 열리는지도 모른 채 지나간다.
+ *   그래서 `disabled` 기본 스타일에 기대지 않고 **면을 우리가 그린다**.
+ *
+ * ★★ 값은 중첩(`OK_DISABLED_FACE_STYLE`)과 **같은 0.25**다 — 그쪽 주석의 산술이 정본이다.
+ *   이 버튼도 `DialogButton disabled`라 Steam `Disabled`의 `×0.4`가 같이 걸린다고 보므로,
+ *   같은 숫자가 곧 같은 유효값(0.10)이 된다. 두 렌더러의 **잠김 시각이 같아야 한다**는 것이
+ *   §4-C 계약이고, 계약은 적힌 숫자가 아니라 화면에 나온 값으로 지켜진다.
+ * ⚠️ `opacity`를 **걸지 않는다**: Steam이 이미 흐리게 그린다(실기 Δ10.5·Δ10.28은 *너무 흐린*
+ *   것이 아니라 **면이 없는** 것이 문제였다). 우리가 또 흐리게 하면 이중으로 죽는다.
+ * ⚠️ **미검증 가정**: 이 경로는 `showModal`이 죽었을 때만 그려져 실기에서 재현하지 못했다.
+ *   폴백에 dimming이 없다면 여기만 두 배 밝게 보인다 — 그때는 이 값만 0.10으로 되돌린다.
+ *   (§15-D 알려진 한계 등재 후보.)
+ */
+function overlayButtonStyle(disabled: boolean) {
+  return disabled
+    ? { minWidth: "120px", background: "rgba(255,255,255,0.25)" }
+    : { minWidth: "120px" };
+}
+
 export function ConfirmOverlay({ spec, onClose }: { spec: ConfirmSpec; onClose: () => void }) {
   const gate = useSpecGate(spec, onClose);
   return (
     <Focusable onCancelButton={gate.onCancel} style={{ ...COLUMN_STYLE, ...specWrapStyle(spec) }}>
       <div style={{ fontSize: "18px", fontWeight: "bold" }}>{spec.title}</div>
       {specBody(spec, gate.value, gate.setValue)}
+      {/* ★★ 이 두 버튼만 `DialogButton`을 **직접** 쓴다(§4-G 2항 ⓑ가 인정한 유일한 예외).
+          사유: Steam `ConfirmModal`의 푸터는 `DialogTwoColLayout`이 `flex-grow:1`로 **반폭씩**
+          나눠 갖는다(전역 `width:100%` 오염에 구조적으로 면역이라 손댈 이유도 없다).
+          폴백이 여기서 `fit-content`로 접으면 **중첩 모드와 폴백 모드의 푸터 모양이 갈리고**,
+          그러면 §4-C "두 렌더러가 같은 것을 그린다" 계약과 F-1이 자기모순에 빠진다.
+          ⚠️ 이 예외는 **파일 단위로** 잠근다 — `build.sh` grep ⑤가 popup.tsx만 허용한다.
+             파일 밖 예외 목록은 두지 않는다(목록을 두면 그 목록이 다음 라운드의 구멍이 된다). */}
       <Focusable style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
-        <DialogButton onClick={gate.onOK} disabled={gate.okDisabled} style={{ minWidth: "120px" }}>
+        <DialogButton
+          onClick={gate.onOK}
+          disabled={gate.okDisabled}
+          style={overlayButtonStyle(gate.okDisabled)}
+        >
           {spec.okText}
         </DialogButton>
-        <DialogButton onClick={gate.onCancel} disabled={gate.done} style={{ minWidth: "120px" }}>
+        <DialogButton
+          onClick={gate.onCancel}
+          disabled={gate.done}
+          style={overlayButtonStyle(gate.done)}
+        >
           {spec.cancelText ?? t("CANCEL")}
         </DialogButton>
       </Focusable>

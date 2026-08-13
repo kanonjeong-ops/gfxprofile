@@ -1,6 +1,7 @@
 import { ButtonItem, PanelSectionRow } from "./deckyui";
 import { IconBolt, IconChip } from "./icons";
 import { t } from "./i18n";
+import { ICON_SLOT_STYLE } from "./popup";
 import type { Profile } from "./rpc";
 
 /**
@@ -47,11 +48,15 @@ export function BulkApplyButton({
     <PanelSectionRow>
       <ButtonItem
         layout="below"
-        icon={profile === "dock" ? <IconBolt /> : <IconChip />}
         description={hint}
         disabled={ready === 0 || busy}
         onClick={() => onApply(profile)}
       >
+        {/* ★ 아이콘은 **children 안**이다(§3-A 10판 정오 — D2): `icon` prop은 Field의 라벨 슬롯이라
+            버튼 위에 고아로 뜨고 그 슬롯이 아이콘을 16×20으로 구긴다(D6). 관용구·상수는
+            프로젝트에 하나(`ICON_SLOT_STYLE`, popup.tsx).
+            ⚠️ props 집합은 이 변경으로 **줄지도 늘지도 않았다**(E1 무접촉 — `running`은 여전히 없다). */}
+        <span style={ICON_SLOT_STYLE}>{profile === "dock" ? <IconBolt /> : <IconChip />}</span>
         {/* ★ 라벨은 **표시명 하나**에서 나온다(F11) — 프로필 이름이 문장에 박혀 있으면
             사용자가 이름을 바꿨을 때 이 버튼만 옛 이름을 말한다. 이름의 정본은 i18n의
             `PROFILE_*` 한 곳이고, 사용자가 정한 이름은 거기서 덮어써진다. */}

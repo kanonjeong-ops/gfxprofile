@@ -2,14 +2,15 @@ import { useCallback, useState, type ReactNode } from "react";
 import {
   makeDeleteConfirmSpec, makeRestoreConfirmSpec, makeRestoreFollowUpSpec, makeSaveConfirmSpec,
 } from "./confirmSpecs";
-import { DialogButton, Focusable, ToggleField } from "./deckyui";
+import { Focusable, ToggleField } from "./deckyui";
 import {
   IconBolt, IconCheck, IconChevron, IconChip, IconList, IconRefresh, IconRestore, IconSave, IconTrash,
 } from "./icons";
 import { t, tCode } from "./i18n";
 import {
-  CARD_INNER_STYLE, CARD_STYLE, GfxPopup, PopupScrollList, PopupSubView,
-  listRowNavProps, subViewKey, usePopupData, usePopupGate, type GView,
+  CARD_INNER_STYLE, CARD_STYLE, GfxPopup, ICON_SLOT_STYLE, PopupButton, PopupScrollList,
+  PopupSubView, STACKED_BUTTON_STYLE, STACKED_DESC_PAD, listRowNavProps, subViewKey,
+  usePopupData, usePopupGate, type GView,
 } from "./popup";
 import { slotSummary } from "./slots";
 import {
@@ -40,7 +41,13 @@ import {
 // ── 스타일 (한 곳에 모은다 — 카드가 세 뷰에서 같은 모양이어야 한다) ──────────
 const COLUMN_STYLE = { display: "flex", flexDirection: "column", gap: "10px" } as const;
 const META_STYLE = { fontSize: "11px", color: "#9aa0a6" } as const;
-const DESC_STYLE = { fontSize: "11px", color: "#9aa0a6", margin: "2px 0 6px" } as const;
+/**
+ * 동작 버튼 아래 설명 줄 — 들여쓰기가 버튼의 가로 패딩과 같아 **라벨과 축을 공유**한다(§4-G 3항).
+ * 이 상수는 `ActionButton`의 desc 전용이다(다른 설명 줄과 섞어 쓰지 말 것 — 축 공유가 깨진다).
+ */
+const DESC_STYLE = {
+  fontSize: "11px", color: "#9aa0a6", margin: "2px 0 6px", paddingLeft: STACKED_DESC_PAD,
+} as const;
 const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
 
 /* 카드(§5-A)의 두 상수는 **`popup.tsx`에 있다** — 팝업 D의 후보 행과 같은 모양이어야 하고,
@@ -58,11 +65,6 @@ const APPLY_BUTTON_STYLE = {
   minWidth: "110px", padding: "6px 8px", fontSize: "13px", flex: "0 0 auto",
 } as const;
 
-/** 라벨 앞 프로필 아이콘 자리 — 고정 폭. */
-const ICON_SLOT_STYLE = {
-  display: "inline-flex", width: "1em", justifyContent: "center", marginRight: "4px",
-} as const;
-
 /**
  * 라벨 뒤 **마커 자리 — 상시 예약**(GP#2). 마커가 없어도 같은 폭의 빈 자리를 그린다.
  * 조건부로 자리 자체를 없애면 그 행만 버튼이 좁아져 열이 어긋난다.
@@ -75,7 +77,10 @@ const MARKER_SLOT_STYLE = {
 const MARKED_BACKGROUND = "rgba(126,204,255,0.22)";
 
 const CHEVRON_BUTTON_STYLE = { minWidth: "40px", padding: "6px 4px", flex: "0 0 auto" } as const;
-const ACTION_BUTTON_STYLE = { minWidth: "220px", padding: "6px 10px", fontSize: "13px" } as const;
+/** 상세 뷰의 동작 버튼 4종 — **세로 스택**이라 §4-G 3항의 좌측 정렬 축을 쓴다. */
+const ACTION_BUTTON_STYLE = {
+  minWidth: "220px", padding: "6px 10px", fontSize: "13px", ...STACKED_BUTTON_STYLE,
+} as const;
 const CHIP_STYLE = {
   fontSize: "11px", background: "rgba(255,255,255,0.12)", borderRadius: "3px",
   padding: "1px 6px", marginLeft: "6px",
@@ -143,7 +148,7 @@ function GameCard({
         <div style={ROW_STYLE}>
           <div style={NAME_STYLE}>{game.name}</div>
           {(["dock", "internal"] as const).map((p) => (
-            <DialogButton
+            <PopupButton
               key={p}
               /* 비활성 조건은 **그 프로필이 없을 때**뿐이다(A6의 유일한 시각 표현).
                  실행 중 여부는 여기 들어가지 않는다 — 누르면 백엔드가 거부하고 사유가 note로 뜬다. */
@@ -159,13 +164,13 @@ function GameCard({
               {/* ★ 마커 자리는 **항상** 있다 — 없을 땐 같은 폭의 빈 자리다(GP#2).
                   마커가 있어도 누를 수 있다: 재적용은 백엔드에서 `already`로 무해하다. */}
               <span style={MARKER_SLOT_STYLE}>{game.disk_matches === p ? <IconCheck /> : null}</span>
-            </DialogButton>
+            </PopupButton>
           ))}
           {/* ★ 톱니가 아니라 chevron이다(H4) — 톱니는 전역 [설정] 전용이라 여기 쓰면
               "이 게임의 설정"으로 읽혀 두 개념이 섞인다. */}
-          <DialogButton disabled={busy} onClick={() => onOpen(game)} style={CHEVRON_BUTTON_STYLE}>
+          <PopupButton disabled={busy} onClick={() => onOpen(game)} style={CHEVRON_BUTTON_STYLE}>
             <IconChevron />
-          </DialogButton>
+          </PopupButton>
         </div>
         <div style={META_STYLE}>
           {/* 문장은 `slots.ts` 한 곳에서 만든다 — 목록과 상세가 같은 말을 해야 한다(F5). */}
@@ -193,10 +198,10 @@ function ActionButton({
 }) {
   return (
     <div>
-      <DialogButton disabled={disabled} onClick={onClick} style={ACTION_BUTTON_STYLE}>
+      <PopupButton disabled={disabled} onClick={onClick} style={ACTION_BUTTON_STYLE}>
         <span style={ICON_SLOT_STYLE}>{icon}</span>
         {label}
-      </DialogButton>
+      </PopupButton>
       {desc ? <div style={DESC_STYLE}>{desc}</div> : null}
     </div>
   );
@@ -444,14 +449,14 @@ export function GamesPopup({
           </div>
           {/* ★ F17: "게임을 끄고 왔는데 화면이 낡았을 수 있다"의 탈출구. 초기 포커스가 첫 카드라
               이 줄이 통행세가 되지 않는다(GP#6). */}
-          <DialogButton
+          <PopupButton
             disabled={busy}
             onClick={() => reload()}
             style={{ minWidth: "120px", padding: "6px 8px", fontSize: "13px", flex: "0 0 auto" }}
           >
             <span style={ICON_SLOT_STYLE}><IconRefresh /></span>
             {t("REFRESH")}
-          </DialogButton>
+          </PopupButton>
         </Focusable>
 
         {noteView}
@@ -610,13 +615,13 @@ export function GamesPopup({
                     })}
                   </div>
                 </div>
-                <DialogButton
+                <PopupButton
                   disabled={busy}
                   onClick={() => { void runRestore(game, row); }}
                   style={{ minWidth: "96px", padding: "6px 8px", fontSize: "13px", flex: "0 0 auto" }}
                 >
                   {t("BACKUP_RESTORE")}
-                </DialogButton>
+                </PopupButton>
               </div>
             </Focusable>
           ))}

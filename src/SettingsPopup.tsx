@@ -1,9 +1,12 @@
 import { useCallback, useRef } from "react";
 import { makeNameEditSpec, makeResetConfirmSpec } from "./confirmSpecs";
-import { DialogButton, Focusable } from "./deckyui";
+import { Focusable } from "./deckyui";
 import { IconGear, IconTrash } from "./icons";
 import { hasProfileNameOverride, setProfileNames, t, tCode } from "./i18n";
-import { GfxPopup, usePopupData, usePopupGate } from "./popup";
+import {
+  GfxPopup, ICON_SLOT_STYLE, PopupButton, STACKED_BUTTON_STYLE, STACKED_DESC_PAD,
+  usePopupData, usePopupGate,
+} from "./popup";
 import {
   getOverview, resetAll, setProfileName,
   type Overview, type Profile, type ResetConfirmParams,
@@ -30,9 +33,6 @@ const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
 const SECTION_STYLE = { marginTop: "16px", paddingTop: "10px", borderTop: "1px solid #3a3f44" } as const;
 const SECTION_TITLE_STYLE = { fontSize: "14px", fontWeight: "bold", marginBottom: "6px" } as const;
 const ROW_STYLE = { display: "flex", alignItems: "center", gap: "8px", padding: "6px 0" } as const;
-const ICON_SLOT_STYLE = {
-  display: "inline-flex", width: "1em", justifyContent: "center", marginRight: "4px",
-} as const;
 
 function profileKey(p: Profile) {
   return p === "dock" ? "PROFILE_DOCK" : "PROFILE_INTERNAL";
@@ -190,13 +190,13 @@ export function SettingsPopup({
                       {hasProfileNameOverride(profile) ? t("MANAGE_NAME_CUSTOM") : t("MANAGE_NAME_DEFAULT")}
                     </div>
                   </div>
-                  <DialogButton
+                  <PopupButton
                     disabled={busy}
                     onClick={() => askRename(profile)}
                     style={{ minWidth: "140px", padding: "6px 8px", fontSize: "13px", flex: "0 0 auto" }}
                   >
                     {t("MANAGE_NAME_EDIT")}
-                  </DialogButton>
+                  </PopupButton>
                 </Focusable>
               ))}
             </Focusable>
@@ -211,16 +211,19 @@ export function SettingsPopup({
               {t("RESET_ZONE_BODY", { n: counts ? counts.total : t("RESET_ZONE_UNKNOWN") })}
             </div>
             <Focusable>
-              <DialogButton
+              {/* 설명 줄(RESET_HINT)을 아래 거느리는 **세로 스택** 버튼이다(§4-G 3항). */}
+              <PopupButton
                 disabled={busy || !resetEnabled}
                 onClick={() => { void runReset(); }}
-                style={{ minWidth: "220px" }}
+                style={{ minWidth: "220px", padding: "6px 10px", ...STACKED_BUTTON_STYLE }}
               >
                 <span style={ICON_SLOT_STYLE}><IconTrash /></span>
                 {t("RESET_OPEN")}
-              </DialogButton>
+              </PopupButton>
             </Focusable>
-            <div style={HINT_STYLE}>{t("RESET_HINT")}</div>
+            {/* ★ 들여쓰기는 **이 줄에만** 준다 — `HINT_STYLE`은 위 이름 바꾸기 줄(가로 행)도
+                쓰는데, 거기까지 밀면 세로 스택이 아닌 자리의 축이 어긋난다. */}
+            <div style={{ ...HINT_STYLE, paddingLeft: STACKED_DESC_PAD }}>{t("RESET_HINT")}</div>
           </div>
         </div>,
       )}

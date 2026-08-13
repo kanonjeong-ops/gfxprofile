@@ -492,10 +492,10 @@ BYPASSES = [
     # 앵커는 액션 줄 **안쪽**의 끝이다 — `</Focusable>`을 앵커로 쓰면 버튼이 Focusable 밖으로
     # 나가 「도달 불가」로 잡히고, 그러면 순서 판정이 일했는지 알 수 없다(대조군이 다른 것을 잰다).
     ("GP#7 액션 줄 순서를 뒤집음([모두 추가]가 먼저)", "DiscoverPopup.tsx",
-     move_after(r"<DialogButton disabled=\{busy\} onClick=\{\(\) => reload\(\)\}.*?</DialogButton>",
+     move_after(r"<PopupButton disabled=\{busy\} onClick=\{\(\) => reload\(\)\}.*?</PopupButton>",
                 ") : null}")),
     ("GP#8 제외 진입을 목록 아래로 옮김", "DiscoverPopup.tsx",
-     move_after(r"<Focusable>\s*<DialogButton\s+disabled=\{busy \|\| excluded\.length === 0\}.*?</Focusable>",
+     move_after(r"<Focusable>\s*<PopupButton\s+disabled=\{busy \|\| excluded\.length === 0\}.*?</Focusable>",
                 "</PopupScrollList>")),
     ("제외 0건인데 진입 버튼을 활성으로", "DiscoverPopup.tsx",
      sub(r"disabled=\{busy \|\| excluded\.length === 0\}", "disabled={busy}")),
@@ -522,7 +522,7 @@ BYPASSES = [
      sub(r"onClick=\{\(\) => \{ void pickManual\(\); \}\} style=\{PICK_BUTTON_STYLE\}",
          'onClick={() => { void pickManual(); }} style={{ ...PICK_BUTTON_STYLE, display: "none" }}')),
     ("행별 [파일 직접 고르기]를 없앰(S-01 보존 파괴)", "DiscoverPopup.tsx",
-     sub(r"<DialogButton disabled=\{busy\} onClick=\{\(\) => onPick\(entry\)\} style=\{ROW_PICK_STYLE\}>\s*\n\s*\{t\(\"DISCOVER_PICK_FILE\"\)\}\s*\n\s*</DialogButton>",
+     sub(r"<PopupButton disabled=\{busy\} onClick=\{\(\) => onPick\(entry\)\} style=\{ROW_PICK_STYLE\}>\s*\n\s*\{t\(\"DISCOVER_PICK_FILE\"\)\}\s*\n\s*</PopupButton>",
          "")),
     ("확신 1탭이 선택기를 엶(모달 없이 1탭 위반)", "DiscoverPopup.tsx",
      sub(r"onClick=\{\(\) => onAdd\(entry, entry\.best \? entry\.best\.path : \"\"\)\}",

@@ -62,7 +62,10 @@ EXPECTED_KEYS = {
     "makeRestoreConfirmSpec": 13,
     "makeRestoreFollowUpSpec": 6,
     "makeDiscoverWarnSpec": 4,
-    "makeResetConfirmSpec": 10,
+    # 10판(§7 중복 정리): `RESET_CONFIRM_BODY`·`RESET_CONFIRM_BACKUP_KEPT` 두 줄이 **키째**
+    # 빠졌다 — 수량과 백업 잔존을 ⚠ warnBlock이 이미 말하고 있었고, 같은 사실을 두 번
+    # 말하면 어느 쪽이 정본인지 화면이 답하지 못한다. 10 → 8이다(음성 대조군은 그 −1인 7).
+    "makeResetConfirmSpec": 8,
     "makeNameEditSpec": 8,
 }
 
@@ -191,7 +194,10 @@ BYPASSES = [
      "makeDeleteConfirmSpec의 문구 키가 11개다"),
     ("표시 이름 소멸 고지를 지움(RESET_CONFIRM_NAMES)",
      r'\n *\{params\.named > 0 \? <div>\{t\("RESET_CONFIRM_NAMES"[^\n]*\n', "\n",
-     "makeResetConfirmSpec의 문구 키가 9개다"),
+     # 10판: reset spec이 10 → 8키가 됐으므로 한 줄을 지운 사본은 7키다("9개다"에서 갱신).
+     # ★ 이 하드코딩은 **일부러** 손으로 맞춘다 — 자동 계산으로 바꾸면 개수 판정과 같은
+     #   식을 두 번 쓰게 되어, 그 식이 틀린 날 음성 대조군이 틀린 채로 통과한다.
+     "makeResetConfirmSpec의 문구 키가 7개다"),
     ("덮어쓸 내용의 크기·지문을 지움(SAVE_CONFIRM_CURRENT)",
      r'\n *<div>\{t\("SAVE_CONFIRM_CURRENT"[^\n]*\n', "\n",
      "makeSaveConfirmSpec의 문구 키가 11개다"),

@@ -47,20 +47,59 @@ U1 = pathlib.Path(
 
 #: (설명, 대상 파일, 정규식, 치환, **기대 판정 조각**)
 BYPASSES = [
+    # 카드 계약 속성 — 배경색만 맞으면 통과하던 자리를 두 방향으로 막는다(이종 QA 적발).
+    ("카드에 외곽 테두리 재도입(9판 '테두리 친 문단'으로 회귀 — D3)", "index.tsx",
+     r'const STATUS_CARD_STYLE = \{\n  \.\.\.CARD_STYLE,',
+     'const STATUS_CARD_STYLE = {\n  ...CARD_STYLE,\n  border: "1px solid rgba(255,255,255,0.15)",',
+     "외곽 테두리가 있다"),
+    ("카드 모서리를 목록 카드와 다르게(시각 언어 통일이 깨진다)", "index.tsx",
+     r'const STATUS_CARD_STYLE = \{\n  \.\.\.CARD_STYLE,',
+     'const STATUS_CARD_STYLE = {\n  ...CARD_STYLE,\n  borderRadius: "12px",',
+     "borderRadius가 §3-B 계약과 다르다"),
+    # 10판: 군 간 간격의 문이 **컨테이너 gap 하나**로 옮겨졌다(카드 margin이 아니다).
+    # 문이 하나뿐이라 대조군도 그 하나를 닫는다 — 닫으면 두 카드가 붙는다.
     ("과거군 간격 소멸(두 군이 한 덩어리로 붙는다)", "index.tsx",
-     r'marginTop: now\.length > 0 \? "8px" : "0",', 'marginTop: "0",',
+     r'const STATUS_STACK_STYLE = \{ display: "flex", flexDirection: "column", gap: "8px" \}',
+     'const STATUS_STACK_STYLE = { display: "flex", flexDirection: "column", gap: "0px" }',
      "군 사이 여백"),
+    # 10판: 투명도는 군 <div>가 아니라 **과거군 카드**에 걸린다(카드 단위 — D02-ⓑ).
     ("busy 투명도 제거(지금 것과 직전 것이 같아 보인다)", "index.tsx",
-     r"opacity: busy \? 0\.4 : 1,", "opacity: 1,",
+     r"opacity: busy \? 0\.4 : 1 \}", "opacity: 1 }",
      "과거군이 흐려지지 않는다"),
+    # 10판: 시각이 헤드라인 뒤 인라인에서 **머리 행 우측 자리**로 옮겨졌다(D4 봉쇄).
+    # 9판 배치로 되돌리는 대조군 — 헤드라인을 머리 행 **안**으로 옮긴다(D4의 그 형태).
+    ("헤드라인을 머리 행으로 되돌림(고정폭 행에 가변 텍스트 — D4 회귀)", "index.tsx",
+     r'            <span style=\{STAMP_STYLE\}>\{stampOf\(summary\.at\)\}</span>\n'
+     r'          </div>\n'
+     r'          <div style=\{HEADLINE_STYLE\}>\{summary\.headline\}</div>\n',
+     '            <div style={HEADLINE_STYLE}>{summary.headline}</div>\n'
+     '            <span style={STAMP_STYLE}>{stampOf(summary.at)}</span>\n'
+     '          </div>\n',
+     "헤드라인이 머리 행"),
     ("결과 시각 제거(언제 있었던 일인지 사라진다)", "index.tsx",
-     r'          <span>\{" · "\}\{stampOf\(summary\.at\)\}</span>\n', "",
+     r'            <span style=\{STAMP_STYLE\}>\{stampOf\(summary\.at\)\}</span>\n', "",
      "결과 줄에 시각이 없다"),
     ("실패 시각 제거", "index.tsx",
      r'          <span>\{" · "\}\{stampOf\(failure\.at\)\}</span>\n', "",
      "실패 줄에 시각이 없다"),
+    # 결함 #3: 구독을 끊으면 **승계는 살아 있고 전달만 죽는다** — 두 계약이 다르다는 증거다.
+    ("결과 전달 구독 제거(적용이 끝나도 열려 있는 화면에 안 온다 — 결함#3 회귀)", "index.tsx",
+     r"    statusListeners\.add\(sync\);\n", "",
+     "열려 있는 화면에 결과가 오지 않는다"),
+    # 같은 결함을 **문 쪽에서** 두 방향으로 더 막는다. 위 대조군은 구독자(받는 쪽)를 끊고,
+    # 아래 둘은 통지자(보내는 쪽)를 끊는다 — 한쪽만 잠그면 반대쪽 회귀가 그대로 통과한다.
+    ("요약 문의 통지 누락(값은 남는데 알리지 않는다 — 결함#3 회귀)", "index.tsx",
+     r"  lastSummary = next;\n  statusListeners\.forEach\(\(notify\) => notify\(\)\);\n",
+     "  lastSummary = next;\n",
+     "열려 있는 화면에 결과가 오지 않는다"),
+    ("요약을 구판 직접 대입으로 환원(문을 우회한다 — 결함#3 회귀)", "index.tsx",
+     r"    setLastSummary\(next\);\n",
+     "    lastSummary = next;\n    setSummary(next);\n",
+     "열려 있는 화면에 결과가 오지 않는다"),
+    # 10판: 모듈 변수를 쓰는 자리가 **모듈 수준의 문 하나**로 옮겨졌다(결함#3) — 들여쓰기가
+    # 4칸에서 2칸이 됐다. 지우면 값이 안 남아 승계가 깨진다(전달과는 다른 계약이다).
     ("실패 승계 제거(QAM을 닫으면 실패만 사라진다 — F20 회귀)", "index.tsx",
-     r"    lastFailure = next;\n", "",
+     r"\n  lastFailure = next;\n", "",
      "실패가 승계되지 않는다"),
     ("실패 소거 누락(로드가 성공했는데 옛 실패가 남는다)", "index.tsx",
      r"      // 새 로드 성공 = 다음 동작의 시작이다 — 승계해 온 실패를 여기서 거둔다\(§3-B 수명\)\.\n      setFailure\(null\);\n",
@@ -291,6 +330,12 @@ def violations(r):                                             # noqa: C901  (�
             out.append(f"★⑤ 문제가 있는 결과인데 아이콘이 경고가 아니다: {title['icons']} (D05)")
         if not title["stamped"]:
             out.append(f"★⑤ 결과 줄에 시각이 없다: {title['text']!r}")
+        # §3-B 10판 폭 규약: 고정폭(아이콘·시각) 행에 **가변 텍스트를 넣지 않는다**. 9판이 셋을
+        # 한 줄에 두어 268px에서 낱자로 감겨 붕괴했다(D4). 글자만 보는 판정은 그 배치로
+        # 되돌아가도 초록불이라, **어디에 있는지**를 따로 잠근다.
+        if title.get("headlineInHead"):
+            out.append("★⑤ 헤드라인이 머리 행(고정폭 행) 안에 있다 — 아이콘·시각과 한 flex 행에 "
+                       "가변 텍스트를 두면 268px에서 셋이 함께 감긴다(D4가 그 붕괴였다)")
         if "APPLY_PROBLEM_REFUSED" not in why["text"] or "게임 둘" not in why["text"]:
             out.append(f"⑥ 거부 사유가 **이름**을 말하지 않는다(F16-ⓑ): {why['text']!r}")
         if "APPLY_PROBLEM_SPECIFIC" not in why["text"]:
@@ -326,20 +371,71 @@ def violations(r):                                             # noqa: C901  (�
                        f"직전 결과가 '지금 것'처럼 보인다(D02-ⓑ)")
     if ab.get("pastOpacity") != 1:
         out.append(f"① 왕복이 끝났는데 결과가 흐린 채다: {ab.get('pastOpacity')}")
+    # ═══ 카드 계약 속성(§3-B 10판) ════════════════════════════════════════════
+    #
+    # ★★ 찾는 조건과 **재는 조건**은 다른 일이다. 프로브는 카드를 배경색 하나로 찾는데,
+    #   그것만 판정하면 나머지 시각 계약(모서리·안쪽 여백·글자 크기·줄 간격)을 전부 깨뜨려도
+    #   초록불이다(이종 QA 적발). `CARD_STYLE` 정본 재사용이 10판의 요지이므로 그 값들을 잠근다.
+    # ★ `border`는 **없어야 하는 것**을 재는 자리다: 9판 테두리 박스 폐기가 D3의 핵심이라,
+    #   되살아나면 카드형이 아니라 *"테두리 친 문단"*으로 돌아간다(사용자 접수 문구 그대로).
+    CARD_CONTRACT = {
+        "borderRadius": "4px", "padding": "8px 10px", "fontSize": "12px", "innerGap": "6px",
+    }
+    for card in r["resultProblem"]["groups"]:
+        for prop, want in CARD_CONTRACT.items():
+            if card.get(prop) != want:
+                out.append(f"★결과 카드의 {prop}가 §3-B 계약과 다르다: {card.get(prop)!r} "
+                           f"(기대 {want!r}) — 카드는 팝업 목록 카드와 **같은 시각 언어**여야 한다"
+                           f"(CARD_STYLE 정본 재사용). 배경색만 맞고 나머지가 갈리면 같은 것이 "
+                           f"화면마다 다르게 보인다")
+        if card.get("border"):
+            out.append(f"★결과 카드에 외곽 테두리가 있다: {card['border']!r} — 9판의 테두리 박스는 "
+                       f"*\"로그창도 카드도 아닌 테두리 친 문단\"*으로 읽혀 10판에서 폐기됐다(D3). "
+                       f"되살리면 카드형 전환이 무의미해진다")
+
     groups = r["resultProblem"]["groups"]
-    if len(groups) != 1 or groups[0]["marginTop"] != "0":
-        out.append(f"⑤ 현재군이 비었는데 과거군에 군 사이 여백이 붙었다: {groups}")
+    # ★ 10판: "현재군이 비었는데 과거군에 여백이 붙는" 9판의 결함은 **재발할 형태가 없어졌다** —
+    #   간격을 컨테이너 gap이 소유하므로 카드가 하나면 여백이 생길 자리가 없다. 그래서 여기서는
+    #   여백이 아니라 **카드가 하나뿐인가**만 잰다(FAIL을 만들 수 없는 검사는 장식이다).
+    if len(groups) != 1:
+        out.append(f"⑤ 현재군이 비었는데 카드가 {len(groups)}장이다: {groups}")
     # 두 군이 함께 있을 때가 **분리가 의미를 갖는 유일한 상황**이다(D06 — 위=지금 / 아래=직전).
     pvg = pv.get("groups") or []
     if len(pvg) != 2 or pvg[0]["keys"] != ["busy"] or pvg[1]["keys"] != ["result"]:
         out.append(f"★① 현재군과 과거군이 갈려 있지 않다: {pvg} — 지금 일어나는 일과 직전 결과가 "
                    f"한 덩어리로 읽힌다")
-    elif pvg[1]["marginTop"] != "8px":
-        out.append(f"★① 두 군 사이 여백이 없다(marginTop={pvg[1]['marginTop']}) — 시각 분리가 사라졌다")
+    elif pv.get("boxGap") != "8px":
+        out.append(f"★① 두 군 사이 여백이 없다(컨테이너 gap={pv.get('boxGap')}) — 시각 분리가 사라졌다")
+    # 카드가 목록용 4px를 그대로 물려받으면 간격이 8이 아니라 12가 된다 — 덮었는지 함께 본다.
+    elif any(g.get("marginBottom") != "0" for g in pvg):
+        out.append(f"① 결과 카드가 목록용 marginBottom을 덮지 않았다: "
+                   f"{[g.get('marginBottom') for g in pvg]} — 군 간격이 gap+margin으로 겹친다")
     if r["summaryCarried"] and keys(r["summaryCarried"]) != ["result"]:
         out.append(f"요약 승계가 깨졌다: {r['summaryCarried']}")
     if not r["summaryCarried"]:
         out.append("★요약이 승계되지 않는다 — QAM을 닫으면 무슨 일이 있었는지 사라진다")
+
+    # ═══ 결과 **전달**(확인 모달 중 재마운트) — 실기 결함 #3 회귀 잠금 ═════════
+    #
+    # 승계(위)와 전달(여기)은 다른 계약이다. 승계는 *"닫았다 열어도 남아 있는가"*이고,
+    # 전달은 *"내가 열려 있는 동안 끝난 일이 화면에 오는가"*다. 실기에서 후자만 깨져 있었다 —
+    # §3-E 확인 모달이 열리는 동안 QAM이 언마운트되고, 완료가 재마운트보다 늦으면 새 인스턴스는
+    # `useState(lastSummary)`를 이미 지나쳐 **결과를 영영 모른다**(닫았다 열어야 뜬다).
+    # ★ 이 시나리오는 **요약 문 단독**을 잰다(정지 갈래 = `keepSummary`만 부른다 + 후속 재조회도
+    #   붙잡아 둔다). 성공 갈래는 뒤에 `setFailure(null)`이 붙어 **실패 문의 통지에 요약이
+    #   편승**하므로, 요약 쪽 통지를 지워도 화면이 채워져 대조군이 샌다 — 두 문이 서로를 가린다.
+    if "result" in (r["deliveryBeforeDone"] or []):
+        out.append(f"결함#3 재현 전제가 깨졌다 — 완료 전인데 이미 결과가 있다: "
+                   f"{r['deliveryBeforeDone']} (붙잡은 왕복이 실제로 안 붙잡혔다)")
+    dad = r["deliveryAfterDone"]
+    by_key = {l["key"]: l for l in dad}
+    if "result" not in by_key:
+        out.append(f"★결함#3 적용이 끝났는데 **열려 있는 화면에 결과가 오지 않는다**: "
+                   f"{[l['key'] for l in dad]} — 확인창이 뜬 사이 QAM이 언마운트되고 완료가 "
+                   f"재마운트보다 늦으면 결과가 죽은 인스턴스로 간다. 모듈 변수는 값의 정본일 뿐 "
+                   f"**전달 수단이 아니다** — 갱신을 살아 있는 화면에 알려야 한다")
+    elif "APPLY_ALL_STOPPED" not in by_key["result"]["text"]:
+        out.append(f"★결함#3 전달된 것이 그 결과가 아니다: {by_key['result']['text']!r}")
 
     # ═══ ④ 배선 ══════════════════════════════════════════════════════════════
     want_wiring = [
@@ -382,7 +478,9 @@ def violations(r):                                             # noqa: C901  (�
                    f"{keys(af['lines'])} — 확정 실행은 실패해도 곧바로 다시 읽으므로(§4-F ③) "
                    f"현재군의 실패 줄은 다음 조회 성공에 거둬진다(§3-B 수명). 오래 사는 자리는 "
                    f"과거군뿐이고, 거기가 비면 *무슨 일이 있었는지*가 화면에서 사라진다")
-    elif not af_by["result"]["text"].startswith("APPLY_ALL_STOPPED"):
+    # 10판: 시각이 머리 행으로 올라가 flatten의 앞머리를 차지한다 — 그래서 "무슨 결과인가"는
+    #   **헤드라인 자리**에서 읽는다(위치가 아니라 역할로 집는다. `in` 대조로 느슨하게 풀지 않았다).
+    elif not (af_by["result"].get("headline") or "").startswith("APPLY_ALL_STOPPED"):
         out.append(f"★R1 실패한 실행의 결과 줄이 「도중에 멈췄다」고 말하지 않는다: "
                    f"{af_by['result']['text']!r}")
     if "checkin" not in af_by or not af_by["checkin"]["text"].startswith("CHECKIN_MANY"):
@@ -478,8 +576,12 @@ def main():
           f"프로필0={r['noProfiles']['keys']} · 프로필1={r['oneProfile']['keys']}")
     print(f"  결과: 문제 있음={keys(r['resultProblem']['lines'])} / 문제 0={keys(r['resultClean']['lines'])} · "
           f"승계(실패/요약)={keys(r['failureCarried'])}/{keys(r['summaryCarried'])}")
-    print(f"  진행: {r['previewing']['texts'][:1]}→{r['applying']['texts'][:1]} · "
-          f"과거군 투명도 {r['previewing']['pastOpacity']}→{r['afterBusy']['pastOpacity']}")
+    # ⚠️ 요약 줄은 **측정이 없었던 회차에도 죽지 않는다**(E10과 같은 처분). 상태박스가 통째로
+    #   사라지면 `pastOpacity`는 JSON에 실리지 않는데, 예전엔 여기서 KeyError로 죽어
+    #   *"무엇이 위반이었나"*가 스택 트레이스로 뭉개졌다 — 판정은 아래 목록이 말해야 한다.
+    print(f"  진행: {r['previewing'].get('texts', [])[:1]}→{r['applying'].get('texts', [])[:1]} · "
+          f"과거군 투명도 {r['previewing'].get('pastOpacity', '측정없음')}"
+          f"→{r['afterBusy'].get('pastOpacity', '측정없음')}")
     print(f"  배선: " + " · ".join(f"{w['label']}→{w['component']}" for w in r["wiring"])
           + f" · 통지 멱등(1→{r['idempotent']['onceCalls']} · 3→{r['idempotent']['thriceCalls']})")
     # 요약 줄도 **측정이 없었던 회차**에 죽지 않는다 — 진단은 판정 목록이 말한다(E10).

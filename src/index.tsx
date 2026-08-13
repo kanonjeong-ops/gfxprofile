@@ -16,7 +16,7 @@ import { ensureLang, setProfileNames, t, tCode, type StringKey } from "./i18n";
 import { PLUGIN_VERSION } from "./version";
 import { BulkApplyButton } from "./BulkApplyButton";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
-import { useDataDoor } from "./popup";
+import { CARD_STYLE, ICON_SLOT_STYLE, useDataDoor } from "./popup";
 import { GamesPopup } from "./GamesPopup";
 import { DiscoverPopup } from "./DiscoverPopup";
 import { SettingsPopup } from "./SettingsPopup";
@@ -273,26 +273,94 @@ let lastSummary: ApplySummary | null = null;
 //   소거 시점은 **다음 동작 시작**(새 일괄 적용 / 새 로드 성공)뿐이다.
 let lastFailure: Failure | null = null;
 
+/**
+ * 살아 있는 QAM 인스턴스들 — 모듈 변수가 바뀌면 여기로 알린다.
+ *
+ * ★★ 왜 필요한가(실기 결함 #3): 모듈 변수는 **수명**을 해결했지만 **전달**은 해결하지 않았다.
+ *   `useState(lastSummary)`는 **마운트 그 순간 한 번** 읽는다. 그런데 §3-E 확인 모달이 열려
+ *   있는 동안 QAM 패널은 언마운트되고(실측: innerText ""), 일괄 적용은 그 사이에 끝난다.
+ *   완료 콜백은 **이미 죽은 인스턴스**의 setState를 부르고, 그보다 먼저 재마운트된 새
+ *   인스턴스는 `useState`를 이미 지나쳐 결과를 영영 모른다 — *"적용은 됐는데 결과 카드가
+ *   안 뜨고, QAM을 닫았다 열어야 뜨는"* 그 증상이다.
+ * ★ 고치는 방향은 **새 상태를 만드는 것이 아니라 전달 시점을 여는 것**이다. §3-B의
+ *   "lastSummary 모듈 변수 승계" 계약은 그대로다 — 값의 정본도 수명도 안 바뀐다.
+ * ★ **문은 하나다**: 아래 두 함수 말고 `lastSummary`·`lastFailure`에 대입하는 자리를 두지
+ *   않는다. 값과 통지가 한 함수 안에 묶여 있으면 *"값은 바꿨는데 알리는 걸 잊는"* 경로가
+ *   생길 수 없다(검사로 막을 것을 구조로 없앤다 — 이 프로젝트의 문법).
+ */
+const statusListeners = new Set<() => void>();
+
+/** 결과 요약을 바꾸는 **유일한 문** — 모듈 변수와 통지가 함께 움직인다. */
+function setLastSummary(next: ApplySummary | null) {
+  lastSummary = next;
+  statusListeners.forEach((notify) => notify());
+}
+
+/** 실패를 바꾸는 **유일한 문**(요약과 같은 규칙 — F20의 수명 대칭을 전달에서도 지킨다). */
+function setLastFailure(next: Failure | null) {
+  lastFailure = next;
+  statusListeners.forEach((notify) => notify());
+}
+
 const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
 
 const MUTED_COLOR = "#9aa0a6";
 /** 주의색은 **주황 하나**다 — 빨강은 쓰지 않는다(A8). */
 const WARN_COLOR = "#ffb454";
 
-/** 상태박스(§3-B) — 시각 박스는 **한 개**이고, 내용이 0줄이면 아예 그리지 않는다. */
-const BOX_STYLE = {
-  border: "1px solid rgba(255,255,255,0.15)",
-  borderRadius: "4px",
-  padding: "8px 10px",
+/**
+ * 상태박스(§3-B 10판) — **최대 2장의 결과 카드**를 세로로 쌓는다(위=현재군, 아래=과거군).
+ *
+ * ★★ **군 간 간격의 문은 여기 하나다.** 카드 쪽 margin으로도 벌릴 수 있지만 값이 두 곳에
+ *   살면 한쪽만 고치는 날 군 간격이 어긋난다(4+8=12px). 컨테이너가 gap을 소유하고
+ *   카드는 `marginBottom:0`으로 목록용 4px를 덮는다 — 간격을 말하는 자리를 하나로 만든 것이다.
+ * ★ 부수 효과로 "현재군이 없을 때 과거군에 여백이 붙는" 9판의 결함이 **재발할 형태 자체가
+ *   없어졌다**: gap은 자식 **사이**에만 적용되므로 카드가 하나면 여백이 생길 곳이 없다.
+ */
+const STATUS_STACK_STYLE = { display: "flex", flexDirection: "column", gap: "8px" } as const;
+
+/**
+ * 결과 카드 — 팝업 목록 카드와 **같은 시각 언어**다(`CARD_STYLE` 정본 1곳 재사용).
+ *
+ * ★★ 9판까지의 외곽 테두리 박스는 폐기했다(D3). 레퍼런스(Steam 설정·LSFG·SimpleDeckyTDP·
+ *   Framegen) 어디에도 "투명 배경 + 테두리 상자"가 없고 묶음은 전부 채운 배경이다 —
+ *   테두리 박스는 *"로그창도 카드도 아닌 테두리 친 문단"*으로 읽혔다(사용자 접수 그대로).
+ * ★ 정직성: 지금 데이터는 로그가 아니다(요약 1건 + 실패 1건, 이력 없음). 카드형은
+ *   "기록이 더 있다"는 약속을 하지 않는 형태다 — 진짜 로그 이력은 후순위 확정(재상정 없음).
+ */
+const STATUS_CARD_STYLE = {
+  ...CARD_STYLE,
+  marginBottom: "0",
   fontSize: "12px",
   display: "flex",
   flexDirection: "column",
+  gap: "6px",
 } as const;
 
-const GROUP_STYLE = { display: "flex", flexDirection: "column", gap: "6px" } as const;
+/**
+ * 과거군 카드의 **머리 행** — 좌: 성패 아이콘 / 우: 수신 시각.
+ *
+ * ★★ **가변 텍스트는 이 행에 없다**(§3-B 10판 폭 규약 — D4 원천 봉쇄). 고정폭 둘 사이는
+ *   그냥 빈 공간이다. 9판은 아이콘+헤드라인+시각을 한 flex 행에 두었는데, QAM 268px에서
+ *   헤드라인에 `minWidth:auto`·시각에 `flexShrink` 부재가 겹쳐 **세 항목이 전부 낱자로
+ *   감겨 붕괴**했다("…8개 변/경" + 시각 고아). 규약을 지키는 것으로는 다음에 또 어긴다 —
+ *   **어길 자리가 없는 형태**로 바꿨다: 고정폭은 이 행에, 가변 텍스트는 전폭 블록 줄에.
+ */
+const RESULT_HEAD_STYLE = {
+  display: "flex", justifyContent: "space-between", alignItems: "center",
+} as const;
 
-/** 결과 제목 줄 — 아이콘과 글이 같은 줄에 선다. */
-const RESULT_ROW_STYLE = { display: "flex", alignItems: "center", gap: "6px" } as const;
+/** 결과 진술 한 덩어리(머리 행 + 헤드라인) — 카드의 다른 줄들과 같은 층위의 "한 줄"이다. */
+const RESULT_BLOCK_STYLE = { display: "flex", flexDirection: "column", gap: "4px" } as const;
+
+/**
+ * 헤드라인 — **전폭 블록**이고 자연 줄바꿈이다.
+ * ⚠️ ellipsis를 걸지 않는다: 수를 자르면 화면이 거짓을 말한다("전체 10개 중 8개…").
+ */
+const HEADLINE_STYLE = { fontWeight: "bold" } as const;
+
+/** 수신 시각 — 고정폭 취급이라 **줄어들지 않는다**(flexShrink:0). 회색. */
+const STAMP_STYLE = { flexShrink: 0, color: MUTED_COLOR } as const;
 
 /**
  * 결과·실패를 **받은 시각**. 당일이면 `14:32`, 다른 날이면 `08-10 14:32`(D02·M9).
@@ -348,8 +416,11 @@ function EntryButton({
 }) {
   return (
     <PanelSectionRow>
-      <ButtonItem layout="below" icon={icon} description={desc} onClick={onOpen}>
-        {label}
+      {/* ★ 아이콘은 **children 안**이다(§3-A 10판 정오 — D2). `icon` prop은 버튼 내용이 아니라
+          Field의 라벨 슬롯이라 `layout="below"`+라벨 없음에서 버튼 위 26px에 고아로 뜬다.
+          관용구는 프로젝트에 하나 — `ICON_SLOT_STYLE`(popup.tsx). */}
+      <ButtonItem layout="below" description={desc} onClick={onOpen}>
+        <span style={ICON_SLOT_STYLE}>{icon}</span>{label}
       </ButtonItem>
     </PanelSectionRow>
   );
@@ -370,10 +441,33 @@ function Content() {
   const [previewing, setPreviewing] = useState(false);
   const [summary, setSummary] = useState(lastSummary);
 
-  /** 실패는 **모듈 변수와 상태를 함께** 움직인다 — 두 곳에 각자 쓰면 언젠가 갈린다. */
+  /**
+   * 모듈 변수의 변화를 **살아 있는 동안 계속** 따라간다(결함 #3).
+   *
+   * ★ 구독 직후 한 번 맞추는 이유: 마운트(`useState`)와 이 이펙트 사이에도 결과가 도착할 수
+   *   있다. 그 틈을 "거의 안 생긴다"로 두지 않고 **없앤다** — 구독과 동기화가 같은 자리다.
+   * ★ 해제는 반환값이 한다. 언마운트한 인스턴스가 목록에 남으면 죽은 setState가 계속 불린다.
+   */
+  useEffect(() => {
+    const sync = () => {
+      setSummary(lastSummary);
+      setFailureState(lastFailure);
+    };
+    statusListeners.add(sync);
+    // ★ 마운트(`useState`)와 이 구독 사이에도 결과가 도착할 수 있다 — 그 틈을 "거의 안 생긴다"로
+    //   두지 않고 닫는다. 단 **어긋났을 때만** 맞춘다: 조건 없이 부르면 재렌더가 하나 더 늘고,
+    //   그 한 번이 공용 문의 조회를 다시 켠다(회귀 R2가 조회 2회→3회로 잡아냈다).
+    if (lastSummary !== summary || lastFailure !== failure) sync();
+    return () => { statusListeners.delete(sync); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * 실패는 **모듈 변수와 상태를 함께** 움직인다 — 두 곳에 각자 쓰면 언젠가 갈린다.
+   * 상태는 위 구독이 받는다(문이 하나라 이 함수가 setState를 직접 부를 이유가 없다).
+   */
   const setFailure = useCallback((next: Failure | null) => {
-    lastFailure = next;
-    setFailureState(next);
+    setLastFailure(next);
   }, []);
 
   /**
@@ -383,8 +477,9 @@ function Content() {
    * 닿는 **부가 채널**일 뿐이고, 실패해도 요약 줄은 이미 붙잡혀 있다.
    */
   const keepSummary = useCallback((next: ApplySummary) => {
-    lastSummary = next;
-    setSummary(next);
+    // 모듈 변수 + 통지가 한 문이다 — 이 화면이 그 사이 언마운트됐어도 **살아 있는 화면**이
+    // 결과를 받는다(결함 #3). 죽은 인스턴스에 setState를 부르던 자리가 이것이었다.
+    setLastSummary(next);
     try {
       toaster.toast({ title: next.headline, body: next.hints.join(" · ") });
     } catch (err) {
@@ -660,12 +755,23 @@ function Content() {
     if (summary) {
       // ⑤ 결과 제목 — 아이콘이 성패를 먼저 말하고(D05), 시각이 "언제 것인지"를 말한다.
       past.push(
-        <div key="result" style={{ ...RESULT_ROW_STYLE, color: MUTED_COLOR }}>
-          <span style={{ display: "inline-flex", color: summary.problems ? WARN_COLOR : MUTED_COLOR }}>
-            {summary.problems ? <IconWarn /> : <IconCheck />}
-          </span>
-          <span>{summary.headline}</span>
-          <span>{" · "}{stampOf(summary.at)}</span>
+        <div key="result" style={{ ...RESULT_BLOCK_STYLE, color: MUTED_COLOR }}>
+          <div style={RESULT_HEAD_STYLE}>
+            {/* ★ `fontSize:"16px"`는 §3-B "성패 아이콘 16px 고정"의 이행이다. 아이콘은 1em이라
+                주변 글자 크기를 따라가는데, 카드가 12px이라 그대로 두면 **12px로 줄어든다** —
+                크기를 못 박은 조문이 상속에 조용히 먹히던 자리다. */}
+            <span
+              style={{
+                display: "inline-flex",
+                fontSize: "16px",
+                color: summary.problems ? WARN_COLOR : MUTED_COLOR,
+              }}
+            >
+              {summary.problems ? <IconWarn /> : <IconCheck />}
+            </span>
+            <span style={STAMP_STYLE}>{stampOf(summary.at)}</span>
+          </div>
+          <div style={HEADLINE_STYLE}>{summary.headline}</div>
         </div>,
       );
       // ⑥ 사유 — 이름과 조치가 여기 있다. 색은 주황 하나뿐이다(A8).
@@ -687,19 +793,12 @@ function Content() {
     if (now.length === 0 && past.length === 0) return null;
     return (
       <PanelSectionRow>
-        <div style={BOX_STYLE}>
-          {now.length > 0 ? <div style={GROUP_STYLE}>{now}</div> : null}
+        <div style={STATUS_STACK_STYLE}>
+          {now.length > 0 ? <div style={STATUS_CARD_STYLE}>{now}</div> : null}
           {past.length > 0 ? (
-            /* busy 동안 과거군은 흐려진다 — *"지금 것이 아니다"*를 숨기지 않고 말하는 방법이다(D02-ⓑ). */
-            <div
-              style={{
-                ...GROUP_STYLE,
-                marginTop: now.length > 0 ? "8px" : "0",
-                opacity: busy ? 0.4 : 1,
-              }}
-            >
-              {past}
-            </div>
+            /* busy 동안 과거군 **카드 전체**가 흐려진다 — *"지금 것이 아니다"*를 숨기지 않고
+               말하는 방법이다(D02-ⓑ). 투명도는 줄이 아니라 카드 단위로 건다. */
+            <div style={{ ...STATUS_CARD_STYLE, opacity: busy ? 0.4 : 1 }}>{past}</div>
           ) : null}
         </div>
       </PanelSectionRow>

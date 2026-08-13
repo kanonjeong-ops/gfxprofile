@@ -1,12 +1,13 @@
 import { useCallback, useState } from "react";
 import { makeDiscoverWarnSpec } from "./confirmSpecs";
-import { DialogButton, Focusable, ToggleField } from "./deckyui";
+import { Focusable, ToggleField } from "./deckyui";
 import { pickConfigFile } from "./filepicker";
 import { IconRefresh, IconRestore, IconSearch } from "./icons";
 import { t, tCode } from "./i18n";
 import {
-  CARD_INNER_STYLE, CARD_STYLE, GfxPopup, PopupScrollList, PopupSubView,
-  listRowNavProps, subViewKey, usePopupData, usePopupGate, type DView,
+  CARD_INNER_STYLE, CARD_STYLE, GfxPopup, ICON_SLOT_STYLE, PopupButton, PopupScrollList,
+  PopupSubView, STACKED_BUTTON_STYLE, STACKED_DESC_PAD, listRowNavProps, subViewKey,
+  usePopupData, usePopupGate, type DView,
 } from "./popup";
 import {
   addGame, discoverGames, includeGame, registerConfident,
@@ -36,7 +37,10 @@ import {
 const COLUMN_STYLE = { display: "flex", flexDirection: "column", gap: "10px" } as const;
 const META_STYLE = { fontSize: "11px", color: "#9aa0a6" } as const;
 const HINT_STYLE = { fontSize: "12px", color: "#9aa0a6" } as const;
-const DESC_STYLE = { fontSize: "11px", color: "#9aa0a6", margin: "2px 0 6px" } as const;
+/** [파일 직접 고르기] 아래 설명 줄 — 버튼 가로 패딩과 같은 들여쓰기로 축을 공유한다(§4-G 3항). */
+const DESC_STYLE = {
+  fontSize: "11px", color: "#9aa0a6", margin: "2px 0 6px", paddingLeft: STACKED_DESC_PAD,
+} as const;
 const SUMMARY_ROW_STYLE = {
   display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "8px", fontSize: "13px",
 } as const;
@@ -46,16 +50,14 @@ const NAME_STYLE = {
   flex: "1 1 auto", minWidth: 0, fontSize: "15px", overflow: "hidden", textOverflow: "ellipsis",
 } as const;
 
-/** 아이콘 자리 — 고정 폭이라 아이콘 유무로 버튼 폭이 흔들리지 않는다(GP#2). */
-const ICON_SLOT_STYLE = {
-  display: "inline-flex", width: "1em", justifyContent: "center", marginRight: "4px",
-} as const;
-
 const ACTION_ROW_STYLE = { display: "flex", flexWrap: "wrap", gap: "8px" } as const;
 const RESCAN_BUTTON_STYLE = { minWidth: "140px", padding: "6px 10px", fontSize: "13px" } as const;
 const BULK_BUTTON_STYLE = { minWidth: "260px", padding: "6px 10px", fontSize: "13px" } as const;
 const EXCLUDED_BUTTON_STYLE = { minWidth: "200px", padding: "6px 10px", fontSize: "13px" } as const;
-const PICK_BUTTON_STYLE = { minWidth: "180px", padding: "6px 10px", fontSize: "13px" } as const;
+/** [파일 직접 고르기] — 설명 줄을 아래 거느리는 **세로 스택** 버튼이다(§4-G 3항). */
+const PICK_BUTTON_STYLE = {
+  minWidth: "180px", padding: "6px 10px", fontSize: "13px", ...STACKED_BUTTON_STYLE,
+} as const;
 const INCLUDE_BUTTON_STYLE = {
   minWidth: "120px", padding: "6px 8px", fontSize: "13px", flex: "0 0 auto",
 } as const;
@@ -185,25 +187,25 @@ function EntryCard({
               {entry.confident && entry.best ? (
                 /* ★ 확신 단일 매치는 **모달 없이 1탭**이다(현행 유지): 후보가 하나뿐이라
                    펼쳐 봐야 고를 것이 없고, 경고도 구조적으로 발생하지 않는다. */
-                <DialogButton
+                <PopupButton
                   disabled={busy}
                   onClick={() => onAdd(entry, entry.best ? entry.best.path : "")}
                   style={ROW_ACTION_STYLE}
                 >
                   {t("DISCOVER_ADD")}
-                </DialogButton>
+                </PopupButton>
               ) : (
-                <DialogButton
+                <PopupButton
                   disabled={busy}
                   onClick={() => onToggleCandidates(entry)}
                   style={ROW_ACTION_STYLE}
                 >
                   {t(open ? "DISCOVER_HIDE_CANDIDATES" : "DISCOVER_SHOW_CANDIDATES")}
-                </DialogButton>
+                </PopupButton>
               )}
-              <DialogButton disabled={busy} onClick={() => onPick(entry)} style={ROW_PICK_STYLE}>
+              <PopupButton disabled={busy} onClick={() => onPick(entry)} style={ROW_PICK_STYLE}>
                 {t("DISCOVER_PICK_FILE")}
-              </DialogButton>
+              </PopupButton>
             </div>
           )}
         </div>
@@ -221,7 +223,7 @@ function EntryCard({
                   <div style={CANDIDATE_PATH_STYLE}>{shortDir(cand.path)}</div>
                   <CandidateMeta cand={cand} />
                 </div>
-                <DialogButton
+                <PopupButton
                   disabled={busy}
                   onClick={() => {
                     if (chosen === cand.path) onAdd(entry, cand.path);
@@ -230,7 +232,7 @@ function EntryCard({
                   style={CANDIDATE_BUTTON_STYLE}
                 >
                   {t(chosen === cand.path ? "DISCOVER_CANDIDATE_ADD" : "DISCOVER_CHOOSE")}
-                </DialogButton>
+                </PopupButton>
               </Focusable>
             ))
           : null}
@@ -464,14 +466,14 @@ export function DiscoverPopup({
             쪽(다시 읽기)이어야 한다. 일괄 등록은 대상이 0이면 아예 그리지 않는다 —
             눌러도 아무 일이 없는 버튼은 라벨이 거짓말을 한다. */}
         <Focusable style={ACTION_ROW_STYLE}>
-          <DialogButton disabled={busy} onClick={() => reload()} style={RESCAN_BUTTON_STYLE}>
+          <PopupButton disabled={busy} onClick={() => reload()} style={RESCAN_BUTTON_STYLE}>
             <span style={ICON_SLOT_STYLE}><IconRefresh /></span>
             {t("DISCOVER_RESCAN")}
-          </DialogButton>
+          </PopupButton>
           {confidentN > 0 ? (
-            <DialogButton disabled={busy} onClick={() => { void runBulk(); }} style={BULK_BUTTON_STYLE}>
+            <PopupButton disabled={busy} onClick={() => { void runBulk(); }} style={BULK_BUTTON_STYLE}>
               {t("DISCOVER_ADD_CONFIDENT", { n: confidentN })}
-            </DialogButton>
+            </PopupButton>
           ) : null}
         </Focusable>
 
@@ -488,13 +490,13 @@ export function DiscoverPopup({
             0건이면 **비활성으로 남긴다**(M6 기각) — 복구 렌즈의 유일한 화면 발견 경로라
             숨기지 않는다. */}
         <Focusable>
-          <DialogButton
+          <PopupButton
             disabled={busy || excluded.length === 0}
             onClick={() => setView({ kind: "excluded" })}
             style={EXCLUDED_BUTTON_STYLE}
           >
             {t("DISCOVER_EXCLUDED_OPEN", { n: excluded.length })}
-          </DialogButton>
+          </PopupButton>
         </Focusable>
 
         {noteView}
@@ -519,9 +521,9 @@ export function DiscoverPopup({
         {renderTail()}
 
         <Focusable>
-          <DialogButton disabled={busy} onClick={() => { void pickManual(); }} style={PICK_BUTTON_STYLE}>
+          <PopupButton disabled={busy} onClick={() => { void pickManual(); }} style={PICK_BUTTON_STYLE}>
             {t("DISCOVER_PICK_FILE")}
-          </DialogButton>
+          </PopupButton>
         </Focusable>
         {/* H5 — 이 버튼이 무엇을 하는 것인지 그 자리에서 말한다(자기 설명). */}
         <div style={DESC_STYLE}>{t("DISCOVER_PICK_FILE_DESC")}</div>
@@ -551,14 +553,14 @@ export function DiscoverPopup({
                     <div style={META_STYLE}>{t("DISCOVER_EXCLUDED_ROW", { date: row.excluded_at_label })}</div>
                   ) : null}
                 </div>
-                <DialogButton
+                <PopupButton
                   disabled={busy}
                   onClick={() => { void runInclude(row); }}
                   style={INCLUDE_BUTTON_STYLE}
                 >
                   <span style={ICON_SLOT_STYLE}><IconRestore /></span>
                   {t("DISCOVER_INCLUDE")}
-                </DialogButton>
+                </PopupButton>
               </div>
             </Focusable>
           ))}

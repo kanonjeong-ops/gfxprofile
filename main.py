@@ -571,7 +571,8 @@ _RESTORE_SCOPE = "restore_backup"   # 복원 토큰의 네임스페이스 (M2 �
 _APPLY_ALL_SCOPE = "apply_all"      # 일괄 적용 토큰의 네임스페이스 (M2 — DESIGN-F6-F8 §3-C)
 #: 전체 초기화의 type-to-confirm 문자열 — **고정 단어**다(사용자 확정 2026-08-09).
 #: 등록 수 같은 가변값이 아니다: 위조 방지는 토큰의 몫이고 입력은 *이해 확인* 장치다.
-#: 파괴 규모 고지는 입력이 아니라 모달 본문의 파괴 내역(games·profiles) 표시가 전담한다.
+#: 파괴 규모 고지는 입력이 아니라 확인창 ⚠ warnBlock(games·profiles)이 전담한다
+#: (10판 — 본문의 중복 고지 2줄은 제거됐다. 이 줄은 주석이고 동작에 닿지 않는다).
 #: 번역하지 않는다 — 번역하면 사용자가 본 challenge와 백엔드 상수가 언어에 따라 갈린다.
 _RESET_CHALLENGE = "delete"
 

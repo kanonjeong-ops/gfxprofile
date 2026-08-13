@@ -73,6 +73,36 @@ if run grep; then
   echo "@decky/ui를 import하는 파일: ${files:-<없음>} (src/deckyui.ts 하나여야 한다)"
   [ "${files% }" = "src/deckyui.ts" ] || { echo "불변식 위반" >&2; exit 1; }
 
+  # ⑤ DialogButton JSX의 직접 사용은 src/popup.tsx 한 파일만 허용한다(설계 §4-G 2항, 10판).
+  #    ★ 왜: Steam 본체 CSS가 `button.DialogButton { width:100% }`를 전역으로 걸고, 그 오염은
+  #      블록 부모만이 아니라 **flex 자식에도** 발현한다(실측 — 행 버튼 584.7px, 게임 이름 0px
+  #      붕괴). 각 버튼이 인라인 width로 눌러 막는 방식은 **다음에 추가되는 버튼**을 못 지킨다.
+  #      그래서 폭을 아는 자리를 `PopupButton` 래퍼 하나로 모으고, 그 문 밖으로 나가는 길을
+  #      여기서 닫는다 — 검사로 막던 것을 구조로 없앤 E1과 같은 문법이다.
+  #    ★ 파일 단위로 잠근다(위 ① @decky/ui 단일 관문과 동형). **파일 밖 예외 목록은 두지
+  #      않는다** — 목록을 두는 순간 그 목록이 다음 라운드의 구멍이 된다.
+  #      popup.tsx 안의 두 자리(래퍼 정의 · 폴백 오버레이 푸터 2버튼)는 그 파일 주석이 사유를 진다.
+  #    ⚠️ **주석을 먼저 지우고** 여는 JSX 태그만 본다(게이트 ①과 같은 문법). 단순 문자열 검색은
+  #      `// … <DialogButton …` 같은 설명 주석까지 잡아 위반으로 오판한다 — 이 프로젝트는
+  #      같은 오탐을 이미 두 번 겪었고(①의 주석), **오탐도 거짓 검사다**: 다음 사람이 검사를 끈다.
+  #    ★ 문 하나의 범위 = **직접 여는 태그**다. `import { DialogButton as X }` 같은 별칭 우회는
+  #      막지 않는다 — 그건 실수로 넘을 수 있는 문턱이 아니라 **고의**이고, 고의는 코드리뷰의
+  #      몫이다(E1 grep의 "가장 흔한 형태의 실수만 거른다"와 같은 처분).
+  btnfiles=$(python3 - <<'PY'
+import pathlib, re
+hits = []
+for p in sorted(list(pathlib.Path('src').rglob('*.tsx')) + list(pathlib.Path('src').rglob('*.ts'))):
+    src = p.read_text()
+    src = re.sub(r'/\*.*?\*/', '', src, flags=re.S)   # 블록 주석
+    src = re.sub(r'//[^\n]*', '', src)                # 줄 주석
+    if re.search(r'<DialogButton[\s/>]', src):
+        hits.append(str(p))
+print(' '.join(hits))
+PY
+)
+  echo "DialogButton을 직접 그리는 파일: ${btnfiles:-<없음>} (src/popup.tsx 하나여야 한다)"
+  [ "$btnfiles" = "src/popup.tsx" ] || { echo "불변식 위반 — 팝업 버튼은 PopupButton 래퍼로만 그린다(§4-G)" >&2; exit 1; }
+
   # ③ 일괄 적용 버튼의 활성 조건에 running이 들어가면 안 된다(설계 E1).
   #    들어가는 순간 게임 하나가 켜져 있다는 이유로 **아무것도 적용되지 않고**, 그건
   #    "하나만 거부하고 나머지는 적용"이라는 M1 불변식의 정면 위반이다.

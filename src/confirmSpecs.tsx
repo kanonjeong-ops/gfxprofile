@@ -120,8 +120,13 @@ export function makeDeleteConfirmSpec(
         {/* ★ §9-① 재등록·복원 경로 예고 — "삭제 = 등록 해제 + 감지 제외"(A9)라 이 게임은
             다음 감지 목록에서도 사라진다. 되돌아오는 길을 **지우기 전에** 말해 둔다. */}
         <div>{t("DELETE_CONFIRM_REDISCOVER")}</div>
-        {/* ★ F10(자기 설명) — 사용자가 가장 오해하기 쉬운 지점이라 **반드시** 노출한다. */}
-        <div style={WARN_STYLE}>{t("MANAGE_KEEP_CONFIG")}</div>
+        {/* ★ F10(자기 설명) — 사용자가 가장 오해하기 쉬운 지점이라 **반드시** 노출한다.
+            ★ 색은 **회색(META)이다**(10판 — R10-4). 이 문장은 "게임 설정 파일 원본은 건드리지
+              않는다"는 **안심 정보**인데 9판까지 경고색을 입고 있었다. 안심 정보가 경고 옷을
+              입으면 화면의 위험 신호가 둘이 되고, 그러면 진짜 위험(⚠ warnBlock)의 무게가 깎인다.
+              키 단위 원칙이라 이 키를 쓰는 두 자리(초기화·등록 해제)를 함께 강등했다 —
+              같은 판단이 화면마다 갈리지 않게(§18-① 논거와 동형). */}
+        <div style={META_STYLE}>{t("MANAGE_KEEP_CONFIG")}</div>
       </div>
     ),
     okText: t("DELETE_CONFIRM_OK"),
@@ -233,17 +238,23 @@ export function makeResetConfirmSpec(
     warnBlock: <div>{t("RESET_CONFIRM_WARN", { games: params.games, profiles: params.profiles })}</div>,
     body: (
       <div style={COLUMN_STYLE}>
-        {/* 파괴 규모 고지는 **입력이 아니라 이 줄이 전담**한다 — challenge가 고정 단어라
-            입력만으로는 규모를 알 수 없기 때문이다. 숫자는 백엔드가 센 값이다. */}
-        <div>{t("RESET_CONFIRM_BODY", { games: params.games, profiles: params.profiles })}</div>
-        <div style={META_STYLE}>{t("RESET_CONFIRM_BACKUP_KEPT")}</div>
+        {/* ★ 파괴 규모 고지는 **위 warnBlock이 전담**한다(10판) — challenge가 고정 단어라
+            입력만으로는 규모를 알 수 없으므로 고지 자체는 반드시 있어야 하지만, **한 번만**
+            있어야 한다. 9판까지 여기 `RESET_CONFIRM_BODY`가 같은 수(games·profiles)를 두 번째로
+            말하고 `RESET_CONFIRM_BACKUP_KEPT`가 백업 잔존을 두 번째로 말했다. 같은 사실을 두
+            톤으로 두 번 말하면 어느 쪽이 정본인지 화면이 답하지 못한다.
+            BACKUP_KEPT는 더 나빴다 — F23이 "백업은 남습니다"만으로는 거짓에 가깝다고 판정해
+            warnBlock에 **재등록 전제**를 박아 넣었는데, 그 바로 아래에서 전제 없는 되살림을
+            다시 약속하고 있었다. 두 키는 10판에서 **키째 제거**했다(§10-B 추가 2종).
+            숫자는 백엔드가 센 값이고, 그 출처도 warnBlock 하나가 된다. */}
         {/* ★ F11 ①: 표시명은 registry settings에 살아 **이 초기화에 같이 지워진다.**
             모르고 잃으면 안 되므로 미리 말한다. 0이면 줄을 그리지 않는다(기존 문법). */}
         {params.named > 0 ? <div>{t("RESET_CONFIRM_NAMES", { n: params.named })}</div> : null}
         {/* ★ A9 ④: 초기화는 registry를 통째로 갈아 끼우므로 **감지 제외 목록도 같이 지워진다.**
             그 사실이 위 warnBlock의 "다시 등록해서 복원한다"를 참으로 만드는 근거이기도 하다. */}
         {params.excluded > 0 ? <div>{t("RESET_CONFIRM_EXCLUDED", { n: params.excluded })}</div> : null}
-        <div style={WARN_STYLE}>{t("MANAGE_KEEP_CONFIG")}</div>
+        {/* ★ 회색(META) — 위 등록 해제 확인창과 **같은 이유·같은 판단**이다(10판 R10-4). */}
+        <div style={META_STYLE}>{t("MANAGE_KEEP_CONFIG")}</div>
         <div>{t("RESET_CONFIRM_TYPE", { word: params.challenge })}</div>
       </div>
     ),

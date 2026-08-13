@@ -155,15 +155,55 @@ function mount(mod) {
 
 // ── 관측면 ───────────────────────────────────────────────────────────────────
 
-/** 시각 표기(§3-B ⑤·③): 당일은 `· 14:32`, 다른 날은 `· 08-10 14:32`. */
+/**
+ * **인라인** 시각 표기(§3-B ③ 실패 줄): 당일은 `· 14:32`, 다른 날은 `· 08-10 14:32`.
+ * 문장 **뒤에** 붙는 형태라 끝에 앵커를 건다.
+ */
 const STAMP = /·\s(\d{2}-\d{2}\s)?\d{2}:\d{2}$/;
+
+/**
+ * **머리 행**의 시각(§3-B ⑤ 과거군 카드, 10판): 구분자 `·` 없이 **자기 자리**에 선다.
+ * 9판까지는 헤드라인 뒤 인라인이었는데 268px에서 낱자로 감겨 붕괴했다(D4) — 그래서
+ * 고정폭 자리로 옮겼고, 판독도 **글자 끝**이 아니라 **그 자리**를 본다.
+ */
+const HEAD_STAMP = /^(\d{2}-\d{2}\s)?\d{2}:\d{2}$/;
 
 const styleOf = (node) => node.props.style || {};
 
 /** 렌더 조각들을 이어 붙인 글자 — 조각 경계의 공백은 하나로 접는다. */
 const flatten = (node) => texts(node).join(" ").replace(/\s+/g, " ").trim();
 
-/** 줄 하나 — 글자·색·아이콘·시각 표기. */
+/**
+ * 줄 안에 **시각 전용 자리**(flexShrink:0 span)가 있고 그 글자가 시각인가.
+ * ★ 자리를 보는 이유: 텍스트 끝만 보면 헤드라인이 시각보다 뒤에 오는 10판 배치에서
+ *   "시각이 없다"고 오판한다 — 배치가 바뀌어도 **계약(시각을 말한다)**은 그대로다.
+ */
+function headStamped(node) {
+  return findAll(node, "span").some(({ node: s }) =>
+    styleOf(s).flexShrink === 0 && HEAD_STAMP.test(flatten(s)));
+}
+
+/** 결과 헤드라인(§3-B ⑤) — 굵은 전폭 블록. 없으면 null(현재군 줄들에는 없다). */
+function headlineOf(node) {
+  const hit = findAll(node, "div").find(({ node: d }) => styleOf(d).fontWeight === "bold");
+  return hit ? flatten(hit.node) : null;
+}
+
+/**
+ * 헤드라인이 **머리 행 안**에 있는가 — 있으면 §3-B 10판 폭 규약 위반이다.
+ *
+ * ★★ 규약은 *"고정폭 요소(아이콘·시각)와 가변 텍스트를 같은 flex 행에 두지 않는다"*이고,
+ *   9판이 정확히 그렇게 해서 268px에서 세 항목이 낱자로 감겨 붕괴했다(D4). 헤드라인 **글자**만
+ *   보는 검사는 배치가 9판으로 되돌아가도 초록불이다 — 그래서 **어디에 있는지**를 따로 잰다.
+ *   머리 행은 `justifyContent:"space-between"`으로 식별한다(그 행의 정의적 속성이다).
+ */
+function headlineInHeadRow(node) {
+  const hit = findAll(node, "div").find(({ node: d }) => styleOf(d).fontWeight === "bold");
+  if (!hit) return false;
+  return hit.ancestors.some((a) => styleOf(a).justifyContent === "space-between");
+}
+
+/** 줄 하나 — 글자·색·아이콘·시각 표기·헤드라인. */
 function lineOf(node) {
   const text = flatten(node);
   return {
@@ -171,26 +211,50 @@ function lineOf(node) {
     text,
     color: styleOf(node).color || null,
     icons: ["IconCheck", "IconWarn"].filter((name) => !!find(node, name)),
-    stamped: STAMP.test(text),
+    // 인라인(③ 실패)이든 머리 행(⑤ 결과)이든 **시각을 말했는가**가 판정 항목이다.
+    stamped: STAMP.test(text) || headStamped(node),
+    // 헤드라인(⑤)은 **자기 자리**에서 읽는다 — flatten은 머리 행의 시각이 앞에 붙어
+    // "무슨 결과인가"를 앞머리로 판정할 수 없다. 위치가 아니라 역할로 집는다.
+    headline: headlineOf(node),
+    // 그 자리가 **머리 행 밖**인지도 함께 잰다(§3-B 폭 규약 — D4 재발 방지).
+    headlineInHead: headlineInHeadRow(node),
   };
 }
 
-/** 상태박스(§3-B) — 없으면 null. 있으면 군 배열(위=현재군, 아래=과거군). */
+/**
+ * 상태박스(§3-B 10판) — 없으면 null. 있으면 **결과 카드 배열**(위=현재군, 아래=과거군).
+ *
+ * ★★ 10판에서 테두리 박스가 폐기됐다. 예전엔 `border: 1px solid rgba(255,255,255,0.15)`로
+ *   박스를 찾았는데, 그 셀렉터를 그대로 두면 카드형 전환 후 **"박스 없음"으로 오판**한다
+ *   (검사가 조용히 아무것도 안 재는 상태 — 이 프로젝트가 가장 경계하는 형태다).
+ *   이제 카드는 `CARD_STYLE`의 배경으로 식별한다(팝업 목록 카드와 **같은 시각 언어**를 쓰는 것이
+ *   10판의 요지이므로, 같은 값으로 찾는 것이 계약과 일치한다).
+ * ★ 군 간 간격은 **컨테이너 gap 하나**가 소유한다(카드의 marginTop/marginBottom이 아니다) —
+ *   값이 두 곳에 살면 한쪽만 고치는 날 간격이 어긋나므로 문을 하나로 모았다. 그래서 여기서도
+ *   간격은 카드가 아니라 컨테이너에서 읽는다.
+ */
+const CARD_BG = "rgba(255,255,255,0.05)";
+
 function statusBox(root) {
-  let box = null;
-  const scan = (node) => {
-    const s = styleOf(node);
-    if (!box && typeof s.border === "string" && s.border.indexOf("rgba(255,255,255,0.15)") >= 0) {
-      box = node;
-    }
-  };
-  findAll(root, "div").forEach(({ node }) => scan(node));
-  if (!box) return null;
-  const groups = box.children.filter((c) => c && typeof c === "object" && c.props);
+  const cards = findAll(root, "div").filter(({ node }) => styleOf(node).background === CARD_BG);
+  if (cards.length === 0) return null;
+  // 컨테이너 = 카드의 **직계 부모**. ancestors의 마지막이 그것이다.
+  const parents = cards[0].ancestors;
+  const container = parents.length > 0 ? parents[parents.length - 1] : null;
   return {
-    groups: groups.map((g) => ({
+    gap: container && styleOf(container).gap !== undefined ? styleOf(container).gap : null,
+    groups: cards.map(({ node: g }) => ({
       opacity: styleOf(g).opacity === undefined ? 1 : styleOf(g).opacity,
-      marginTop: styleOf(g).marginTop === undefined ? null : styleOf(g).marginTop,
+      marginBottom: styleOf(g).marginBottom === undefined ? null : styleOf(g).marginBottom,
+      // ★★ **카드의 계약 속성**(§3-B 10판). 배경색 하나로만 찾으면 나머지를 다 깨뜨려도
+      //   검사가 초록불이다 — 찾는 조건과 **재는 조건**은 다른 일이다(이종 QA 적발).
+      //   `border`는 **없어야** 하는 것을 재는 자리다: 9판 테두리 박스 폐기가 D3의 핵심이라
+      //   되살아나면 카드형이 아니라 "테두리 친 문단"으로 돌아간다.
+      borderRadius: styleOf(g).borderRadius === undefined ? null : styleOf(g).borderRadius,
+      padding: styleOf(g).padding === undefined ? null : styleOf(g).padding,
+      fontSize: styleOf(g).fontSize === undefined ? null : styleOf(g).fontSize,
+      innerGap: styleOf(g).gap === undefined ? null : styleOf(g).gap,
+      border: styleOf(g).border === undefined ? null : styleOf(g).border,
       lines: g.children.filter((c) => c && typeof c === "object" && c.props).map(lineOf),
     })),
   };
@@ -210,12 +274,33 @@ function countLine(root) {
   return flatten(hit.node);
 }
 
+/**
+ * 버튼의 아이콘 — **children 선두의 아이콘 슬롯**에서 읽는다(§3-A 10판 정오).
+ *
+ * ★ 왜 자리를 옮겼는가: `ButtonItem`의 `icon` prop은 버튼 내용이 아니라 **Field의 라벨 슬롯**이라
+ *   `layout="below"`+라벨 없음 조합에서 아이콘이 버튼 **위**에 고아로 뜬다(D2 실측). 그래서 실물이
+ *   `<span style={ICON_SLOT_STYLE}><Icon/></span>{label}` 관용구로 옮겼고, 판독도 그 자리로 온다.
+ *   **판정 항목("아이콘이 실재하는가·어느 아이콘인가")은 그대로다 — 읽는 자리만 바뀌었다.**
+ *
+ * 슬롯 식별은 `ICON_SLOT_STYLE`의 값(1em 고정 폭 + 오른쪽 여백)으로 한다 — 라벨 **뒤**에 서는
+ * 마커 자리(`MARKER_SLOT_STYLE`, marginLeft)와 이 조합으로 갈린다.
+ */
+function slotIcon(node) {
+  const hit = findAll(node, "span").find(({ node: s }) => {
+    const st = styleOf(s);
+    return st.width === "1em" && st.marginRight === "4px";
+  });
+  if (!hit) return null;
+  const icon = hit.node.children.find((c) => c && typeof c === "object" && c.name);
+  return icon ? icon.name : null;
+}
+
 function buttonItems(root) {
   return findAll(root, "ButtonItem").map(({ node }) => ({
     label: flatten(node),
     description: node.props.description === undefined ? null : String(node.props.description),
     disabled: !!node.props.disabled,
-    icon: node.props.icon ? node.props.icon.name : null,
+    icon: slotIcon(node),
     onClick: node.props.onClick,
   }));
 }
@@ -396,9 +481,12 @@ async function driveApply(scene, profile) {
     out.resultProblem = {
       lines: (run.afterLines || []).map((l) => ({
         key: l.key, text: l.text, color: l.color, icons: l.icons, stamped: l.stamped,
+        headline: l.headline, headlineInHead: l.headlineInHead,
       })),
       groups: (run.afterBox ? run.afterBox.groups : []).map((g) => ({
-        opacity: g.opacity, marginTop: g.marginTop, keys: g.lines.map((l) => l.key),
+        opacity: g.opacity, marginBottom: g.marginBottom, keys: g.lines.map((l) => l.key),
+        borderRadius: g.borderRadius, padding: g.padding, fontSize: g.fontSize,
+        innerGap: g.innerGap, border: g.border,
       })),
       toasts: calls.toasts.length,
     };
@@ -446,8 +534,10 @@ async function driveApply(scene, profile) {
       texts: boxLines(ui.ui()).map((l) => l.text),
       pastOpacity: ((statusBox(ui.ui()) || { groups: [] }).groups[1] || {}).opacity,
       // 두 군이 **함께 있을 때**의 분리 — 여백은 이 상황에서만 의미가 있다(D06).
+      // 10판: 간격은 카드가 아니라 **컨테이너 gap**이 소유한다(문이 하나).
+      boxGap: (statusBox(ui.ui()) || {}).gap,
       groups: (statusBox(ui.ui()) || { groups: [] }).groups.map((g) => ({
-        keys: g.lines.map((l) => l.key), marginTop: g.marginTop, opacity: g.opacity,
+        keys: g.lines.map((l) => l.key), marginBottom: g.marginBottom, opacity: g.opacity,
       })),
     };
     // ⚠️ 아래는 **변조된 소스에서도 죽지 않아야 한다** — 프로브가 죽으면 판정이 "검사 무효"로
@@ -471,6 +561,52 @@ async function driveApply(scene, profile) {
       keys: keysOf(boxLines(ui.ui())),
       pastOpacity: ((statusBox(ui.ui()) || { groups: [] }).groups[0] || {}).opacity,
     };
+  }
+
+  // ═══ 결과 전달(확인 모달 중 재마운트) — 실기 결함 #3 회귀 잠금 ════════════
+  //
+  // ★★ 재는 것: **적용이 끝나는 시점에 그 결과를 시작한 화면이 이미 죽어 있어도**, 그때
+  //   살아 있는 화면이 결과를 받는가. 실기 증상은 *"적용은 됐는데 결과 카드가 안 뜨고 QAM을
+  //   닫았다 열어야 뜬다"*였다 — 원인은 `useState(lastSummary)`가 **마운트 순간 한 번만** 읽는
+  //   것이었고(§3-E 확인 모달이 열리는 동안 QAM 패널이 언마운트된다), 재마운트가 완료보다
+  //   빠르면 새 인스턴스는 결과를 영영 모른다.
+  // ★ 위의 「요약 승계」 시나리오는 이것을 **못 잡는다**: 거기서는 완료가 재마운트보다 앞서
+  //   `useState`가 이미 값을 읽는다. 순서를 뒤집어야 드러나는 결함이라 자리를 따로 둔다.
+  {
+    const s = await snapshot({
+      // ⚠️ 1차(미리보기)까지 붙잡으면 **확인창이 뜨지 않는다** — 재현하려는 경합은 확인창
+      //   *뒤*에 있으므로, 1차는 통과시키고 2차(확정 실행)만 붙잡는다.
+      holdApply: false,
+      previewTotal: 2,
+      overview: { ok: true, counts: counts() },
+      // ★★ **요약 문 단독 경로**를 고른다(`ok:false` 정지 갈래 — `keepSummary`만 부르고
+      //   `setFailure`를 뒤따르지 않는다. 성공 갈래는 `keepSummary(); setFailure(null);`이라
+      //   **실패 문의 통지에 요약이 편승**해, 요약 쪽 통지를 지워도 화면이 채워진다 —
+      //   두 문이 서로를 가려 대조군이 새는 자리였다).
+      applyResult: () => ({ ok: false, code: "UNEXPECTED", params: { checkin: ["1", "2"] } }),
+    });
+    const btn = bulkOf(s.ui.ui()).find((b) => b.label.indexOf("PROFILE_DOCK") > 0);
+    if (btn) btn.onClick();                       // 1차 = 미리보기(무쓰기) → 확인창
+    await settle();
+    SCENE.holdApply = true;                       // 여기서부터 2차를 붙잡는다
+    // ★ 확정 실행 뒤에 붙는 재조회(§4-F ③)도 붙잡는다 — 그 조회가 성공하면 `setFailure(null)`이
+    //   돌아 **또 편승 통지**가 생긴다. 재는 것은 "요약 문 하나로 화면이 채워지는가"다.
+    SCENE.holdOverview = true;
+    const confirm = calls.modals[0] ? find(calls.modals[0], "ConfirmModal") : null;
+    if (confirm) confirm.node.props.onOK();       // 2차 = 확정 실행(붙잡혀 있다)
+    await settle();
+    // 확인 모달이 뜬 사이 QAM이 죽는다(실기: innerText "") — 그리고 완료 **전에** 다시 열린다.
+    s.ui.host.unmount();
+    const reopened = mount(s.mod);
+    await settle();
+    out.deliveryBeforeDone = keysOf(boxLines(reopened.ui()));
+    if (releaseApply) releaseApply();             // 이제야 적용이 끝난다
+    await settle();
+    await settle();
+    out.deliveryAfterDone = boxLines(reopened.ui()).map((l) => ({ key: l.key, text: l.text }));
+    SCENE.holdApply = false;
+    SCENE.holdOverview = false;
+    releaseApply = null;
   }
 
   // ═══ 요약 승계(QAM 재개방) ════════════════════════════════════════════════
@@ -578,6 +714,7 @@ async function driveApply(scene, profile) {
       blocked: run.blocked,
       lines: (run.afterLines || []).map((l) => ({
         key: l.key, text: l.text, color: l.color, icons: l.icons, stamped: l.stamped,
+        headline: l.headline, headlineInHead: l.headlineInHead,
       })),
       groups: (run.afterBox ? run.afterBox.groups : []).map((g) => g.lines.map((l) => l.key)),
       // 확정 실행은 성공·실패를 가리지 않고 다시 읽는다(§4-F ③) — 마운트 1 + 실패 뒤 1.
