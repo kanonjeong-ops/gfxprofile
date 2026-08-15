@@ -16,7 +16,7 @@ M1이 `True`(진행)를 돌려주던 세 경우(meta 없음 · 내용 동일 · 
 """
 import os
 
-from . import engine, store
+from . import codes, engine, store
 
 # `disk_state` 4분류 — M1은 화면 문구를 합쳤지만 코드는 갈라 둔다.
 # 합쳐 두면 `"unknown"`이 *"게임에서 조정함"*과 *"조회 실패"* 두 뜻을 갖게 되어
@@ -61,10 +61,139 @@ def needs_confirm(reg, appid, profile):
         "sha1_short": (meta.get("sha1") or "")[:10],
         "saved_at": meta.get("saved_at") or "",
         "disk_state": _classify(state),
+        # ★ 이 저장이 **실제로 지울 백업**(R14 #1 — 적용·복원과 같은 필드·같은 문구).
+        #   저장은 슬롯을 덮기 전에 이전 본체를 대피시키고, 그 대피가 링을 한 칸 태운다.
+        #   대피가 없는 갈래(본체가 없어 대피할 대상이 없다)에는 **싣지 않는다** —
+        #   링을 안 쓰는 갈래에 고지를 실으면 화면이 *일어나지 않을 삭제*를 말한다.
+        "evicted": _evict_preview(appid) if _slot_backup_pending(appid, profile) else [],
     }
     if state is not None and state.get("matches"):
         params["matched_profile"] = state["matches"]
     return True, params
+
+
+def _slot_backup_pending(appid, profile):
+    """저장이 이 슬롯을 덮기 **전에 대피본을 만드는가** — `engine.save_profile`의 읽기 전용 미러.
+
+    엔진 조건은 *"meta가 있고 그 본체 파일이 실재한다"*이다(engine.py의 `if old:` 블록).
+    ⚠️ 미러라는 사실을 숨기지 않는다: 엔진에 dry-run이 없어(diff fence) 판정이 두 곳에 존재하고,
+      어긋나면 화면이 *일어나지 않을 삭제*를 말하거나 *일어날 삭제*를 침묵한다. 조건이 한 줄인
+      대신 **같은 부품**(`store.profile_file_path`)을 쓴다 — 판정의 재료가 갈리지 않게.
+    """
+    try:
+        body = store.profile_file_path(appid, profile)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False                          # 엔진도 같은 자리에서 실패한다 = 대피는 없다
+    return bool(body and os.path.exists(body))
+
+
+#: 개별 적용 판정의 3-상태 (설계 §5-E-2). `restore.needs_confirm`과 **같은 문법**이다.
+APPLY_STATES = ("already", "proceed", "confirm")
+
+
+def _disk_state_or_none(reg, appid):
+    """`engine.disk_state`는 fence 대상이라 비-dict meta에서 AttributeError를 낸다(engine.py:306).
+    적용 판정이 손상 슬롯 하나로 죽으면 **묻지도 못하고 실패**하므로 조회 실패(`None`)로 접는다 —
+    `restore._disk_state`·`main._disk_state_safe`와 같은 판단·같은 이유다.
+    `{}`가 아니라 `None`인 것이 중요하다: 아래에서 「조회 실패」와 「파일 없음」을 갈라야 한다."""
+    try:
+        return engine.disk_state(reg, appid)
+    except (engine.Refused, OSError, ValueError, AttributeError, TypeError):
+        return None
+
+
+def _matching_profiles(appid, disk_sha1):
+    """디스크 내용과 같은 슬롯 **전부**. `engine.disk_state`의 first-match break를 쓰지 않는다.
+
+    ★ 왜 다시 도는가: 엔진은 첫 일치에서 멈추므로(engine.py:306-309) 두 슬롯 내용이 같을 때
+      **임의로 한쪽만** 고른다. 그 값을 화면 마커로 쓰면 나머지 한쪽을 "적용돼 있지 않다"고
+      거짓으로 말한다(설계 §5-A). 판정을 여기서 하면 봉투가 사실대로 배열을 싣는다.
+    ⚠️ 비용을 정직하게: **슬롯 meta 2개 + (일치할 때만) 그 본체를 다시 읽는다.** `disk_state`가
+      방금 읽은 값을 못 쓰는 이유는 그것이 first-match에서 멈춰 **나머지 슬롯을 아예 안 보기**
+      때문이다.
+      (`get_overview`는 이 함수를 쓰지 않는다: 거기서는 `_slot_view`가 이미 두 sha를 들고 있어
+       파일 접근이 실제로 0 증가다 — `main._disk_matches`.)
+
+    ★★ 판정은 **본체 실측까지**다(`store.slot_holds` — R14 #4). meta만 보면 *"이 내용은 저
+      슬롯에 보존돼 있다"*가 거짓일 수 있고, 이 값이 곧 **묻지 않고 진행 + 대피 생략**의 근거라
+      거짓인 순간 디스크의 마지막 온전한 사본이 고지 없이 사라진다. 모르면 목록에서 뺀다.
+    """
+    if not disk_sha1:
+        return []
+    return [p for p in ("dock", "internal") if store.slot_holds(appid, p, disk_sha1)]
+
+
+def apply_needs_confirm(reg, appid, profile):
+    """`(state, params)` — 개별 적용의 **3-상태 계약**이다(설계 §5-E-2).
+
+        "already"  게임 설정 파일이 이미 목표 슬롯과 같다 → 접착층이 **엔진을 부르기 전에**
+                   반환한다. 파일도 링도 건드리지 않는다.
+        "proceed"  파일이 없거나(재생) **다른 슬롯과 같다**(그 내용은 이미 슬롯에 보존돼 있다)
+                   → 잃을 것이 없으므로 묻지 않는다. 계약의 절반은 묻지 않는 것이다.
+        "confirm"  두 슬롯 모두와 다르다(또는 조회 실패) → **이 파일에만 있는 내용이 사라지는
+                   유일한 갈래**다. 확인 토큰을 요구한다.
+
+    ★ 실행 중 게임은 상태 판정 **전에** 조기 거부한다(`restore.needs_confirm`과 같은 자리·같은
+      이유): 엔진 G5가 확정적으로 거부할 것을 확인창까지 통과시켜 토큰을 태우는 것은 무의미한
+      마찰이다. 집행의 문은 여전히 엔진 G5 하나이고, 확인창 사이에 게임이 켜지는 TOCTOU는 그 G5가
+      같은 코드로 잡는다.
+    ★ 슬롯 없음·손상은 **조기 거부하지 않는다**: 버튼이 이미 비활성이고(GamesPopup), 도달하려면
+      확인창을 띄운 사이 슬롯이 사라져야 한다. 그때는 확인 뒤 엔진이 거부하고 **파일은 한 바이트도
+      안 바뀐다**(설계 §15-D E10).
+    """
+    appid = str(appid)
+    engine.game_or_fail(reg, appid)                  # 미등록 → GAME_NOT_REGISTERED
+    if engine.running_game(appid):                   # 조기 거부 (§5-E-2)
+        raise engine.Refused(
+            "거부: 게임이 실행 중입니다. 게임을 완전히 종료한 뒤 적용하십시오.",
+            code=codes.GAME_RUNNING, appid=appid)
+
+    state = _disk_state_or_none(reg, appid)
+    disk_sha1 = state.get("sha1") if state else None
+    matches = _matching_profiles(appid, disk_sha1)
+    params = {
+        "appid": appid,
+        "profile": profile,
+        # 덮어쓸 대상(=게임 설정 파일)이 지금 어떤 상태인가 — 저장·복원 확인창과 **같은 4분류**다.
+        "disk_state": _classify(state),
+        "matches": matches,
+        # 이 동작이 백업을 1건 만들 때 **실제로 지워질** 파일들(설계 §5-E-3). 적용·복원 공용이다.
+        # ★ **`confirm` 갈래에서만 채운다**(복원과 대칭 — §5-C ⓖ): `already`는 무쓰기이고,
+        #   `proceed`는 잃을 것이 없는 갈래라 **대피본을 만들지 않는다**(§14-B). 링을 안 쓰는
+        #   갈래에 고지를 실으면 화면이 *일어나지 않을 삭제*를 말한다.
+        "evicted": [],
+    }
+    if matches:
+        # 4분류의 `other_profile`이 이름을 하나 요구한다(기존 문구 계약). 배열이 정본이고
+        # 이 값은 그 첫 원소다 — 화면 문구가 쓰던 자리를 깨지 않는다.
+        params["matched_profile"] = matches[0]
+
+    if state is None:
+        return "confirm", params                     # 모르면 묻는다
+    if not state.get("exists"):
+        return "proceed", params                     # 파일 없음 — 잃을 것이 없다(재생)
+    try:
+        meta = store.load_meta(appid, profile)
+    except (OSError, ValueError):
+        meta = None
+    target_sha1 = meta.get("sha1") if isinstance(meta, dict) else None
+    if target_sha1 and disk_sha1 and target_sha1 == disk_sha1:
+        return "already", params
+    if matches:
+        return "proceed", params                     # 다른 슬롯과 같다 — 그 내용은 보존돼 있다
+    params["evicted"] = _evict_preview(appid)        # 여기서만 대피본이 생긴다(§14-B)
+    return "confirm", params
+
+
+def _evict_preview(appid):
+    """§5-E-3의 산출 함수를 부른다 — **정본은 `restore.evict_preview` 하나**다(적용·복원 공용).
+
+    ⚠️ import를 함수 안에서 한다: `restore`가 이 모듈을 import하므로(restore.py:29) 최상단에서
+      맞import하면 순환이 된다. 순환을 CPython의 부분초기화 동작에 기대는 것보다, **부르는
+      자리에서 한 줄**로 끊는 편이 실패 모드가 없다(그 기대가 깨지면 플러그인이 통째로 안 뜬다).
+    """
+    from . import restore
+    return restore.evict_preview(appid)
 
 
 def already_registered(reg, appid):
@@ -184,6 +313,56 @@ def apply_all_preview(reg, profile, running):
             bucket = "cannot_apply"
         counts[bucket] += 1
     return counts
+
+
+def apply_all_evict_preview(reg, profile, running):
+    """일괄 적용이 **실제로 지울 백업** — `{"evicted": N, "evict_games": M, "fingerprint": …}`.
+
+    ★★ 왜 이름을 대지 않는가(R14 #1): 게임이 여럿이라 게임마다 나열하면 확인창이 터진다.
+      그래서 **수만 약속하고**, 그 수는 게임별 산출(`restore.evict_preview`)의 합이라 나열본과
+      같은 근거에서 나온다. 이름이 필요한 자리는 게임이 하나인 확인창들(저장·적용·복원·등록
+      해제)이고 거기서는 이름을 댄다. **수가 정확하면 인지 요건은 충족된다**(세션 확정
+      2026-08-15) — 읽히지 않는 열 게임짜리 목록은 인지시킨 것이 아니다.
+    ★★ 수가 어긋나지 않는 근거: ⓐ 판정 순서가 엔진과 같고(`_preview_one`) ⓑ 대피 조건도 엔진과
+      같으며(디스크가 있고 어느 슬롯에도 보존돼 있지 않을 때만 — engine.apply_profile)
+      ⓒ **토큰이 이 산출의 지문에 묶인다**(아래).
+    ★★ `fingerprint` — **화면에 실을 값이 아니라 토큰에 묶을 값**이다(2026-08-15 QA 재심 B).
+      `remove.reset_fingerprint`만으로는 부족했다:
+        · 그 지문의 링 신호는 **개수**뿐이라 포화 링이 도는 것(개수 불변)을 못 잡고,
+        · 애초에 **설정 파일 sha는 의도적으로 빠져 있어**(§3-C) 확인창을 띄운 사이 게임·클라우드가
+          설정 파일을 고유 내용으로 바꾸면 *"축출 0건"*이라 말한 토큰이 그대로 통과했다 —
+          그 다음 실행이 대피본을 만들며 **고지하지 않은 백업 1건을 지웠다.**
+      그래서 지문은 개수가 아니라 **대상 목록 그 자체**(`restore.evict_digest`)로 낸다.
+    ⚠️ **재는 것 / 못 재는 것**(정직하게):
+        재는 것  = 이 호출 시점에 각 게임에서 지워질 **backup_id 전량과 그 순서**. 하나라도
+                   달라지면 지문이 달라져 낡은 토큰이 거부되고 새 목록으로 다시 묻는다.
+        못 재는 것 = ⓐ 실행 시점에만 나는 실패(G11·G4·BACKUP_FAILED)로 적용이 거부되면 그 게임의
+                   축출도 안 일어난다 — 예고보다 **덜** 지워지는 안전한 방향이라 화면은 「예상」이라
+                   말한다. ⓑ 게임별 예외로 건너뛴 게임의 내부 상태(모르면 약속하지 않는다).
+                   ⓒ **축출이 0건인 게임의 링 변화** — 지울 것이 없으면 약속한 것도 없다.
+      ⚠️ 그래서 §3-C의 *"디스크 sha1을 지문에서 뺀다"*는 **여전히 유효하되 범위가 좁아졌다**:
+        설정 파일이 다시 쓰여도 토큰은 그대로다 — **그 변화가 지워질 백업을 바꾸는 때**(=그 게임의
+        링이 이미 가득 찬 때)만 예외다. 그때는 확인→재확인이 마찰이 아니라 **고지의 정정**이다.
+    ★ 비용은 등록 게임당 meta 1회 + 설정 파일 sha1 + backups 나열이고, **확인 호출과 실행 호출에서
+      각 1패스**다(실행이 곧 그 파일들을 다 만지므로 정비례가 새로 생기는 것은 아니다).
+    """
+    from . import restore                     # 순환 회피 — `_evict_preview`와 같은 이유·같은 문법
+    plan = []
+    for appid in sorted(reg["games"]):
+        try:
+            if _preview_one(reg, appid, profile, running) != "would_apply":
+                continue
+            state = engine.disk_state(reg, appid)
+            if not state.get("exists") or state.get("matches"):
+                continue                      # 대피본을 안 만드는 갈래(§14-B)
+            rows = restore.evict_preview(appid)
+        except Exception:                     # noqa: BLE001 — 게임별 격리(엔진 외곽 try와 동형)
+            continue                          # 그 게임은 세지 않는다(모르면 약속하지 않는다)
+        if rows:
+            plan.append((str(appid), [row["backup_id"] for row in rows]))
+    return {"evicted": sum(len(ids) for _, ids in plan),
+            "evict_games": len(plan),
+            "fingerprint": restore.evict_digest(plan)}
 
 
 def _classify(state):

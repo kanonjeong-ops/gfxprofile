@@ -19,8 +19,8 @@ export const rpc = <A extends unknown[], T>(route: string) => callable<A, Env<T>
 // ⚠️ ok:false를 예외로 바꾸지 않는다. CONFIRM_REQUIRED처럼 **정상 흐름**인 코드가 있어서,
 //    던지면 호출부가 정상 경로를 try/catch로 다루게 된다. 호출부는 code로 분기한다.
 //
-// ⚠️ **실패 봉투의 `params`에도 값이 실릴 수 있다.** 적용 계열은 실패해도 `checked_in`/`checkin`을
-//    싣는다(F6 — 체크인은 적용 실패보다 먼저 일어날 수 있다). 표시 층만 이 값을 소비한다.
+// ⚠️ **실패 봉투의 `params`에도 값이 실릴 수 있다.** `CONFIRM_REQUIRED`는 확인창이 그릴 값을
+//    전부 params로 싣는다(토큰 포함). 표시 층만 이 값을 소비한다.
 
 export interface Hello {
   lang: string;
@@ -43,7 +43,16 @@ export interface OverviewGame {
   name: string;
   has_dock: boolean;
   has_internal: boolean;
-  disk_matches: string | null;
+  /**
+   * 지금 게임 설정 파일과 **같은 내용인 슬롯 전부**(R13 — 설계 §5-A).
+   *
+   * ★★ **배열이다.** 두 프로필의 내용이 같으면 **둘 다** 실린다 — 12판은 백엔드가 첫 일치에서
+   *   멈춰 임의로 한쪽만 골랐고, 화면은 나머지 한쪽을 "적용돼 있지 않다"고 **거짓으로** 말했다.
+   * ★ 마커 판정은 `disk_matches.includes(profile)`이다. 프론트가 sha를 다시 재지 않는다.
+   * ⚠️ `detail`을 켜지 않은 호출에서는 **빈 배열**이다 — 「같은 슬롯이 없다」가 아니라
+   *   **묻지 않았다**는 뜻이다(QAM·설정 팝업은 이 값을 읽지 않는다).
+   */
+  disk_matches: Profile[];
   /**
    * 그 게임의 백업 개수 — 「관리」 탭의 `[백업 N]` 라벨과 **비활성 판정**이 쓴다.
    * ★ **백엔드가 센다**(counts와 같은 규칙). 0이면 버튼을 비활성으로 그린다 —
@@ -110,17 +119,55 @@ export interface Overview {
 export const getOverview = rpc<[detail?: boolean], Overview>("get_overview");
 
 /**
- * 게임 하나에 적용. 보조 동작이다(주 동작은 일괄 적용).
+ * 게임 하나에 적용 — **저장된 프로필 → 게임 설정 파일** 한 방향이다(A11).
  *
- * ★ `checked_in` = 적용 **전에** 엔진이 현재 디스크를 되쓴 직전 프로필(F6). 없으면 `null`.
- *   체크인은 조용한 덮어쓰기라(백업 링 1칸 소모) 화면이 그 사실을 말해야 한다.
- * ⚠️ **실패 봉투(`params`)에도 실린다** — "적용은 실패했는데 프로필은 이미 바뀐" 상태가
- *   실재한다(엔진은 체크인을 쓴 뒤에 백업·쓰기 실패로 거부할 수 있다). 실패 note에도 병기한다.
+ * ★★ **2단계 계약**이다(R13 — 설계 §5-E). 백엔드가 3-상태를 판정한다:
+ *   · 두 슬롯 **모두와 다른** 파일을 덮어쓴다 → `CONFIRM_REQUIRED` + 토큰(저장·복원과 같은 계약)
+ *   · 파일이 없거나 **다른 슬롯과 같다** → 잃을 것이 없어 **묻지 않고** 즉시 적용된다
+ *   · 이미 목표 슬롯과 같다 → `outcome:"already"`로 **아무것도 하지 않는다**(엔진 미호출)
+ * ★ `outcome`이 성공 봉투의 정본이다 — `"applied"`면 파일이 바뀌었고 `"already"`면 안 바뀌었다.
+ *   무쓰기를 화면이 **침묵으로** 처리하면 "먹통"으로 읽히므로 결과를 말해야 한다(§4-I).
+ * ⚠️ 토큰은 **방향에 묶여** 있다 — dock 확인창에서 받은 토큰으로 internal을 적용할 수 없다.
  */
 export const applyProfile = rpc<
-  [appid: string, profile: Profile],
-  { notes: string[]; sha1: string; checked_in: Profile | null }
+  [appid: string, profile: Profile, confirm_token?: string],
+  { notes: string[]; sha1: string; outcome: "applied" | "already" }
 >("apply_profile");
+
+/** 백업 링이 가득 찼을 때 **이번 동작으로 실제로 지워질** 백업 한 건(§5-E-3). */
+export interface EvictedRow {
+  /**
+   * 그 백업 파일의 **고유 이름**. 화면에 그리지 않는다 — 사람이 읽을 물건이 아니고
+   * (`20260815-120000-disk-1-video.ini`), 대상이 하나임을 증명하는 자리다.
+   */
+  backup_id: string;
+  kind: BackupKind;
+  stamp_label: string;
+  filename: string;
+  /**
+   * **같은 표기가 둘 이상일 때만** 1 이상(그 표기를 공유하는 것 중 먼저 만들어진 것이 1).
+   * 0이면 표기가 유일하다는 뜻이라 아무것도 덧붙이지 않는다 — 판정은 백엔드가 한다
+   * (`restore._mark_duplicates`). 프론트가 다시 세면 두 곳의 기준이 갈린다.
+   */
+  dup: number;
+}
+
+/**
+ * `apply_profile`이 `CONFIRM_REQUIRED`로 돌려주는 `params`. **아직 아무것도 안 바뀌었다.**
+ *
+ * ★ `matches`는 지금 파일과 같은 슬롯 전부다(보통 빈 배열 — 비어 있지 않으면 애초에 묻지 않는다).
+ * ★ `evicted`는 **이 동작이 실제로 지울 백업**이다. 비어 있으면 그 줄을 그리지 않는다.
+ */
+export interface ApplyConfirmParams {
+  confirm_token: string;
+  appid: string;
+  profile: Profile;
+  /** 덮어쓸 대상(=게임 설정 파일)이 지금 어떤 상태인가 — 저장·복원 확인창과 **같은 4분류**다. */
+  disk_state: DiskState;
+  matched_profile?: Profile;
+  matches: Profile[];
+  evicted: EvictedRow[];
+}
 
 // ── 저장 (덮어쓰기) ──────────────────────────────────────────────────────────
 /**
@@ -139,7 +186,22 @@ export const applyProfile = rpc<
  */
 export const saveProfile = rpc<
   [appid: string, profile: Profile, confirm_token?: string],
-  { meta: { sha1: string; size: number; saved_at: string }; warning: string | null }
+  {
+    meta: { sha1: string; size: number; saved_at: string };
+    /**
+     * 거부가 아니라 **경고 코드**다(`codes.py`가 정본 — 지금은 `WARN_SAVE_WHILE_RUNNING` 하나).
+     * ★★ 문장이 아니라 코드인 이유: 백엔드가 문장을 실어 보내면 **영어 화면에 한국어가 그대로
+     *   붙는다**(실제로 붙어 있었다). 문장은 화면이 `tCode`로 현재 언어에서 고른다.
+     */
+    warning: string | null;
+    /**
+     * `"already"`면 **한 바이트도 쓰지 않았다**(디스크 내용 == 그 프로필 내용 — engine.py의
+     * 무쓰기 분기). 대피본도 만들지 않았고 `saved_at`도 그대로다.
+     * ★ 적용의 `outcome:"already"`와 **같은 문법**이다: 아무것도 안 바뀐 것은 화면이 못 보이므로
+     *   결과 팝업이 그 사실을 말한다(§4-I ②).
+     */
+    outcome: "saved" | "already";
+  }
 >("save_profile");
 
 /** 디스크가 지금 어떤 상태인지 — 확인창이 "무엇을 덮어쓰는지"를 말할 때 쓴다. */
@@ -156,6 +218,12 @@ export interface ConfirmParams {
   disk_state: DiskState;
   /** `disk_state === "other_profile"`일 때 어느 프로필과 같은지 */
   matched_profile?: Profile;
+  /**
+   * 이 저장이 **실제로 지울 백업**(§5-E-3 — 적용·복원과 같은 필드·같은 문구).
+   * 저장은 슬롯을 덮기 전에 이전 본체를 대피시키고 그 대피가 링을 한 칸 태운다.
+   * 대피가 없는 갈래(본체 없음)에서는 빈 배열이고, 그때는 그 줄을 그리지 않는다.
+   */
+  evicted: EvictedRow[];
 }
 
 /** M1 `engine.apply_all`의 결과 코드. 값까지 그대로다 — 정렬·라벨이 여기 묶인다. */
@@ -176,23 +244,9 @@ export interface ApplyRow {
   note: string;
 }
 
-/** 체크인이 일어난 게임 한 건(F6). `profile` = 현재 디스크가 되쓰인 **직전 프로필**이다. */
-export interface CheckinRow {
-  appid: string;
-  name: string;
-  profile: Profile;
-}
-
 export interface ApplyAllResult {
   results: ApplyRow[];
   counts: Partial<Record<Outcome, number>>;
-  /**
-   * 이번 일괄 적용에서 **체크인이 일어난 게임들**(F6). 없으면 빈 배열이다.
-   * ★ 결과 행(`results`)은 엔진 반환 그대로이고 이 값은 **별도 필드**다 — 행을 변형하면
-   *   route와 엔진 직접 호출의 동등성(G10)이 무너진다.
-   * ⚠️ `applyProfile`과 같이 **실패 봉투에도** 실릴 수 있다(`params.checkin`).
-   */
-  checkin: CheckinRow[];
 }
 
 // ⚠️ 게임별 실패가 있어도 **봉투는 ok:true**다. 봉투를 실패로 만들면
@@ -227,6 +281,13 @@ export interface ApplyAllConfirmParams {
   running_refused: number;
   /** 프로필 본체 없음·내용 어긋남·정보 손상 등 **적용 불가 예상**. */
   cannot_apply: number;
+  /**
+   * 이 일괄 적용으로 **지워질 백업 건수**와 그런 게임 수(§5-E-3 다게임 판).
+   * ★ 게임이 여럿이라 **이름은 대지 않는다** — 나열하면 창이 터진다. 산출은 게임 하나짜리
+   *   확인창의 `evicted[]`와 **같은 함수**이고, 0이면 그 줄을 그리지 않는다.
+   */
+  evicted: number;
+  evict_games: number;
 }
 
 /**
@@ -433,6 +494,12 @@ export interface DeleteConfirmParams {
    * ⚠️ **빈 문자열일 수 있다**(경로가 정상 상태가 아닌 게임). 빈 값이면 그 줄을 그리지 않는다.
    */
   config_path: string;
+  /**
+   * 이 등록 해제가 **실제로 지울 백업**(§5-E-3 — 저장·적용·복원과 같은 필드·같은 문구).
+   * 해제는 슬롯 본체를 백업 링으로 대피시키므로, 링이 차 있으면 그만큼 오래된 백업이 사라진다.
+   * *"현재 백업 N건"*은 남는 쪽을 말할 뿐 **무엇이 사라지는지는 말하지 않는다.**
+   */
+  evicted: EvictedRow[];
 }
 
 export interface DeleteResult {
@@ -478,6 +545,13 @@ export interface ResetConfirmParams {
    *   그대로 보여주고 그대로 대조한다.
    */
   challenge: string;
+  /**
+   * 이 초기화로 **지워질 백업 건수**와 그런 게임 수(§5-E-3 다게임 판 — 일괄 적용과 같은 필드).
+   * 초기화는 게임마다 슬롯 본체를 대피시키므로 링이 찬 게임에서는 오래된 백업이 밀려난다.
+   * 이름은 대지 않는다(게임이 여럿이다). 0이면 그 줄을 그리지 않는다.
+   */
+  evicted: number;
+  evict_games: number;
 }
 
 export type ResetOutcome = "deleted" | "refused" | "error";
@@ -529,12 +603,16 @@ export const setProfileName = rpc<
 
 // ── 백업 복원 (P9) ───────────────────────────────────────────────────────────
 //
-// ★★ **복원은 2단계 시맨틱이다.** `restoreBackup`은 **디스크(게임 설정 파일)** 만 되돌리고
-//   프로필 슬롯은 건드리지 않는다. 그 내용을 슬롯에 넣는 ②는 기존 `saveProfile` 흐름이 맡는다 —
-//   화면이 그 두 걸음을 안내해야 한다(①만 하고 멈춰도 정상 상태다).
+// ★★ **되돌릴 곳은 행이 정한다**(R13 — 설계 §5-C ⓐ). `profile_*` 백업은 **그 프로필 슬롯**으로,
+//   `disk`·`unknown`은 **게임 설정 파일**로 간다. 판정은 백엔드가 하고 화면은 `target`을 그린다 —
+//   프론트가 `kind`로 목적지를 다시 분류하면 그 판정이 백엔드와 갈리는 날 확인한 곳과 다른 곳에
+//   쓰기가 일어난다. 슬롯을 되돌린 뒤 게임에도 반영할지는 **후속 제안**이 묻는다(§5-C ⓔ).
 
 /** 백업 종류. **파일명 파싱은 백엔드가 한다** — 프론트는 이 코드로 문구만 고른다. */
 export type BackupKind = "disk" | "profile_dock" | "profile_internal" | "unknown";
+
+/** **되돌릴 곳**(R13). `kind`에서 파생되지만 **판정은 백엔드**이고 프론트는 이 값만 읽는다. */
+export type RestoreTarget = Profile | "config";
 
 /** 백업 한 건. 값은 전부 백엔드가 계산한 것이다(프론트는 문자열을 쪼개지 않는다). */
 export interface BackupRow {
@@ -548,6 +626,16 @@ export interface BackupRow {
   /** 백업된 설정 파일의 이름. 형식 미상이면 백업 파일명 그대로다. */
   filename: string;
   size: number;
+  /**
+   * 이 행을 [복원]하면 **어디가 바뀌는가**(R13). 판정은 백엔드 한 곳이다.
+   * `"dock"`/`"internal"` = 그 프로필 슬롯 · `"config"` = 게임 설정 파일.
+   */
+  target: RestoreTarget;
+  /**
+   * 되돌릴 곳의 **지금 내용이 이 백업과 같은가**. 누르기 전에 말해 결과 팝업이 뜰 이유를 줄인다.
+   * ⚠️ **모르면 false**다(손상 슬롯 등) — 모르는 것을 "같다"고 말하지 않는다.
+   */
+  same_as_target: boolean;
 }
 
 /** 목록 조회 — **읽기 전용**이다. 아무것도 쓰지 않는다. */
@@ -556,9 +644,9 @@ export const listBackups = rpc<[appid: string], { backups: BackupRow[] }>("list_
 /**
  * `restore_backup`이 돌려주는 값 — 성공(`restored`)과 **무동작**(`already`)을 `outcome`으로 가른다.
  *
- * ⚠️ `already`는 실패가 아니다. 디스크가 이미 그 백업과 같으면 백엔드가 **엔진을 부르기 전에**
- *   돌려준다(쓰기 0 · 대피 0 · 백업 링 소모 0). 그래야 같은 행을 두 번 눌러도 되돌릴 지점이
- *   링 밖으로 밀리지 않는다.
+ * ⚠️ `already`는 실패가 아니다. **되돌릴 곳이** 이미 그 백업과 같으면 백엔드가 **엔진을 부르기
+ *   전에** 돌려준다(쓰기 0 · 대피 0 · 백업 링 소모 0). 그래야 같은 행을 두 번 눌러도 되돌릴
+ *   지점이 링 밖으로 밀리지 않는다.
  */
 export interface RestoreResult extends RestoreConfirmParams {
   outcome: "restored" | "already";
@@ -579,21 +667,48 @@ export interface RestoreConfirmParams {
   stamp_label: string;
   filename: string;
   size: number;
-  /** 덮어쓸 대상(=디스크)이 지금 어떤 상태인가 — 저장 확인창과 **같은 4분류**다. */
+  /** **되돌릴 곳**(R13). 확인창 문구도 후속 제안도 이 값으로 갈린다. */
+  target: RestoreTarget;
+  /** 게임 설정 파일이 지금 어떤 상태인가 — 저장 확인창과 **같은 4분류**다. */
   disk_state: DiskState;
   /** `disk_state === "other_profile"`일 때 어느 프로필과 같은지. */
   matched_profile?: Profile;
+  /**
+   * 되돌릴 곳이 슬롯일 때 그 슬롯의 **마지막 저장 시각 표시값**. 모르면 빈 문자열이다.
+   *
+   * ⚠️ **기록이 가리키는 본체가 실재할 때만 실린다**(R2): 기록만 남고 실물이 없는 슬롯(4-B 10행)에서
+   *   이 값을 그리면 화면이 **없는 프로필을 「…에 저장됨」**이라 말한다. 판정은 백엔드 한 곳이다.
+   */
+  saved_at?: string;
+  /**
+   * 이번 복원이 **지금 그 자리의 내용을 백업으로 대피시키는가**(R2).
+   *
+   * ★ 화면의 *"복원 전에 지금의 내용도 백업으로 보관합니다 — 백업 한 칸을 씁니다"*가 참인
+   *   조건이고, **엔진의 대피 조건과 같은 술어**에서 나온다(`restore._evacuation_source`).
+   *   자리마다 조건을 다시 세우면 언젠가 화면이 쓰지도 않는 링을 약속한다 — 실제로 그랬다.
+   * ⚠️ 값이 뜻을 갖는 것은 **확인을 묻는 갈래**다(그때만 화면이 읽는다). `already` 응답에도
+   *   같은 params가 실려 오지만 그 갈래는 **아무것도 쓰지 않으므로** 이 값을 근거로 삼지 말 것.
+   */
+  evacuates: boolean;
+  /** 이번 복원이 실제로 지울 백업들(§5-E-3 — 적용과 **같은 필드·같은 문구**). */
+  evicted: EvictedRow[];
+  /**
+   * 되돌릴 슬롯의 **저장 기록이 손상돼 지금 내용을 대피시킬 수 없는** 상태인가(4-B 9행).
+   * 참이면 확인창이 *"되살릴 수 없다"*를 명시하고 묻는다 — 조용히 잃지 않는다(A12).
+   */
+  slot_unreadable?: boolean;
 }
 
 /**
- * 백업 하나를 **디스크**로 되돌린다.
+ * 백업 하나를 **그 행의 되돌릴 곳**으로 되돌린다.
  *
- * ★ **묻는 경우와 안 묻는 경우가 갈린다**(백엔드 3-상태 판정):
- *   · 내용이 다른 파일을 덮어쓴다 → `CONFIRM_REQUIRED` + 토큰(저장·삭제와 같은 계약)
- *   · 설정 파일이 아예 없다 → 잃을 것이 없어 **묻지 않고** 재생한다
- *   · 디스크가 이미 그 백업과 같다 → `outcome:"already"`로 **아무것도 하지 않는다**
- * ⚠️ 실행 중인 게임은 **토큰을 발급하기 전에** `GAME_RUNNING`으로 거부된다 —
- *   확실히 거부될 확인을 사용자에게 시키지 않는다.
+ * ★ **묻는 경우와 안 묻는 경우가 갈린다**(백엔드 3-상태 판정, 기준은 **되돌릴 곳**이다):
+ *   · 되돌릴 곳의 내용이 다르다 → `CONFIRM_REQUIRED` + 토큰(저장·삭제와 같은 계약)
+ *   · 되돌릴 곳이 비어 있다(설정 파일 없음·빈 슬롯) → 잃을 것이 없어 **묻지 않고** 재생한다
+ *   · 이미 그 백업과 같다 → `outcome:"already"`로 **아무것도 하지 않는다**
+ * ⚠️ 실행 중 거부는 **게임 설정 파일로 되돌릴 때만**이다(R13 §14-C) — 프로필 슬롯은 게임이
+ *   읽지도 쓰지도 않으므로 게임을 켜 둔 채로도 되돌릴 수 있다.
+ * ⚠️ 토큰은 **목적지와 백업 파일에 묶여** 있다 — 다른 행·다른 슬롯에 재사용할 수 없다.
  */
 export const restoreBackup = rpc<
   [appid: string, backup_id: string, confirm_token?: string],

@@ -16,14 +16,14 @@ import { ensureLang, setProfileNames, t, tCode, type StringKey } from "./i18n";
 import { PLUGIN_VERSION } from "./version";
 import { BulkApplyButton } from "./BulkApplyButton";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
-import { CARD_STYLE, ICON_SLOT_STYLE, KEEP_ALL_STYLE, useDataDoor } from "./popup";
+import { CARD_STYLE, ICON_SLOT_STYLE, KEEP_ALL_STYLE, SpecConfirmModal, useDataDoor } from "./popup";
+import { makeApplyAllConfirmSpec } from "./confirmSpecs";
 import { GamesPopup } from "./GamesPopup";
 import { DiscoverPopup } from "./DiscoverPopup";
 import { SettingsPopup } from "./SettingsPopup";
 import { IconCheck, IconGear, IconList, IconSearch, IconWarn } from "./icons";
 import {
   ButtonItem,
-  ConfirmModal,
   PanelSection,
   PanelSectionRow,
   showModal,
@@ -86,8 +86,6 @@ interface ApplySummary {
   hints: string[];
   /** 문제 행이 하나라도 있었는가 — 제목 아이콘을 가른다(D05: 체크 / 주황 경고). */
   problems: boolean;
-  /** 체크인이 일어난 게임 수(§5-E ⑦). 0이면 그 줄을 그리지 않는다. */
-  checkin: number;
   at: number;
 }
 
@@ -95,7 +93,6 @@ function buildSummary(
   profile: Profile,
   rows: ApplyRow[],
   counts: Partial<Record<Outcome, number>>,
-  checkin: number,
 ): ApplySummary {
   const running = rows.filter((r) => r.code === "GAME_RUNNING");
   // 조치가 게임마다 다른 것 = 코드가 있는데 GAME_RUNNING이 아닌 것 + 코드 없는 error
@@ -144,7 +141,6 @@ function buildSummary(
     headline,
     hints,
     problems: running.length > 0 || specific.length > 0,
-    checkin,
     at: Date.now(),
   };
 }
@@ -155,24 +151,14 @@ function buildSummary(
  * ★★ 이 화면에는 *"응답이 없었다"*와 *"실패 봉투가 왔다"*가 **같은 사실**이다 — 일괄 적용이
  *   끝나지 못했고 무엇이 쓰였는지 모른다. 갈래를 둘로 두면 한쪽만 고쳐지는 날이 오고,
  *   실제로 그렇게 한쪽(실패 봉투)이 오래 침묵했다(P15-E R1).
- * ⚠️ 함수로 빼 둔 이유가 하나 더 있다: `.catch((err): Env<T> => …)`처럼 **한 줄에 제네릭을
- *   쓰면** `test_i18n_sets`의 JSX 텍스트 정규식이 `>…<`를 화면 글자로 오인해 거짓 FAIL을 낸다
- *   (`.tsx`의 알려진 함정 — 이 파일 곳곳의 같은 주의와 같은 이유다).
+ * ⚠️ 예전에는 이유가 하나 더 있었다 — `.catch((err): Env<T> => …)`처럼 한 줄에 제네릭을 쓰면
+ *   `qa/test_i18n_sets.py`의 JSX 텍스트 정규식이 `>…<`를 화면 글자로 오인해 거짓 FAIL을 냈다.
+ *   그 검사는 2026-08-15 UI 검사 계열 삭제에 함께 지워졌으므로 **그 이유는 소멸했다.**
+ *   이 함수가 남는 근거는 위 ★★ 하나뿐이고, 그것만으로 충분하다.
  */
 function deadApply(err: unknown): Env<ApplyAllResult> {
   failTag(`apply-all-failed err=${String(err)}`);
   return { ok: false, code: "UNEXPECTED", params: {} };
-}
-
-/**
- * 실패 봉투가 실어 온 **체크인 목록의 길이**. 프론트가 세는 것이 아니라 **봉투를 읽는** 것이다.
- *
- * ★ `params`는 `Record<string, unknown>`이라 타입이 아무것도 보장해 주지 않는다 — 배열일 때만
- *   길이를 쓴다. 없으면 0이고, 0이면 화면에 체크인 줄이 생기지 않는다(기존 "0이면 안 그림").
- */
-function checkinCount(params: Record<string, unknown>): number {
-  const rows = params.checkin;
-  return Array.isArray(rows) ? rows.length : 0;
 }
 
 /**
@@ -181,79 +167,17 @@ function checkinCount(params: Record<string, unknown>): number {
  * ★★ 왜 실패도 「직전 결과」에 남기는가: 확정 실행은 성공·실패를 가리지 않고 **다시 읽으므로**
  *   (§4-F ③), 실패 직후에 뒤따르는 조회가 성공하면 현재군의 실패 줄은 §3-B 수명 규칙대로
  *   거둬진다. 그러면 *"일괄 적용이 도중에 멈췄다"*는 사실이 화면 어디에도 안 남는다 —
- *   **오래 사는 자리는 과거군뿐**이다. 사유(`hints`)와 체크인 수도 여기 함께 실어 보낸다.
+ *   **오래 사는 자리는 과거군뿐**이다. 사유(`hints`)도 여기 함께 실어 보낸다.
  * ★ 문구가 현재군 실패 줄과 겹치지 않는다: 저쪽은 *"왜 실패했나"*(코드), 이쪽은 *"그래서 지금
  *   무슨 상태인가"*(일부는 이미 바뀌었을 수 있다)이다. 같은 말을 두 번 하지 않는다.
  */
-function stoppedSummary(profile: Profile, code: string, checkin: number): ApplySummary {
+function stoppedSummary(profile: Profile, code: string): ApplySummary {
   return {
     headline: t("APPLY_ALL_STOPPED", { profile: t(PROFILE_KEY[profile]) }),
     hints: [tCode(code, "APPLY_FAILED")],
     problems: true,
-    checkin,
     at: Date.now(),
   };
-}
-
-/**
- * 일괄 적용 확인창 (F8) — **오발동을 막는 마찰**이다. 명세 정본 = 설계 §3-E.
- *
- * ★★ 이 모달은 설계 정본 §9-E 모달 정당성 기준(파괴적 **그리고** 저빈도)의 **예외**다.
- *   일괄 적용은 주 동작이고 매 부팅 누르는 고빈도 버튼이며 파괴적이지도 않다(백업이 선행되는
- *   정상 쓰기). 그럼에도 붙이는 근거는 **최신 사용자 결정(2026-08-09 — 오발동 방지 명시 요청)**이
- *   기준에 우선한다는 것이다. 전례가 실재한다: P2 실기에서 결과 목록을 드래그하다
- *   **의도하지 않은 일괄 적용이 실행됐다.**
- *
- * ★★ 본문의 `{total}`은 **미리보기 봉투가 준 값**이다(§3-E · Codex D-06) — 토큰을 발급한
- *   그 시점의 등록 수 스냅샷이다. `get_overview`의 total을 쓰면 *"토큰이 지문 낸 대상"*과
- *   화면 숫자가 어긋난다(다른 시점의 조회). 버킷 5개의 합 = 이 값이 계약이다.
- * ★ 숫자는 **전부 백엔드가 센 값**이고 화면은 「예상」이라고 말한다 — 실행 결과의 정본은
- *   적용 후 요약과 백엔드 로그다. 0인 버킷 줄은 그리지 않는다(`counts.incomplete`의 기존 규칙).
- * ★ `bDestructiveWarning`은 **붙이지 않는다**(세션 잠정 확정) — 일괄 적용은 파괴가 아니라
- *   주 동작이고, 붙이면 "저장 덮어쓰기·삭제 급"과 시각 언어가 뭉개진다. C 묶음 재검토 등재분.
- * ★ **OK는 항상 활성**이다. `running_refused`는 고지 줄에만 쓰이고 활성 조건에 절대 들어가지
- *   않는다 — 조건이 되는 순간 E1(실행 중 게임이 일괄 적용을 막지 않는다)이 모달 층에서 뒤집힌다.
- * ★ 무정보 상시 줄은 §3-E D04로 **삭제**됐다 — 「예상:」 접두가 이미 같은 말을 한다.
- *   (그 문구 키 `APPLY_ALL_CONFIRM_NOTE`도 P15에서 번역표에서 제거됐다.)
- */
-function ApplyAllConfirm({
-  params,
-  onConfirm,
-  closeModal,
-}: {
-  params: ApplyAllConfirmParams;
-  onConfirm: () => void;
-  /** `showModal`이 최상위 엘리먼트에 주입한다. 우리가 감싼 컴포넌트가 받으므로 그대로 넘긴다. */
-  closeModal?: () => void;
-}) {
-  const profileName = t(PROFILE_KEY[params.profile]);
-  // 0인 버킷은 줄에서 뺀다 — 없는 것을 0으로 나열하면 정작 중요한 숫자가 묻힌다.
-  const parts = (
-    [
-      ["APPLY_ALL_PREVIEW_APPLY", params.would_apply],
-      ["APPLY_ALL_PREVIEW_ALREADY", params.already],
-      ["APPLY_ALL_PREVIEW_NO_PROFILE", params.no_profile],
-      ["APPLY_ALL_PREVIEW_RUNNING", params.running_refused],
-      ["APPLY_ALL_PREVIEW_CANNOT", params.cannot_apply],
-    ] as const
-  )
-    .filter(([, n]) => n > 0)
-    .map(([key, n]) => t(key, { n }));
-  return (
-    <ConfirmModal
-      strTitle={t("APPLY_ALL_CONFIRM_TITLE", { profile: profileName })}
-      strDescription={
-        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          <div>{t("APPLY_ALL_CONFIRM_BODY", { total: params.total, profile: profileName })}</div>
-          {parts.length > 0 ? <div>{t("APPLY_ALL_CONFIRM_EXPECT", { list: parts.join(" · ") })}</div> : null}
-        </div>
-      }
-      strOKButtonText={t("APPLY_ALL_CONFIRM_OK")}
-      strCancelButtonText={t("CANCEL")}
-      closeModal={closeModal}
-      onOK={onConfirm}
-    />
-  );
 }
 
 /** 화면이 실패를 **받은 시각까지** 들고 있는다 — 언제 있었던 일인지가 사유만큼 중요하다. */
@@ -623,11 +547,15 @@ function Content() {
             //    이 시점에 백엔드는 파일을 1바이트도 쓰지 않았다(문도 재조회를 붙이지 않는다).
             const p = res.params as unknown as ApplyAllConfirmParams;
             try {
+              // ★★ **다른 확인창과 같은 렌더러를 지난다**(R14 #6 — `SpecConfirmModal`).
+              //   예전에는 이 창만 `ConfirmModal`을 직접 그려 `useCancelFirstFocus`(취소 우선
+              //   포커스)를 지나지 않았다 — 손실 가능한 확인창 중 **가장 자주 눌리는 것만**
+              //   OK 위에 커서가 서 있었고, A 한 번의 관성으로 승인됐다. 그건 물은 것이 아니다.
+              //   무엇을 묻는지는 spec(`confirmSpecs`)이, 어떻게 그리는지는 렌더러가 소유한다.
+              // 받은 토큰을 **그대로** 되돌린다. 지어낼 수 없고, 고쳐 봐야 거부된다.
               showModal(
-                <ApplyAllConfirm
-                  params={p}
-                  // 받은 토큰을 **그대로** 되돌린다. 지어낼 수 없고, 고쳐 봐야 거부된다.
-                  onConfirm={() => runApplyAll(profile, p.confirm_token)}
+                <SpecConfirmModal
+                  spec={makeApplyAllConfirmSpec(p, () => runApplyAll(profile, p.confirm_token))}
                 />,
               );
             } catch (err) {
@@ -644,23 +572,16 @@ function Content() {
             // ★ 결과의 **정본은 이 상태**다. 모달은 없앴고(2026-08-06 사용자 결정),
             //   토스트는 QAM이 닫혀 있어도 도달하는 부가 채널일 뿐이다 —
             //   토스트가 실패해도 아래 요약 줄은 이미 붙잡혀 있다.
-            keepSummary(buildSummary(
-              profile,
-              res.data.results,
-              res.data.counts,
-              res.data.checkin.length,
-            ));
+            keepSummary(buildSummary(profile, res.data.results, res.data.counts));
             setFailure(null);
             return;
           }
           // ⚠️ **여기가 침묵하던 자리다**(P15-E R1). 예전 주석은 *"봉투가 ok:false인 것은
           //   일괄 적용 자체가 시작도 못 한 경우뿐"*이라고 단언했는데 **거짓이었다**:
           //   엔진이 설정 파일을 다 바꾼 **뒤** `save_registry`가 실패하면 백엔드는
-          //   `Refused(code=UNEXPECTED, checkin=관측값)`을 낸다(main.py:861-862 · D-02).
-          //   그 봉투에는 **체크인된 게임 목록**이 실려 있다 — 직전 프로필이 조용히 바뀐
-          //   사실이고, 개별 적용(팝업 G)은 같은 갈래를 이미 정확히 읽고 있었다.
-          //   그래서 화면도 ⓐ 무슨 일이 있었는지 ⓑ 왜 멈췄는지 ⓒ 체크인 몇 건인지를 말한다.
-          keepSummary(stoppedSummary(profile, res.code, checkinCount(res.params)));
+          //   `Refused(code=UNEXPECTED)`를 낸다(main.py). 그때 **일부는 이미 바뀐 상태**다 —
+          //   그래서 화면은 ⓐ 무슨 일이 있었는지 ⓑ 왜 멈췄는지를 말한다.
+          keepSummary(stoppedSummary(profile, res.code));
         },
       );
     },
@@ -713,12 +634,6 @@ function Content() {
 
   const counts = overview?.counts;
 
-  // ★ `running`은 **이 한 줄에서만** 읽는다 — 문을 하나로 모아 두면 활성 조건으로 새어 들어갈 자리가 없다.
-  //   (2026-08-05 QA 재인증 R6: 식별자 이름만 검사하면 `const ready = counts.running ? 0 : …` 처럼
-  //    **값을 오염**시켜 우회할 수 있다. 그래서 검사도 "running은 표시 전용 표시가 붙은 줄에서만"으로 바꿨다.)
-  // e1-display-only
-  const runningNote = counts?.running ? t("BULK_RUNNING_NOTE", { n: counts.running }) : null;
-
   /**
    * **프로필이 아직 하나도 없는 상태**(§3-D 판정표 3행 — H2). 프로필이 하나라도 생기면
    * 영구히 거짓이 된다.
@@ -726,9 +641,31 @@ function Content() {
    * ★ 12판: 상태박스 ④ 시작 안내 슬롯이 폐기되면서(§3-B) 이 식의 소비자는 **설명 줄 한 곳**만
    *   남았다. "조건이 한 곳이어야 두 줄이 함께 사라진다"는 규율은 **구조적으로 달성**됐고,
    *   설명 줄의 3행/4행은 별개 식이 아니라 **같은 식의 참/거짓**이다(신설 조건 금지).
+   * ★★ 소비자가 **둘**이 됐다(2026-08-15 QA R5 — 아래 실행 중 고지). 새 조건을 세우지 않고
+   *   이 식을 그대로 쓴다: 두 일괄 버튼의 `ready`가 각각 `dock_ready`·`internal_ready`이므로
+   *   이 식이 참인 것과 **두 버튼이 다 `(0개)`인 것**은 같은 사실이다. 조건을 따로 적으면
+   *   같은 사실을 두 곳에서 판정하게 되고, 언젠가 한쪽만 움직인다.
    */
   const noProfilesYet =
     !!counts && counts.total > 0 && counts.dock_ready + counts.internal_ready === 0;
+
+  /**
+   * 실행 중 게임 고지의 **문구 갈래**(2026-08-15 QA R5).
+   *
+   * ★★ 무엇이 거짓이었나: 이 줄은 프로필 유무와 무관하게 떠서, 등록 직후(프로필 0)에도
+   *   *"— 나머지는 적용됩니다"*라고 말했다. 그때 두 일괄 버튼은 `(0개)`로 **비활성**이라
+   *   적용될 「나머지」가 없다 — **온보딩 직후가 정확히 이 상태다.**
+   * ★ 줄 자체를 감추지 않는다(§3-B 미렌더 조건 불변): *"프로필 0 + 게임 실행 중"*은 §5-B 저장
+   *   안내가 유도하는 정상 흐름이고, 그때도 상태박스는 서야 한다. **거짓인 절반만** 덜어낸다.
+   */
+  const runningNoteKey = noProfilesYet ? "BULK_RUNNING_NOTE_NO_TARGET" : "BULK_RUNNING_NOTE";
+
+  // ★ `running`은 **이 한 줄에서만** 읽는다 — 문을 하나로 모아 두면 활성 조건으로 새어 들어갈 자리가 없다.
+  //   (2026-08-05 QA 재인증 R6: 식별자 이름만 검사하면 `const ready = counts.running ? 0 : …` 처럼
+  //    **값을 오염**시켜 우회할 수 있다. 그래서 검사도 "running은 표시 전용 표시가 붙은 줄에서만"으로 바꿨다.)
+  //   ⚠️ 문구 갈래는 **위에서 이미 정해져 있다** — 그 판정에 `running`이 들어가지 않는다(E1).
+  // e1-display-only
+  const runningNote = counts?.running ? t(runningNoteKey, { n: counts.running }) : null;
 
   /** 카운트 줄(§3-C). 조회 전에는 **빈 자리**다 — 모르는 것을 0으로 말하지 않는다(D01). */
   const countText = !counts
@@ -810,14 +747,6 @@ function Content() {
           <div key="why" style={{ color: WARN_COLOR }}>{summary.hints.join(" · ")}</div>,
         );
       }
-      // ⑦ 체크인 고지(§5-E) — 사실 진술이므로 회색이다. 0건이면 줄을 만들지 않는다.
-      if (summary.checkin > 0) {
-        past.push(
-          <div key="checkin" style={{ color: MUTED_COLOR }}>
-            {t("CHECKIN_MANY", { n: summary.checkin })}
-          </div>,
-        );
-      }
     }
 
     if (now.length === 0 && past.length === 0) return null;
@@ -873,8 +802,10 @@ function Content() {
               3행 프로필 0 → `QAM_ABOUT_GUIDE`   4행 그 외 → `QAM_ABOUT`
             ★ 자리(placeholder)를 잡지 않는다: 1·2행에서는 **영구히 없는 줄**이라 빈 칸이 상주하면
               "말할 게 없으면 그리지 않는다"와 어긋난다.
-            ★ 키를 변수로 넘기지 않는다 — 리터럴 두 갈래로 써야 §10-B′의 참조 0 키 grep과
-              `i18n_jsx_scan`이 두 키를 고아로 오판하지 않는다. */}
+            ★ 키를 변수로 넘기지 않는다 — **리터럴 두 갈래**로 쓴다. 원래 근거였던
+              `i18n_jsx_scan`(고아 키 오판 방지)은 삭제돼 사라졌고, 남은 이유는 §10-B′의
+              **「참조 0 키」 grep**이다: 변수 경유로 쓰면 사람이 grep으로 그 키의 사용처를
+              못 찾아 살아 있는 키를 죽은 키로 오인한다. */}
         {!counts || counts.total === 0 ? null : (
           <PanelSectionRow>
             <div style={HINT_STYLE}>

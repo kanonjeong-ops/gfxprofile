@@ -267,11 +267,11 @@ def main_test():                                                # noqa: C901
         rows = data_of(env).get("results") or []
         if len(rows) != 3 or counts.get("applied") != 2 or counts.get("no_profile") != 1:
             P("⑥ 2차 실행 결과가 현행 apply_all과 다르다 — counts=%s rows=%d" % (counts, len(rows)))
-        # ★ 체크인 관측(F6)이 **기존 계약에 무해한가**: `checkin`은 별도 필드이고, 결과 행은
-        #   엔진 반환 그대로다(관측이 행을 변형하면 ⑥″의 G10 대조가 무너진다).
-        #   관측 자체의 정확성은 `qa/test_checkin_view.py`가 잰다.
-        if not isinstance(data_of(env).get("checkin"), list):
-            P("⑥ 봉투에 checkin 배열이 없다 — 체크인 고지를 화면이 그릴 수 없다 (%s)"
+        # ★ R13: 체크인이 **엔진에서 제거**됐으므로(설계 §14-A) 그 관측 필드도 봉투에서 사라졌다.
+        #   **부재를 단언한다** — 없는 사건의 계측기가 되살아나면 화면이 언젠가 그 오탐을 그린다
+        #   (§5-E-6). 관측기가 남아 있으면 이 줄이 FAIL한다.
+        if "checkin" in data_of(env):
+            P("★⑥ 봉투에 checkin이 아직 있다 — 체크인은 13판에서 제거됐다 (%s)"
               % data_of(env).get("checkin"))
         for row in rows:
             if set(row) != {"appid", "name", "outcome", "code", "note"}:
@@ -303,6 +303,12 @@ def main_test():                                                # noqa: C901
         cfg1.write_bytes(EDITED)                       # 덮어쓰기 상황을 만든다(저장 토큰 발급용)
         save_tok = params_of(rpc(main, "save_profile", "100", "dock")).get("confirm_token")
         del_tok = params_of(rpc(main, "delete_game", "100")).get("confirm_token")
+        # ★ 복원 토큰을 얻으려면 **되돌릴 곳과 내용이 다른** 백업 행이 하나 필요하다.
+        #   R13부터 적용은 디스크가 어느 슬롯과 같으면 대피본을 안 만들므로(§14-B) 이 세계에는
+        #   백업이 0건일 수 있다 — 여기서 하나를 직접 만든다. 이 절이 재는 것은 **scope 격리**뿐이고,
+        #   백업이 어떻게 생겼는지는 그 측정과 무관하다.
+        store.make_backup("100", b"quality=bkup\nshadows=old_\nsource=FOREIGN-TOKEN\n",
+                          "disk", "video.ini")
         bk = store.list_backups("100")
         restore_tok = None
         if bk:
@@ -378,6 +384,13 @@ def main_test():                                                # noqa: C901
 
         # ═══════════════════════════════════════════════════════════════════
         # ⑤ 디스크 sha1은 지문에 **없다**(의도적) — 게임이 설정을 다시 써도 토큰은 유효
+        #
+        #   ⚠️ 2026-08-15(QA 재심 B) 이후 이 배제의 **범위가 좁아졌다**: 토큰은 이제 축출
+        #     **대상**의 지문에도 묶인다. 그래서 설정 파일 재기록이 *지워질 백업을 바꾸는 때*
+        #     (=그 게임의 링이 이미 가득 찬 때)는 토큰이 무효가 되는 것이 **옳다** — 그때는
+        #     확인창이 말한 "축출 N건"이 이미 거짓이기 때문이다(그 갈래는
+        #     `qa/test_evict_notice.py` ⓕ-1이 잰다). 여기서 재는 것은 **링이 포화가 아닌**
+        #     보통 상태에서 재기록이 확인→재확인 루프를 만들지 않는다는 것이다.
         # ═══════════════════════════════════════════════════════════════════
         tok = params_of(rpc(main, "apply_all", "dock")).get("confirm_token")
         cfg2.write_bytes(EDITED + b"game-rewrote=1\n")     # 게임이 종료하며 다시 쓴 상황

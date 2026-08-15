@@ -62,6 +62,10 @@ UNEXPECTED = "UNEXPECTED"
 # ── 경고 (거부가 아니다 — 등록은 되고 화면에 표시만 된다. 설계 D1′) ──────────
 WARN_OUTSIDE_SCAN_ROOTS = "WARN_OUTSIDE_SCAN_ROOTS"
 WARN_NOT_DISCOVER_CANDIDATE = "WARN_NOT_DISCOVER_CANDIDATE"
+# 실행 중인 게임을 저장했다 — 저장은 **됐고**, 그 값이 게임 종료 시 덮일 수 있다는 사실만 알린다.
+# ★ 이 상수가 있는 이유(2026-08-15 R14 #10): 엔진이 **한국어 문장**을 봉투에 실어 보내
+#   영어 화면에 그대로 붙었다. 백엔드는 의미 코드만 주고 문장은 화면이 고른다.
+WARN_SAVE_WHILE_RUNNING = "WARN_SAVE_WHILE_RUNNING"
 
 #: 실패가 아니라 **정상 흐름 신호**인 코드. 토스트·로그에서 에러로 취급하지 않는다.
 FLOW_CODES = frozenset({CONFIRM_REQUIRED})

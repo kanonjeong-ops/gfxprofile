@@ -6,7 +6,7 @@ import {
   NavEntryPositionPreferences, TextField, showModal,
 } from "./deckyui";
 import { setProfileNames, t, tCode, type StringKey } from "./i18n";
-import { POPUP_LIST_MAX_HEIGHT, POPUP_LIST_TAIL_PAD } from "./limits";
+import { POPUP_LIST_FOCUS_SLACK, POPUP_LIST_MAX_HEIGHT, POPUP_LIST_TAIL_PAD } from "./limits";
 import type { Env } from "./rpc";
 import { ErrorBoundary } from "./ui/ErrorBoundary";
 
@@ -81,6 +81,25 @@ export const ICON_SLOT_STYLE = {
  */
 export const KEEP_ALL_STYLE = { wordBreak: "keep-all" } as const;
 
+/**
+ * **경로·파일명을 그리는 자리의 줄바꿈 규칙**(실기 결함 2026-08-15 ⑤) — 잔글씨 스타일에 얹어 쓴다.
+ *
+ * ★★ 왜 규칙만 상수로 빼는가: 소비자마다 글자 크기가 다르다(팝업 11px · 확인창 12px). 스타일을
+ *   통째로 공유하려 하면 크기까지 억지로 맞추게 되고, 결국 각자 복사해 갈라진다. **갈리면 안 되는
+ *   것은 줄바꿈 규칙 하나**이므로 그것만 이름을 준다.
+ * ★ `wordBreak:"normal"` — `word-break`는 **상속되는 속성**이라 조상이 `keep-all`이면 여기까지
+ *   내려온다. 경로에는 끊을 낱말 경계가 없어 그러면 줄이 통째로 넘친다.
+ * ★★ `overflowWrap:"anywhere"` — **이것이 2026-08-15 실기 ⑤의 수정 본체다.** `normal`만으로는
+ *   *"넘칠 때 아무 데서나 끊어도 된다"*는 허가가 없다. 경로에는 공백도 하이픈도 없어 줄바꿈
+ *   기회가 **0개**이므로, 한 줄이 팝업을 넘고 **모니터 화면 밖까지** 밀고 나갔다(사용자 사진으로
+ *   확정 — Forza의 compatdata 경로). `anywhere`는 넘칠 때만 끊으므로 짧은 경로의 모습은 그대로다.
+ *   ⚠️ `break-all`이 아니다: 그쪽은 넘치지 않아도 아무 데서나 끊어 짧은 이름까지 흉해진다.
+ *   ⚠️ `anywhere`가 `break-word`보다 나은 이유는 **min-content 폭까지 줄여** 부모 flex/모달이
+ *   경로 길이에 끌려 넓어지는 것을 막는다는 점이다 — 팝업이 크기를 지정하지 않는(A10) 이 화면에서
+ *   그 차이가 곧 "화면 밖으로 나가는가"를 가른다.
+ */
+export const PATH_BREAK_STYLE = { wordBreak: "normal", overflowWrap: "anywhere" } as const;
+
 // ── 골격 (§4-A) ──────────────────────────────────────────────────────────────
 
 /**
@@ -146,15 +165,17 @@ export function GfxPopup({
  *   width를 얹어 문이 샌다. 호출부는 width를 지정하지 않는다 — minWidth·flex·padding·색만.
  *   팝업 층에서 전폭 버튼이 필요한 자리는 실측상 0곳이다.
  *
- * ⚠️ 미니 프로브는 이 계열을 **원리적으로 못 잡는다**(Steam 스타일시트가 프로브에 없다).
- *   폭의 판정은 실기 CDP 스타일 조회나 스샷뿐이다 — 회귀 초록불을 폭의 증거로 읽지 말 것.
+ * ⚠️ **폭은 자동 검사로 판정되지 않는다.** 화면 프로브는 삭제됐고(사용자 결정 — 검사는 엔진·핵심
+ *   기능에만), 애초에 Steam 스타일시트가 프로브에 없어 원리적으로도 못 잡았다.
+ *   판정 수단은 **실기 CDP 스타일 조회나 스샷뿐**이다.
  *
  * ⚠️ 타입은 `ComponentProps<typeof DialogButton>`이다. `DialogButtonProps`를 `@decky/ui`에서
  *   직접 import하면 **build.sh grep ①(단일 관문) 위반**이고 `deckyui.ts`는 그 타입을
  *   재수출하지 않는다.
- * ⚠️ `children`은 **구조분해해 JSX 자식으로 넘긴다.** `{...props}`에 남겨 prop으로 넘기면
- *   `probe_kit.cjs`가 children **prop**을 스킵하고(:172) JSX 자리에서만 라벨을 읽어(:208)
- *   전 버튼 라벨이 ""가 된다 — 회귀 4종이 깨진다(실측).
+ * ⚠️ `children`을 구조분해해 JSX 자식으로 넘기는 **관례의 근거는 소멸했다**: 그렇게 하라고
+ *   요구하던 것은 라벨을 JSX 자리에서만 읽던 `qa/probe_kit.cjs`였고, 그 프로브는
+ *   2026-08-15 UI 검사 계열 삭제에 함께 지워졌다. 지금 이 형태를 강제하는 검사는 없다.
+ *   `{...props}`에 남겨도 렌더 결과는 같으므로 **바꿀 이유도 없어** 표준 JSX 표기로 둔다.
  * ⚠️ `ref`는 투과되지 않는다(`ComponentProps`에 RefAttributes가 없다). 현 호출부에 ref 사용이
  *   0이라 무해하고, 필요해지는 날 forwardRef로 확장한다 — **지금 만들지 않는다.**
  */
@@ -211,7 +232,10 @@ export function subViewKey(view: { kind: string }): string | undefined {
  *   실효는 미검증이고 **폴백이 무해**하다 — 안 먹으면 위 버튼만 남는다(기능 손실 0).
  * ★ 초기 포커스도 여기서 준다(§4-E ①: 상세·백업·제외 뷰의 착지 대상 = `[← 뒤로]`) —
  *   뷰마다 각자 지정하면 한 뷰가 빠지고, 빠진 뷰에서만 착지가 달라진다.
- *   런타임 실효는 실기 ④가 판정하고, 안 먹으면 문서 순서 착지(=같은 자리)라 손실이 없다.
+ * ★★ 그 지정이 **실제로 읽히게** 하는 짝이 `preferredChildEntryProps`다(2026-08-15 D4 후속).
+ *   없으면 `preferredFocus`는 조용히 무효이고, 지금까지 착지가 맞았던 것은 `[← 뒤로]`가
+ *   **문서 순서 첫째**라서 생긴 우연이다 — 이 뷰들에 위쪽 요소가 하나라도 생기는 날 그 우연이
+ *   깨지고, 깨진 것을 알 방법이 없다. 그래서 **눈에 보이는 변화 없이** 우연을 계약으로 바꾼다.
  */
 export function PopupSubView({
   onBack,
@@ -222,6 +246,7 @@ export function PopupSubView({
 }) {
   return (
     <Focusable
+      {...preferredChildEntryProps}
       onCancelButton={onBack}
       onCancelActionDescription={t("BACK")}
       style={COLUMN_STYLE}
@@ -279,6 +304,11 @@ export function PopupScrollList({ children }: { children: ReactNode }) {
         maxHeight: POPUP_LIST_MAX_HEIGHT,
         overflowY: "auto",
         paddingBottom: POPUP_LIST_TAIL_PAD,
+        /* ★ 패드로 맨 아래에 닿았을 때 **마지막 카드가 잘리지 않게** 하는 유일한 자리
+           (실기 결함 2026-08-15 ② — 근거·숫자는 `limits.ts`의 이 상수 주석이 정본).
+           Steam은 포커스 요소 하단을 컨테이너 하단에 맞추고 멈추므로, 그 요소보다 아래에 있는
+           카드 메타 줄은 `paddingBottom`으로는 절대 보이지 않는다. */
+        scrollPaddingBottom: POPUP_LIST_FOCUS_SLACK,
       }}
     >
       {children}
@@ -297,6 +327,49 @@ export const listRowNavProps = {
   navEntryPreferPosition: NavEntryPositionPreferences.MAINTAIN_X,
 } as const;
 
+/**
+ * **`preferredFocus`를 실제로 듣게 만드는 선언**(§4-E ① — 2026-08-15 실기 D4).
+ *
+ * ★★ 왜 이것 없이는 무효인가(Steam 본체 실측 — `steamui/library.js`
+ *   `FindFocusableDescendant`): 컨테이너로 포커스가 **들어올 때** Steam은 자기
+ *   `navEntryPreferPosition`을 보고 갈래를 고르는데, 자손의 `BWantsPreferredFocus()`를
+ *   훑는 BFS는 **`PREFERRED_CHILD`인 갈래에만** 있다. 그 밖의 값(우리 기본값 = 지정 없음)이면
+ *   곧장 `FindNextFocusableChildInDirection(FORWARD)`로 떨어져 **문서 순서 첫 focusable**이
+ *   가져간다. 그래서 카드에 `preferredFocus`를 아무리 달아도 목록 위의 필터 줄이 이겼다
+ *   (실기: 팝업을 열면 초기 포커스가 필터 토글) — **오타가 아니라 조용한 무효**다.
+ * ★ 그래서 선언은 **자식이 아니라 진입 컨테이너**에 붙는다: `preferredFocus`(어느 자식인가)와
+ *   이 prop(그 표시를 볼 것인가)은 **한 쌍**이고, 한쪽만 있으면 아무 일도 일어나지 않는다.
+ * ★ BFS는 깊이 무관이라 컨테이너와 카드 사이에 스크롤 래퍼가 끼어도 찾아낸다.
+ * ⚠️ 붙일 자리는 **`preferredFocus`를 단 자손 전체를 품는 가장 바깥 컨테이너**다. 스크롤
+ *   목록에만 붙이면 포커스가 그 목록에 들어올 때만 듣는데, 팝업 진입은 그 **바깥**에서
+ *   시작하므로 여전히 필터 줄에 선다(실기에서 실제로 그렇게 났다).
+ */
+export const preferredChildEntryProps = {
+  navEntryPreferPosition: NavEntryPositionPreferences.PREFERRED_CHILD,
+} as const;
+
+/**
+ * **가로로 늘어선 버튼 줄**에 붙인다(§4-E ② 보강 — 실기 결함 2026-08-15 ①).
+ *
+ * ★★ 값은 반드시 **`"row"`**다. Steam 본체가 받는 낱말은 `column`·`column-reverse`·`row`·
+ *   `row-reverse`·`grid`·`geometric` **여섯뿐**이고(steamui `library.js`의 flow-children
+ *   해석 함수 실측), 그 밖의 낱말은 콘솔에 `Unhandled flow-children: …`을 찍고 **`NONE`**,
+ *   즉 *"지정하지 않은 것"*이 된다. 흔히 보이는 `"horizontal"`도 여기에 걸린다 —
+ *   **오타가 아니라 조용한 무효**라서 화면은 고쳐진 것처럼 보이고 실기에서만 안 고쳐진다.
+ * ★★ 지정이 없으면(=NONE) Steam은 **그 Focusable의 계산된 스타일로 방향을 추정한다**:
+ *   `display:flex`면 `flex-direction`을 그대로 따르고(단 `flex-wrap:wrap`이면 `grid`),
+ *   그 밖의 경우는 **`column`으로 떨어진다**. 그래서 *이미 flex 행인 컨테이너는 지정이 없어도
+ *   좌우가 살아 있었고*, **행 스타일이 flex가 아닌 컨테이너**(예: 목록 카드 — 배경·패딩만
+ *   있는 블록)만 세로로 오판돼 좌우 키가 죽었다. 실기 ①의 `[eGPU 적용][내장 적용][›]`이
+ *   정확히 그 자리다(자식 3개가 한 줄인데 카드는 블록이라 `column`으로 추정됐다).
+ * ★ 상수로 두는 이유: 새 버튼 줄이 생길 때마다 하이픈 prop을 손으로 적으면 언젠가 한 줄이
+ *   빠지고, 빠진 그 줄에서만 좌우가 죽는다 — 실기에서만 드러나는 결함이라 발견이 가장 늦다.
+ *   추정에 기대지 않고 **선언해 두면** 나중에 배치 스타일을 손대도 이동이 따라 무너지지 않는다.
+ * ⚠️ **가로로 놓인 focusable이 둘 이상일 때만** 붙인다. 세로로 쌓인 묶음에 붙이면 반대로
+ *   상하가 죽는다. focusable이 하나뿐인 행(백업 행·후보 행)은 붙일 이유가 없다.
+ */
+export const ROW_FLOW = { "flow-children": "row" } as const;
+
 // ── 확인 게이트 (§4-C) ───────────────────────────────────────────────────────
 
 interface ConfirmSpecBase {
@@ -307,6 +380,15 @@ interface ConfirmSpecBase {
   warnBlock?: ReactNode;
   okText: string;
   cancelText?: string;
+  /**
+   * **취소가 없는 창**(§4-I ④ 결과 팝업). 되돌릴 것이 없는 통지에 [취소]가 있으면
+   * *"취소하면 되돌려지나?"*라는 **없는 선택지**를 만든다.
+   * ★ 두 렌더러가 같은 것을 그린다: 중첩은 Steam의 `bAlertDialog`(OK 단독 — 실물 선례
+   *   `674.js`의 알림 계열이 전부 이 조합이다), 폴백은 취소 버튼을 **아예 그리지 않는다.**
+   * ⚠️ `bAlertDialog`가 이 빌드에서 실제로 취소를 감추는지는 **실기 판정**이다. 안 먹으면
+   *   결과 팝업에 [취소]가 하나 더 보일 뿐이고 누르면 같이 닫힌다 — 손실 없는 실패다.
+   */
+  noCancel?: boolean;
 }
 
 export interface PlainConfirmSpec extends ConfirmSpecBase {
@@ -342,8 +424,27 @@ export type ConfirmSpec = PlainConfirmSpec | InputConfirmSpec;
  */
 export const NESTED_CONFIRM = true;
 
+/**
+ * 게이트가 **창을 못 띄웠을 때 할 말**의 재료 — 키 하나이거나, **치환자가 있으면 값까지** 온다.
+ *
+ * ★★ 왜 키만으로는 안 되는가(2026-08-15 QA R3): 이 자리의 문구는 *"무엇이 안 됐고 이제 무엇을
+ *   누르면 되는가"*를 말하는데, 그 「무엇」이 **경로마다 다른 값**일 수 있다. 실제로 복원 후속
+ *   제안의 실패 문구는 `{profile}`을 품게 됐는데 게이트가 `t(key)`만 부르고 있어 화면에
+ *   **중괄호가 그대로** 떴고, *"[{profile} 적용]을 눌러 주세요"*가 어느 버튼인지 지목하지
+ *   못했다 — 두 적용 버튼 중 **틀린 쪽을 누르면 다른 프로필이 게임에 쓰인다.**
+ * ★ 그래서 **문을 넓힌다**: 치환자를 키에서 걷어내면 그 한 문장은 고쳐지지만, 다음에 같은
+ *   필요가 생기는 자리에서 똑같이 재발한다. 계약이 치환자를 인정하면 재발할 자리가 없다.
+ * ★ 키만 주는 호출부는 **한 글자도 바뀌지 않는다**(문자열이 그대로 유효한 값이다).
+ */
+export type GateFailure = StringKey | { key: StringKey; params: Record<string, string | number> };
+
+/** 게이트 실패 문구를 만드는 **단일 관문** — 두 형태를 여기서만 푼다. */
+function failText(fail: GateFailure): string {
+  return typeof fail === "string" ? t(fail) : t(fail.key, fail.params);
+}
+
 /** 게이트 시그니처 — **실패 문구는 호출부가 준다**(공유 문장이 어느 경로에선 거짓이 되는 사고 방지). */
-export type ConfirmGate = (spec: ConfirmSpec, failKey: StringKey, onFail: (msg: string) => void) => void;
+export type ConfirmGate = (spec: ConfirmSpec, fail: GateFailure, onFail: (msg: string) => void) => void;
 
 /**
  * 두 렌더러가 공유하는 **한 벌의 상태·계약**(D-05).
@@ -441,7 +542,8 @@ function specBody(
  *   한 곳에 산다 — 각자 칠하면 언젠가 두 모드의 입력창이 달라 보인다.
  * ★ 윤곽 색은 새로 지어낸 값이 아니다 — 9판 상태박스 테두리가 쓰던 값을 그대로 물려받았다.
  *   글자색만 명시한다: 면이 어두워졌으므로 상속에 맡기면 안 읽힐 수 있다.
- * ⚠️ 판정은 실기 스샷이다(§16-⑮ ⓖ) — 미니 프로브는 실물 CSS를 모른다.
+ * ⚠️ 판정은 **실기 스샷**이다(§16-⑮ ⓖ). 자동 검사로는 못 잰다 — 화면 프로브는 삭제됐고,
+ *   있었더라도 실물 CSS를 모른다.
  */
 const INPUT_FACE_STYLE = {
   background: "rgba(0,0,0,0.35)",
@@ -508,13 +610,57 @@ const OK_DISABLED_FACE_STYLE = {
  *   버튼 자체는 Steam `ConfirmModal` 내부라 우리 손이 닿지 않지만, **라벨 자리는 우리 것**이다 —
  *   `strOKButtonText`가 `ReactNode`를 받는다(`Modal.ts:78` 실측). 그 자리에 면을 그린다.
  * ★ 활성일 때는 **문자열 그대로** 돌려준다: 평소 모습을 바꾸지 않는다는 것이 이 수정의 조건이다.
- *   (부수 효과로 `probe_kit`의 가시 문자열 수집도 활성 경로에서는 지금과 완전히 동일하다.)
+ *   활성 경로의 DOM은 이 함수가 없을 때와 한 글자도 다르지 않다.
  * ⚠️ 이것은 **실험**이다 — 면이 라벨 자리에만 생기므로 버튼 전체 면과는 다르게 보일 수 있다.
  *   판정은 실기 스샷(§16-⑮ ⓗ)이고, 불충분으로 판명되면 "중첩 모드 비활성 Primary 시각은
  *   Steam 소유"로 §15-D에 알려진 한계 1행을 등재하고 종결한다(개정안 F-2).
  */
 function okFace(label: string, disabled: boolean): ReactNode {
   return disabled ? <span style={OK_DISABLED_FACE_STYLE}>{label}</span> : label;
+}
+
+/**
+ * 확인창의 **기본 포커스를 [취소]로** 옮긴다(D2 — 2026-08-15 실기).
+ *
+ * ★★ 왜 필요한가: 손실 가능한 행동은 **인지시키고 묻는다**는 것이 확인창의 존재 이유인데,
+ *   파괴적 버튼(OK) 위에 커서가 서 있으면 A 한 번의 관성으로 승인된다 — 그건 **물은 것이
+ *   아니다.** 실측(2026-08-15): 푸터는 `DialogBody > DialogFooter > DialogTwoColLayout >
+ *   [OK, 취소]`이고 두 버튼 다 `tabindex`·`autofocus`가 없어 **문서 순서로 첫 번째(OK)**가
+ *   `gpfocus`를 가져간다("Primary라서"가 아니다).
+ * ★★ 왜 DOM `.focus()`인가: `@decky/ui`의 `ConfirmModalProps`에 **초기 포커스를 넘길 prop이
+ *   없고** 버튼 순서도 Steam 소유다. 라이브 실측에서 취소 버튼에 `.focus()`를 부르니
+ *   `gpfocus`가 따라 옮겨졌다 — Steam 내비게이션이 DOM 포커스를 따른다.
+ * ★★ 찾는 방법이 **라벨**인 이유: "마지막 버튼" 같은 위치 가정은 Steam이 순서를 바꾸는 날
+ *   조용히 틀린다. 라벨은 **우리가 준 값**이라 우리가 아는 유일하게 확실한 표지다.
+ *   못 찾으면 **아무것도 하지 않는다**(무해 폴백 — 지금 동작 그대로).
+ * ★ 앵커는 본문 ref에서 올라간 `[role=dialog]`다. `document`에서 훑으면 뒤에 깔린 팝업의
+ *   같은 라벨을 집을 수 있다 — 우리 창 안에서만 찾는다.
+ * ★ rAF 한 프레임 미루는 이유: Steam의 `DeferredFocus`가 마운트 뒤 **1ms 타이머**로 자기
+ *   포커스를 실행한다(`chunk~2dcc5aaf7.js`의 `RequestFocus` → `Schedule(1, …)` 실측).
+ *   `useEffect`에서 곧바로 부르면 그 뒤에 덮여 없던 일이 된다.
+ *
+ * ⚠️ **입력형(`kind:"input"`)은 대상이 아니다**: 그 창의 초기 포커스는 `TextField`의
+ *   `focusOnMount`가 가져가야 빅픽처 가상 키보드가 뜬다(U20 ①). 게다가 입력형은 OK가
+ *   입력이 맞을 때까지 **비활성**이라 관성 승인이 원리적으로 불가능하다 — 이 수정이 막으려는
+ *   위험이 없는 자리에서 유일한 입력 경로를 빼앗을 이유가 없다.
+ * ⚠️ `noCancel`(결과 팝업)은 취소가 아예 없다 — 버튼 하나뿐이라 지금도 옳다.
+ */
+function useCancelFirstFocus(spec: ConfirmSpec) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const label = (spec.cancelText ?? t("CANCEL")).trim();
+  const skip = !!spec.noCancel || spec.kind === "input";
+  useEffect(() => {
+    if (skip) return undefined;
+    const frame = requestAnimationFrame(() => {
+      const dialog = bodyRef.current?.closest("[role=dialog]");
+      if (!dialog) return;
+      const buttons = Array.from(dialog.querySelectorAll<HTMLElement>("button, .DialogButton"));
+      buttons.find((el) => (el.textContent ?? "").trim() === label)?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return bodyRef;
 }
 
 /**
@@ -533,12 +679,18 @@ export function SpecConfirmModal({
 }) {
   const close = useCloseOnce(closeModal);
   const gate = useSpecGate(spec, close);
+  /* ★ 본문 div가 **초기 포커스의 앵커**다(D2) — 여기서 위로 올라가 우리 창을 찾는다. */
+  const bodyRef = useCancelFirstFocus(spec);
   return (
     <ConfirmModal
       strTitle={spec.title}
-      strDescription={<div style={specWrapStyle(spec)}>{specBody(spec, gate.value, gate.setValue)}</div>}
+      strDescription={
+        <div ref={bodyRef} style={specWrapStyle(spec)}>{specBody(spec, gate.value, gate.setValue)}</div>
+      }
       strOKButtonText={okFace(spec.okText, gate.okDisabled)}
       strCancelButtonText={spec.cancelText ?? t("CANCEL")}
+      /* 결과 팝업은 OK 하나다(§4-I ④) — Steam의 알림 다이얼로그 모드. */
+      bAlertDialog={spec.noCancel}
       bOKDisabled={gate.okDisabled}
       /* 발화 뒤에는 취소도 잠근다 — OK와 취소가 **상호 배타**라는 계약을 화면에서도 지킨다. */
       bCancelDisabled={gate.done}
@@ -593,7 +745,7 @@ export function ConfirmOverlay({ spec, onClose }: { spec: ConfirmSpec; onClose: 
           그러면 §4-C "두 렌더러가 같은 것을 그린다" 계약과 F-1이 자기모순에 빠진다.
           ⚠️ 이 예외는 **파일 단위로** 잠근다 — `build.sh` grep ⑤가 popup.tsx만 허용한다.
              파일 밖 예외 목록은 두지 않는다(목록을 두면 그 목록이 다음 라운드의 구멍이 된다). */}
-      <Focusable style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+      <Focusable {...ROW_FLOW} style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
         <DialogButton
           onClick={gate.onOK}
           disabled={gate.okDisabled}
@@ -601,13 +753,17 @@ export function ConfirmOverlay({ spec, onClose }: { spec: ConfirmSpec; onClose: 
         >
           {spec.okText}
         </DialogButton>
-        <DialogButton
-          onClick={gate.onCancel}
-          disabled={gate.done}
-          style={overlayButtonStyle(gate.done)}
-        >
-          {spec.cancelText ?? t("CANCEL")}
-        </DialogButton>
+        {/* ★ 결과 팝업(§4-I ④)에는 취소가 **없다** — 숨기는 것이 아니라 그리지 않는다.
+            중첩 렌더러의 `bAlertDialog`와 같은 결과를 폴백에서도 내야 §4-C 계약이 선다. */}
+        {spec.noCancel ? null : (
+          <DialogButton
+            onClick={gate.onCancel}
+            disabled={gate.done}
+            style={overlayButtonStyle(gate.done)}
+          >
+            {spec.cancelText ?? t("CANCEL")}
+          </DialogButton>
+        )}
       </Focusable>
     </Focusable>
   );
@@ -628,13 +784,14 @@ export function usePopupGate(): {
 } {
   const [overlay, setOverlay] = useState<ConfirmSpec | null>(null);
 
-  const gate = useCallback<ConfirmGate>((spec, failKey, onFail) => {
+  const gate = useCallback<ConfirmGate>((spec, fail, onFail) => {
     if (NESTED_CONFIRM) {
       try {
         showModal(<SpecConfirmModal spec={spec} />);
       } catch (err) {
         console.error("[gfxprofile] confirm gate failed", err);
-        onFail(t(failKey));
+        // ★ 치환자가 있는 문구도 여기서 채워진다(R3) — `failText`가 두 형태의 단일 관문이다.
+        onFail(failText(fail));
       }
       return;
     }
@@ -655,22 +812,35 @@ export function usePopupGate(): {
 /**
  * 팝업 하나가 마운트 시 부르는 **자기 조회 RPC** — 봉투를 그대로 돌려준다.
  *
- * ⚠️ 화살표 타입(`() => Promise<…>`)을 **한 줄에 쓰지 않는다**: `test_i18n_sets`의 가시 문자열
- *   정규식이 `.tsx`에서 `>…<`를 JSX 텍스트로 오인해 거짓 FAIL을 낸다(`.ts`는 같은 이유로 이미
- *   제외돼 있다). 호출 시그니처 인터페이스로 두면 오탐이 **구조적으로** 생기지 않는다.
+ * ⚠️ *"화살표 타입(`() => Promise<…>`)을 한 줄에 쓰지 않는다"*는 관례의 **근거는 소멸했다**:
+ *   그 요구를 하던 것은 `.tsx`에서 `>…<`를 JSX 텍스트로 오인하던 `qa/test_i18n_sets.py`의
+ *   가시 문자열 정규식인데, 그 검사는 2026-08-15 UI 검사 계열 삭제에 함께 지워졌다.
+ *   지금 한 줄 화살표 타입을 막는 것은 아무것도 없다. 그럼에도 이 **이름 붙은 호출 시그니처**는
+ *   남긴다 — 여러 팝업이 같은 로더 모양을 참조하는 재사용 가능한 타입이라 그 자체로 값을 한다.
  */
 export interface PopupLoader<T> {
   (): Promise<Env<T>>;
 }
 
-/** 왕복 하나를 부르는 얇은 호출자 — 인자에 화살표 타입을 쓰지 않기 위한 이름이기도 하다. */
+/**
+ * 왕복 하나를 부르는 얇은 호출자.
+ *
+ * ★ 이름을 붙인 이유는 위 `PopupLoader`와 같다 — **재사용되는 호출 시그니처**라서다.
+ *   원래 근거였던 "한 줄 화살표 타입이 검사에 오탐된다"는 그 검사(`test_i18n_sets`)가
+ *   삭제돼 소멸했다. 지금 이 형태를 강제하는 검사는 없다.
+ */
 export interface PopupCall<R> {
   (): Promise<Env<R>>;
 }
 
-/** 받은 봉투로 **화면 문구만** 정하는 자리(재조회·통지는 호출부의 일이 아니다). */
+/**
+ * 받은 봉투로 **화면 문구만** 정하는 자리(재조회·통지는 호출부의 일이 아니다).
+ *
+ * ★ `true`를 돌려주면 *"이번 결과를 **창으로** 말했다"*는 뜻이다(§4-I ⑥ 2겹 방지). 호출부는
+ *   그 **사실만** 알린다 — 화면이 낡았는지의 판정은 여전히 문이 한다.
+ */
 export interface PopupResult<R> {
-  (res: Env<R>): void;
+  (res: Env<R>): boolean | void;
 }
 
 /**
@@ -743,6 +913,21 @@ function inDoor<R>(
  *   문장이 아니다.
  */
 export interface DoorSink<T> {
+  /**
+   * **새 왕복이 시작됐다**(조회·변이 공용) — 화면이 들고 있는 *직전 왕복의 말*은 여기서 낡는다.
+   *
+   * ★★ 왜 문에 있는가(2026-08-15 QA R7): note를 **거두는 호출이 전 소스에 0건**이었다.
+   *   GamesPopup의 성공은 대부분 침묵이라, 왕복이 한 번 죽어 *"예기치 못한 오류가
+   *   발생했습니다"*가 뜨면 **다시 눌러 성공해도 그 문장이 목록 아래에 그대로 남는다** —
+   *   사용자는 방금 성공한 동작을 실패로 읽는다. 거두는 자리를 호출부마다 두면 그중 하나를
+   *   반드시 빠뜨리므로, *"새 동작이 시작되면 지난 동작의 말은 낡는다"*는 규칙을 **문 하나**에 둔다.
+   * ★ `reload`는 이 신호를 내지 않는다: 변이 뒤 자동 재조회가 여기 걸리면, **방금 그 변이가
+   *   남긴 말**(결과·실패 사유)을 스스로 지운다. 신호의 뜻은 *"사용자가 새 동작을 걸었다"*이지
+   *   *"왕복이 나갔다"*가 아니다.
+   * ★ 미지정이면 아무 일도 안 한다 — QAM처럼 「직전 결과 + 받은 시각」을 일부러 붙잡아 두는
+   *   화면은 이 신호를 받지 않으면 지금 동작 그대로다.
+   */
+  onStart?: () => void;
   /** 최신 세대의 조회가 성공했다 — 봉투의 payload. */
   onData: (data: T) => void;
   /**
@@ -752,6 +937,17 @@ export interface DoorSink<T> {
   onLoadFail: (code: string, err?: unknown) => void;
   /** 변이·조회 **왕복이 죽었다**(봉투가 없다) — 호출부가 준 failKey와 함께. */
   onCallFail: (key: StringKey, err: unknown) => void;
+  /**
+   * **변이는 성공했는데 뒤따르는 재조회가 실패했다**(§4-I ⑥ — 성공 침묵의 유일한 예외).
+   *
+   * ★★ 이 갈래에서 화면은 옛 상태를 그대로 보여준다 — 마커가 안 움직이므로 사용자 눈에는
+   *   *"눌렀는데 아무 일도 안 일어난"* 먹통이다. **무반응은 곧 고장으로 읽힌다**(A12).
+   *   그래서 성공 침묵의 예외로 여기서만 말한다.
+   * ★ **판정은 이 문 하나**가 한다: 두 사실(변이 성공 여부·그 뒤 재조회 결과)을 다 아는 자리가
+   *   여기뿐이다. 호출부가 각자 판단하면 팝업마다 조건이 갈린다.
+   * ★ 미지정이면 아무 일도 안 한다 — 둘째 줄 note는 그대로 뜬다(자리가 다르다).
+   */
+  onStaleAfterWrite?: () => void;
 }
 
 /** 문이 돌려주는 것 — 상태 표시 2종과 호출 3종. */
@@ -760,7 +956,8 @@ export interface DataDoor {
   busy: boolean;
   /** **쓸 수 있는 왕복**이 진행 중인가 — "적용 중"처럼 조회와 갈라 말해야 하는 화면이 쓴다. */
   mutating: boolean;
-  reload: () => void;
+  /** 다시 읽는다. 인자는 **문 내부용**이다(§4-I ⑥) — 화면이 부를 때는 인자 없이 부른다. */
+  reload: (afterWrite?: boolean) => void;
   /** **확정 실행**(쓸 수 있는 호출). 응답이 토큰 발급이 아니면 재조회 + 변경 통지가 따라온다. */
   runMutation: PopupRunner;
   /** **조회**(읽기 전용 호출). busy만 같이 쓰고 재조회·통지는 하지 않는다. */
@@ -832,7 +1029,13 @@ export function useDataDoor<T>(
     }
   }, []);
 
-  const reload = useCallback(() => {
+  /**
+   * 다시 읽는다. `afterWrite`는 **성공한 변이가 부른 재조회**라는 표시다(§4-I ⑥) —
+   * 그 재조회가 실패하면 화면이 결과를 못 보이므로 문이 그 사실을 알린다.
+   * ⚠️ 세대 가드에 걸린(=더 새 조회가 이미 나간) 응답은 알리지 않는다: 화면이 낡았는지는
+   *   **최신 조회**가 정한다.
+   */
+  const reload = useCallback((afterWrite?: boolean) => {
     generation.current += 1;
     const mine = generation.current;
     return inDoor(() => begin(false), () => end(false), load, (res, err) => {
@@ -840,10 +1043,12 @@ export function useDataDoor<T>(
       if (mine !== generation.current) return;
       if (!res) {
         to.current.onLoadFail("UNEXPECTED", err);
+        if (afterWrite) to.current.onStaleAfterWrite?.();
         return;
       }
       if (!res.ok) {
         to.current.onLoadFail(res.code);
+        if (afterWrite) to.current.onStaleAfterWrite?.();
         return;
       }
       to.current.onData(res.data);
@@ -863,15 +1068,27 @@ export function useDataDoor<T>(
     key: StringKey,
     onResult: PopupResult<R>,
   ): Promise<void> {
+    // ★ 지난 왕복의 말은 여기서 낡는다(R7) — **시작할 때** 거둔다. 정착 뒤에 거두면 이번
+    //   왕복이 방금 적은 말까지 같이 지운다.
+    to.current.onStart?.();
     return inDoor(() => begin(writing), () => end(writing), call, (res, err) => {
+      // ★ **성공한 변이**만 §4-I ⑥의 대상이다: 실패는 이미 사유를 말했고, 왕복이 죽은 경우는
+      //   무엇이 쓰였는지조차 모른다 — 거기에 "동작은 끝났습니다"를 얹으면 거짓이 된다.
+      let wroteOk = false;
+      // ★★ **§4-I ⑥은 「성공 침묵」의 예외다.** 이번 왕복이 이미 창으로 결과를 말했다면 화면은
+      //   침묵하지 않았고, 사용자는 무슨 일이 있었는지 이미 읽었다 — 그 위에 창을 하나 더 얹으면
+      //   중첩 깊이 ≤1 불변식만 깨고 새로 알려 주는 것은 없다. 그때 「화면이 낡았다」는
+      //   **둘째 줄 note**가 계속 말한다(자리가 다르고, 창이 닫혀도 남는다 — ⑥의 마지막 조항).
+      let spoken = false;
       if (res) {
-        onResult(res);
+        spoken = onResult(res) === true;
         if (!writing || isTokenIssue(res)) return;
+        wroteOk = res.ok;
       } else {
         to.current.onCallFail(key, err);
         if (!writing) return;
       }
-      reload();
+      reload(wroteOk && !spoken);
       notify.current?.();
     });
   }
@@ -916,6 +1133,11 @@ export function usePopupData<T>(
   failKey: StringKey,
   /** 변이 통지 — 확정 실행이 끝나면 이 훅이 부른다(팝업이 각자 부르지 않는다). */
   onMutate?: () => void,
+  /**
+   * **성공했는데 화면이 못 따라온 경우**에 부른다(§4-I ⑥). 판정은 문이 하고, **그리는 것은
+   * 팝업의 일**이다 — 이 훅은 확인 게이트를 모른다(알면 두 훅이 서로를 붙잡는다).
+   */
+  onStaleAfterWrite?: () => void,
 ): {
   data: T | null;
   /**
@@ -951,6 +1173,8 @@ export function usePopupData<T>(
    *   **무관한 조회 하나가 성공했다는 이유로** 사라진다. 출처를 함께 들어 자기 것만 거둔다.
    */
   const ownLoadNote = useRef(false);
+  const stale = useRef(onStaleAfterWrite);
+  stale.current = onStaleAfterWrite;
 
   const setReloadNote = useCallback((value: string | null) => {
     ownLoadNote.current = false;
@@ -960,6 +1184,10 @@ export function usePopupData<T>(
   const door = useDataDoor<T>(
     load,
     {
+      // ★ **동작 note는 직전 왕복의 말이다**(R7) — 새 동작이 걸리면 그 말은 낡는다.
+      //   둘째 줄(`loadNote`)은 여기서 손대지 않는다: 그쪽은 *"화면이 낡았다"*는 다른 사실이고
+      //   자기 출처(`ownLoadNote`)를 보고 스스로 거둔다.
+      onStart: () => setNote(null),
       onData: (payload) => {
         // ★ 상태 반영보다 **먼저** — 아래 setData로 다시 그려질 때 이미 새 이름이어야 한다.
         const named = payload as { profile_names?: { dock?: string; internal?: string } };
@@ -972,6 +1200,9 @@ export function usePopupData<T>(
         setLoadNoteState(tCode(code, failKey));
       },
       onCallFail: (key) => setNote(tCode("UNEXPECTED", key)),
+      // ★ ref로 최신 것을 부른다 — 이 훅이 만들어질 때의 클로저를 잡으면 확인창 안에 갇힌
+      //   옛 콜백이 불린다(문이 `notify`를 ref로 드는 것과 같은 이유).
+      onStaleAfterWrite: () => stale.current?.(),
     },
     onMutate,
   );

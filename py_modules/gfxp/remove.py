@@ -153,17 +153,97 @@ def delete_preview(reg, appid):
         "saved_at": {p: (metas[p] or {}).get("saved_at") or "" for p in PROFILES},
         "backups": len(store.list_backups(appid)),
         "config_path": config_path if isinstance(config_path, str) else "",
+        # ★ 이 해제가 **실제로 지울 백업**(R14 #1 — 적용·복원·저장과 같은 필드·같은 문구).
+        #   대피는 슬롯 본체를 링에 밀어 넣으므로, 링이 차 있으면 그만큼 오래된 백업이 사라진다.
+        #   *"현재 백업 N건"*만 말하던 자리가 **무엇이 사라지는지는 말하지 않았다.**
+        "evicted": evict_on_delete(appid),
     }
+
+
+def evacuable_names(appid, profile):
+    """그 슬롯에서 **대피 대상이 되는 본체 파일 이름들**. 조회 전용이다.
+
+    ★ `_evacuate`와 **같은 목록**이어야 한다(R14 #1): 하나는 세고 하나는 지우는데 기준이 갈리면
+      확인창이 약속한 축출 수와 실제가 어긋난다. 그래서 걸러내는 규칙을 여기 한 곳에 둔다 —
+      점으로 시작하는 이름(`.applied`·크래시 잔재)·`meta.json`·**링크**·비일반 파일은 제외.
+      (링크는 `_evacuate`가 거부하는 대상이라 대피도 축출도 일어나지 않는다.)
+    """
+    directory = store.profile_dir(appid, profile)
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        if name.startswith(".") or name == _META:
+            continue
+        path = os.path.join(directory, name)
+        if os.path.islink(path) or not os.path.isfile(path):
+            continue
+        out.append(name)
+    return out
+
+
+def evict_on_delete(appid):
+    """이 게임을 등록 해제할 때 **실제로 지워질 백업**(대피가 링을 밀어내는 만큼).
+
+    ⚠️ import를 함수 안에서 한다: `restore`가 이 모듈을 import하므로(restore.py) 최상단에서
+      맞import하면 순환이 된다. `confirm._evict_preview`가 세운 문법 그대로다 — 부르는 자리에서
+      한 줄로 끊는 편이 실패 모드가 없다.
+    """
+    appid = str(appid)
+    if not _paths_in_position(appid):
+        return []                              # 안전하지 않은 키는 조회하지 않는다(Codex #2)
+    from . import restore
+    adding = sum(len(evacuable_names(appid, p)) for p in PROFILES)
+    return restore.evict_preview(appid, adding=adding)
+
+
+def reset_evict_preview(reg):
+    """전체 초기화가 **실제로 지울 백업** — `{"evicted": N, "evict_games": M, "fingerprint": …}`.
+
+    일괄 적용의 같은 이름 함수와 **같은 판단**이다(R14 #1): 게임이 여럿이라 이름 대신 수만
+    약속하고, 그 수는 게임별 산출(`evict_on_delete`)의 합이라 나열본과 같은 근거에서 나온다.
+
+    ★★ `fingerprint`는 **화면 값이 아니라 토큰에 묶을 값**이다(2026-08-15 QA 재심 B).
+      `reset_fingerprint`의 링 신호는 게임별 **개수**(`bk=%d`)뿐이라 **포화 링이 한 칸 도는
+      동안 개수는 10으로 불변**이고, 그러면 확인창이 약속한 것과 **다른 파일**이 지워지는데도
+      낡은 토큰이 통과한다. 그래서 개수가 아니라 **대상 목록 자체**를 지문으로 낸다
+      (`restore.evict_digest` — 일괄 적용과 같은 함수·같은 문법).
+    ⚠️ **재는 것 / 못 재는 것**: 재는 것은 이 호출 시점에 게임별로 지워질 **backup_id 전량과
+      순서**다. 못 재는 것은 ⓐ 실행 시점에만 나는 실패(대피 실패·경로 봉쇄)로 그 게임의 삭제가
+      통째로 중단되는 갈래 — 예고보다 **덜** 지워지는 안전한 방향이다(§15-D E19와 같은 성질)
+      ⓑ 게임별 예외로 건너뛴 게임 ⓒ 축출이 0건인 게임의 링 변화(약속한 것이 없다).
+    """
+    from . import restore                      # 순환 회피 — `evict_on_delete`와 같은 이유·같은 문법
+    plan = []
+    for appid in sorted(reg["games"]):
+        try:
+            rows = evict_on_delete(appid)
+        except Exception:                      # noqa: BLE001 — 게임별 격리(초기화 루프와 동형)
+            continue
+        if rows:
+            plan.append((str(appid), [row["backup_id"] for row in rows]))
+    return {"evicted": sum(len(ids) for _, ids in plan),
+            "evict_games": len(plan),
+            "fingerprint": restore.evict_digest(plan)}
 
 
 def delete_fingerprint(appid):
     """개별 삭제 토큰에 묶을 상태 지문.
 
     ★ 지문 조각은 **meta 파일 자체의 sha**(`sha1_file`)다 — meta *내용*의 `sha1` 필드가 아니다.
-      내용이 같은 재저장도 `saved_at`이 갱신돼 파일 sha가 바뀌므로 토큰이 무효가 된다(Codex #4:
-      내용 sha만 보면 동일 재저장에 낡은 토큰이 통과한다). 여기에 **백업 개수**를 더한다 —
-      같은 초에 재저장돼 `saved_at`까지 같더라도, 재저장은 직전 프로필을 백업으로 대피시키므로
-      백업 링이 늘어 지문이 바뀐다(두 신호가 서로의 빈틈을 막는다).
+      `engine.save_profile`은 R13부터 디스크 내용이 meta의 `sha1` 필드·파일명과 같고 **슬롯
+      본체도 멀쩡하면** 한 바이트도 안 쓴다(`saved_at`도 그대로 — engine.py:456 주석 정본).
+      그래서 순수한 "내용 같은 재저장"은 지금은 상태가 아예 안 변하고, 그때는 지문도 그대로인
+      게 맞다(확인창이 보여준 saved_at·백업 개수가 실제로 하나도 안 바뀌었으므로).
+      Codex #4가 잡던 구멍은 **meta의 `sha1` 필드는 그대로인데 실제로는 쓰기가 일어나는** 갈래다
+      — 대표적으로 슬롯 본체가 깨진 채로의 재저장: 캡처하는 내용은 이전과 같아 `sha1` 필드는
+      안 바뀌지만, 본체 무결성 검사가 걸려 무쓰기 분기를 타지 않으므로 대피본이 쌓이고
+      `saved_at`이 갱신된다. 내용 sha 필드만 보면 이 경우도 "안 바뀜"으로 오판하지만, **meta
+      파일** 전체의 sha는 `saved_at` 변화를 실어 여기서 잡힌다. 여기에 **백업 개수**를 더한다 —
+      같은 초에 재저장돼 `saved_at`까지 같더라도, 실제로 일어난 재저장은 직전 프로필을 백업으로
+      대피시키므로 백업 링이 늘어 지문이 바뀐다(두 신호가 서로의 빈틈을 막는다).
 
     ★ 확인창을 띄운 사이 어느 슬롯이든 저장/적용되면 이 지문이 변해 낡은 토큰이 거부된다(TOCTOU).
 
@@ -229,14 +309,15 @@ def _evacuate(appid, profile):
     except OSError as exc:
         # 목록조차 못 읽으면 무엇을 대피시켜야 하는지 알 수 없다 = 대피 실패다.
         _backup_failed(appid, exc, directory)
+    # ── 링크 게이트 — **대피를 한 건도 시작하기 전에** 목록 전체를 본다 ─────────
+    #   ★ 슬롯 **안의 링크**는 대피 대상이 아니다(Codex #3). `os.path.isfile`은 링크를
+    #     따라가 `read_bytes`가 외부 파일(.sav 등)을 백업에 복사한다 — ".sav를 열지 않는다"는
+    #     경계가 무너진다. `islink`는 lstat 기반이라 따라가지 않는다. 대피 전이라 원본은
+    #     아직 무손실이므로 여기서 거부하면 아무것도 잃지 않는다.
     for name in names:
         if name.startswith(".") or name == _META:
             continue
         path = os.path.join(directory, name)
-        # ★ 슬롯 **안의 링크**는 대피 대상이 아니다(Codex #3). `os.path.isfile`은 링크를
-        #   따라가 `read_bytes`가 외부 파일(.sav 등)을 백업에 복사한다 — ".sav를 열지 않는다"는
-        #   경계가 무너진다. `islink`는 lstat 기반이라 따라가지 않는다. 대피 전이라 원본은
-        #   아직 무손실이므로 여기서 거부하면 아무것도 잃지 않는다.
         if os.path.islink(path):
             _log.error("delete refused appid=%r stage=escape slot=%s name=%s (링크된 파일)",
                        appid, profile, name)
@@ -244,8 +325,12 @@ def _evacuate(appid, profile):
                 "거부: 프로필 안에 링크된 파일이 있습니다 — %s\n"
                 "  링크를 따라가면 외부 파일을 백업에 복사하게 됩니다. 지우지 않았습니다." % path,
                 code=codes.DELETE_FAILED, appid=str(appid), stage="escape")
-        if not os.path.isfile(path):
-            continue
+
+    # ── 대피 — **세는 목록과 같은 함수**를 돈다(R14 #1) ─────────────────────────
+    #   확인창이 약속한 축출 수는 `evacuable_names`로 산출된다. 지우는 쪽이 다른 목록을 돌면
+    #   약속과 실제가 갈린다 — 두 곳에서 판정하지 않는다.
+    for name in evacuable_names(appid, profile):
+        path = os.path.join(directory, name)
         try:
             # 정상 저장이 덮어쓰기 전에 하는 대피와 **같은 문법**이다(engine.py:456-460).
             # 삭제 = "빈 내용으로 덮어쓰기"이므로 대피가 선행해야 대칭이다(설계 §2-A).

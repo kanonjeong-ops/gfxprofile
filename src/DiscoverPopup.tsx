@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { makeDiscoverWarnSpec } from "./confirmSpecs";
 import { Focusable, ToggleField } from "./deckyui";
 import { pickConfigFile } from "./filepicker";
@@ -6,7 +6,8 @@ import { IconRefresh, IconRestore, IconSearch } from "./icons";
 import { t, tCode } from "./i18n";
 import {
   CARD_INNER_STYLE, CARD_STYLE, GfxPopup, ICON_SLOT_STYLE, PopupButton, PopupScrollList,
-  PopupSubView, STACKED_BUTTON_STYLE, STACKED_DESC_PAD, listRowNavProps, subViewKey,
+  PopupSubView, ROW_FLOW, STACKED_BUTTON_STYLE, STACKED_DESC_PAD, listRowNavProps,
+  preferredChildEntryProps, subViewKey,
   usePopupData, usePopupGate, type DView,
 } from "./popup";
 import {
@@ -165,6 +166,7 @@ function EntryCard({
   entry,
   busy,
   focused,
+  takeFocus,
   open,
   chosen,
   onAdd,
@@ -176,6 +178,8 @@ function EntryCard({
   busy: boolean;
   /** 이 행에 착지시킬 것인가(§4-E ① — 팝업 D의 초기 포커스는 첫 후보 카드다). */
   focused: boolean;
+  /** 마운트하면서 **스스로 포커스를 가져올 것인가**(호출부의 `firstCards` 주석이 정본). */
+  takeFocus: boolean;
   open: boolean;
   /** 이 게임에서 지금 고른 후보 경로. 없으면 빈 문자열. */
   chosen: string;
@@ -185,7 +189,18 @@ function EntryCard({
   onChoose: (entry: DiscoverEntry, path: string) => void;
 }) {
   return (
-    <Focusable {...listRowNavProps} preferredFocus={focused} style={CARD_STYLE}>
+    /* ★★ 두 축이 **같은 카드**를 가리킨다(팝업 G의 `GameCard`와 같은 관용구 — 그 주석이 정본):
+         `preferredFocus`는 진입 컨테이너(`renderMain`의 `preferredChildEntryProps`)를 지나
+         포커스가 **들어올 때** 읽히고, `autoFocus`는 **마운트 시점**에 스스로 요청한다.
+         후보 목록은 스캔이 끝나야 도착하므로(진입 t+0에는 카드가 없다) 진입만으로는 늦고,
+         반대로 매 마운트마다 켜면 필터 조작 중에 포커스를 훔친다 — 그래서 `takeFocus`는
+         **첫 데이터 도착 한 번**이다. */
+    <Focusable
+      {...listRowNavProps}
+      preferredFocus={focused}
+      autoFocus={takeFocus}
+      style={CARD_STYLE}
+    >
       <div style={CARD_INNER_STYLE}>
         <div style={ROW_STYLE}>
           <div style={{ flex: "1 1 auto", minWidth: 0 }}>
@@ -193,7 +208,10 @@ function EntryCard({
             <div style={META_STYLE}>{badgeText(entry)}</div>
           </div>
           {entry.registered ? null : (
-            <div style={{ display: "flex", gap: "4px", flex: "0 0 auto" }}>
+            /* ★ ROW_FLOW를 **여기** 건다(바깥 카드가 아니라) — 후보를 펼치면 카드의 자식이
+               「버튼 줄 + 세로로 쌓인 후보 행들」로 섞인다. 카드에 가로를 걸면 그때 후보로
+               내려가는 상하 이동이 죽는다. 가로인 것은 이 버튼 두 개뿐이다. */
+            <Focusable {...ROW_FLOW} style={{ display: "flex", gap: "4px", flex: "0 0 auto" }}>
               {entry.confident && entry.best ? (
                 /* ★ 확신 단일 매치는 **모달 없이 1탭**이다(현행 유지): 후보가 하나뿐이라
                    펼쳐 봐야 고를 것이 없고, 경고도 구조적으로 발생하지 않는다. */
@@ -216,7 +234,7 @@ function EntryCard({
               <PopupButton disabled={busy} onClick={() => onPick(entry)} style={ROW_PICK_STYLE}>
                 {t("DISCOVER_PICK_FILE")}
               </PopupButton>
-            </div>
+            </Focusable>
           )}
         </div>
 
@@ -278,6 +296,20 @@ export function DiscoverPopup({
   const entries = data ? data.entries : [];
   const counts = data ? data.counts : null;
   const excluded = data ? data.excluded : [];
+
+  /**
+   * **첫 데이터 도착인가** — 후보 카드의 `autoFocus`를 켤 유일한 순간이다(팝업 G와 같은 관용구,
+   * 그 파일의 `firstCards` 주석이 정본).
+   *
+   * ★ 이 화면도 구조가 같다: 진입 시점엔 아직 「훑는 중」이라 고를 카드가 없고, 카드는
+   *   비동기로 도착한다. 그래서 진입 컨테이너의 `PREFERRED_CHILD`만으로는 첫 착지가 늦는다.
+   * ★ 반대로 매 마운트마다 켜면 필터를 되돌릴 때 포커스를 훔친다 — 그래서 한 번만이다.
+   */
+  const cardsSeenRef = useRef(false);
+  const firstCards = entries.length > 0 && !cardsSeenRef.current;
+  useEffect(() => {
+    if (entries.length > 0) cardsSeenRef.current = true;
+  }, [entries.length]);
 
   /**
    * 등록 — 후보 1탭 등록·후보 선택·파일 선택기가 **같은 함수**를 쓴다.
@@ -466,7 +498,14 @@ export function DiscoverPopup({
 
   function renderMain() {
     return (
-      <div style={COLUMN_STYLE}>
+      /* ★★ 기본 뷰의 **진입 컨테이너**다(팝업 G `renderList`와 같은 자리·같은 근거):
+         후보 카드의 `preferredFocus`는 이 선언이 있는 컨테이너를 지나 포커스가 들어올 때만
+         읽힌다(Steam `FindFocusableDescendant` 실측 — `preferredChildEntryProps` 주석).
+         선언이 없던 동안 "초기 포커스는 첫 후보 카드"라는 주석은 **거짓이었다**(문서 순서상
+         첫 focusable인 [다시 검색]이 가져갔다).
+         ⚠️ 자리는 여기 하나뿐이다 — 액션 줄·필터·목록을 **함께** 품어야 하므로 스크롤 목록에
+           붙이면 팝업 진입이 그 바깥에서 시작해 여전히 [다시 검색]에 선다. */
+      <Focusable {...preferredChildEntryProps} style={COLUMN_STYLE}>
         <div style={SUMMARY_ROW_STYLE}>
           <div>{summaryText()}</div>
           {hiddenN > 0 ? <div style={META_STYLE}>{t("DISCOVER_HIDDEN_NOTE", { n: hiddenN })}</div> : null}
@@ -475,7 +514,7 @@ export function DiscoverPopup({
         {/* ★ GP#7 — [다시 검색]이 **먼저**다: 진입 직후의 A 관성이 착지하는 자리가 무해한
             쪽(다시 읽기)이어야 한다. 일괄 등록은 대상이 0이면 아예 그리지 않는다 —
             눌러도 아무 일이 없는 버튼은 라벨이 거짓말을 한다. */}
-        <Focusable style={ACTION_ROW_STYLE}>
+        <Focusable {...ROW_FLOW} style={ACTION_ROW_STYLE}>
           <PopupButton disabled={busy} onClick={() => reload()} style={RESCAN_BUTTON_STYLE}>
             <span style={ICON_SLOT_STYLE}><IconRefresh /></span>
             {t("DISCOVER_RESCAN")}
@@ -518,6 +557,7 @@ export function DiscoverPopup({
               entry={entry}
               busy={busy}
               focused={index === 0}
+              takeFocus={firstCards && index === 0}
               open={expanded === entry.appid}
               chosen={picked[entry.appid] ?? ""}
               onAdd={(e, path) => { void register(e.appid, path, e.name); }}
@@ -537,7 +577,7 @@ export function DiscoverPopup({
         </Focusable>
         {/* H5 — 이 버튼이 무엇을 하는 것인지 그 자리에서 말한다(자기 설명). */}
         <div style={DESC_STYLE}>{t("DISCOVER_PICK_FILE_DESC")}</div>
-      </div>
+      </Focusable>
     );
   }
 
@@ -554,23 +594,30 @@ export function DiscoverPopup({
         <PopupScrollList>
           {excluded.map((row) => (
             <Focusable key={row.appid} {...listRowNavProps} style={CARD_STYLE}>
-              <div style={{ ...CARD_INNER_STYLE, ...ROW_STYLE }}>
-                <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-                  <div style={NAME_STYLE}>{row.name}</div>
-                  {/* 날짜를 모르면 그 줄을 그리지 않는다 — 빈 값을 라벨로 감싸면 화면이 거짓을
-                      말한다(백엔드가 만든 표시값을 그대로 쓴다). */}
-                  {row.excluded_at_label ? (
-                    <div style={META_STYLE}>{t("DISCOVER_EXCLUDED_ROW", { date: row.excluded_at_label })}</div>
-                  ) : null}
+              {/* ★★ 안쪽은 **후보 카드와 같은 이중 구조**다(위 `DiscoverCard`와 같은 관용구):
+                  폭 상한은 바깥 `CARD_INNER_STYLE`, 가로 배치는 안쪽 `ROW_STYLE`.
+                  두 상수를 한 div에 펼쳐 합치면 `CARD_INNER_STYLE`의 `flexDirection:"column"`이
+                  살아남아(`ROW_STYLE`에 방향이 없어 못 덮는다) 이름이 가운데로 좁아지고
+                  [다시 포함]이 그 아래로 내려간다(2026-08-15 실측: 글 x397 w125 · 버튼 x400 y348). */}
+              <div style={CARD_INNER_STYLE}>
+                <div style={ROW_STYLE}>
+                  <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+                    <div style={NAME_STYLE}>{row.name}</div>
+                    {/* 날짜를 모르면 그 줄을 그리지 않는다 — 빈 값을 라벨로 감싸면 화면이 거짓을
+                        말한다(백엔드가 만든 표시값을 그대로 쓴다). */}
+                    {row.excluded_at_label ? (
+                      <div style={META_STYLE}>{t("DISCOVER_EXCLUDED_ROW", { date: row.excluded_at_label })}</div>
+                    ) : null}
+                  </div>
+                  <PopupButton
+                    disabled={busy}
+                    onClick={() => { void runInclude(row); }}
+                    style={INCLUDE_BUTTON_STYLE}
+                  >
+                    <span style={ICON_SLOT_STYLE}><IconRestore /></span>
+                    {t("DISCOVER_INCLUDE")}
+                  </PopupButton>
                 </div>
-                <PopupButton
-                  disabled={busy}
-                  onClick={() => { void runInclude(row); }}
-                  style={INCLUDE_BUTTON_STYLE}
-                >
-                  <span style={ICON_SLOT_STYLE}><IconRestore /></span>
-                  {t("DISCOVER_INCLUDE")}
-                </PopupButton>
               </div>
             </Focusable>
           ))}
@@ -582,8 +629,10 @@ export function DiscoverPopup({
 
   // ── 뷰 선택 ────────────────────────────────────────────────────────────────
   //
-  // ⚠️ 분기를 한 줄에 이어 쓰지 않는다 — `A /> : x ? <B` 형태가 되면 `test_i18n_sets`의
-  //   JSX 텍스트 정규식이 그 사이의 코드를 화면 글자로 오인해 거짓 FAIL을 낸다.
+  // ⚠️ *"분기를 한 줄에 이어 쓰지 않는다"*(`A /> : x ? <B` 금지)는 관례의 **근거는 소멸했다** —
+  //   그 사이의 코드를 화면 글자로 오인하던 `qa/test_i18n_sets.py`는 2026-08-15 UI 검사 계열
+  //   삭제에 함께 지워졌다. 지금 이 관례를 강제하는 것은 없다. 아래처럼 **이른 반환 문장으로
+  //   나눠 쓰는 형태**는 읽기 쉬워서 유지할 뿐이고, 어겨도 깨지는 검사는 이제 없다.
   function renderView() {
     if (view.kind === "excluded") {
       return (

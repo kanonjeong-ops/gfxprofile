@@ -294,7 +294,14 @@ def game_or_fail(reg, appid):
 
 
 def disk_state(reg, appid):
-    """디스크의 현재 설정 파일이 어느 프로필과 일치하는지."""
+    """디스크의 현재 설정 파일이 어느 프로필과 일치하는지.
+
+    ★★ `matches`는 *"이 내용은 저 슬롯에 **보존돼 있다**"*는 주장이다(2026-08-15 R14 #4).
+      그래서 기록(meta)이 아니라 **본체 실측**까지 본 `store.slot_holds`로 판정한다. meta는
+      B라는데 본체가 없거나 C인 슬롯을 "일치"라고 말하면, 그 위에서 `apply_profile`이
+      **대피(백업)를 생략하고** 게임 설정 파일을 덮어 **마지막 온전한 사본이 사라진다.**
+      모르면 `None`(=일치 없음)이라 항상 고지·대피 쪽으로 접힌다.
+    """
     entry = game_or_fail(reg, appid)
     path = entry["config_path"]
     result = {"exists": os.path.exists(path), "sha1": None, "matches": None}
@@ -302,8 +309,7 @@ def disk_state(reg, appid):
         return result
     result["sha1"] = store.sha1_file(path)
     for profile in store.list_profiles(appid):
-        meta = store.load_meta(appid, profile)
-        if meta and meta.get("sha1") == result["sha1"]:
+        if store.slot_holds(appid, profile, result["sha1"]):
             result["matches"] = profile
             break
     return result
@@ -435,7 +441,11 @@ def add_game(reg, appid, config_path, name=None):
 
 
 def save_profile(reg, appid, profile):
-    """현재 디스크 상태를 프로필로 캡처한다."""
+    """현재 디스크 상태를 프로필로 캡처한다.
+
+    반환의 `outcome`은 두 값이다 — `"saved"`(실제로 캡처했다) / `"already"`(**한 바이트도
+    쓰지 않았다**). 아래 무쓰기 분기 주석이 그 계약의 정본이다.
+    """
     appid = str(appid)
     entry = game_or_fail(reg, appid)
     path = entry["config_path"]
@@ -449,21 +459,55 @@ def save_profile(reg, appid, profile):
     check_sanity(data, old.get("size") if old else None, None,
                  what="현재 설정 파일")                                      # G4
 
+    # ---- 달라지는 것이 없으면 **아무것도 쓰지 않는다** (R13 — 설계 §14-B 링 보존)
+    #
+    # 저장은 슬롯을 덮기 전에 이전 내용을 대피시키는데(바로 아래), 그 대피본은 게임당 10칸짜리
+    # 링(`store.BACKUP_KEEP`)을 한 칸 태우고 **가장 오래된 복구 지점을 밀어낸다.** 내용이 이미
+    # 같으면 얻는 것 없이 그 손실만 남는다 — `apply_profile`이 "이 파일에만 있는 내용일 때만
+    # 대피"로 정한 것과 같은 근거이고(§14-B), 사용자 쪽에서 보면 **아무것도 안 바뀌는 동작이
+    # 복구 지점 하나를 조용히 먹는** 고지 없는 손실이다. `saved_at`도 같이 지킨다: 실제로
+    # 캡처한 적 없는 시각이 찍히면 "언제 저장한 프로필인가"가 거짓이 된다.
+    # ★ 판정은 **지금 읽은 바이트**로 한다(route가 미리 잰 값이 아니라). 재는 시점과 쓰는 시점
+    #   사이에 게임·클라우드가 파일을 바꿔도 결론이 어긋나지 않는다 — `apply_profile`이 쓰기
+    #   직전에 다시 확인하는 것과 같은 문법이다.
+    # ★ 기록이 아니라 **슬롯의 실물**과 대조한다: meta만 믿으면 본체가 깨졌거나 사라진 슬롯에서
+    #   "이미 같다"며 넘어가 **재저장으로 고칠 길이 사라진다.** 파일명이 달라진 경우도 쓴다 —
+    #   그때는 슬롯에 남는 파일 이름이 실제로 바뀌므로 "달라지는 것이 없다"가 거짓이다.
+    # ★ 판정은 **공용 술어 한 곳**이다(`store.slot_holds`) — 적용의 "다른 슬롯에 보존됨"과
+    #   복원의 "이미 같다"가 같은 질문을 각자 답하다 서로 어긋났던 자리다(R14 #4·#5).
+    if store.slot_holds(appid, profile, store.sha1_bytes(data), os.path.basename(path)):
+        # 실행 중 경고도 싣지 않는다 — 저장 자체가 없었으므로 "지금 캡처하면"이 성립하지 않는다.
+        return {"meta": old, "warning": None, "outcome": "already"}
+
     warning = None
     if running_game(appid):
-        warning = ("주의: 게임이 실행 중입니다. 지금 캡처하면 게임이 종료하며 다시 쓸 값이 아니라 "
-                   "현재 디스크 상태가 저장됩니다.")
+        # ★ 문장이 아니라 **코드**를 돌려준다(R14 #10). 백엔드가 한국어 문장을 실어 보내면
+        #   영어 화면에 한국어가 그대로 붙는다(실제로 붙어 있었다 — `GamesPopup`이 성공 문구
+        #   뒤에 이 값을 이어 그렸다). 문장은 화면이 현재 언어로 고른다.
+        warning = codes.WARN_SAVE_WHILE_RUNNING
     if old:                                                # 덮어쓰기 전 프로필도 대피
         old_file = store.profile_file_path(appid, profile)
         if old_file and os.path.exists(old_file):
-            store.make_backup(appid, store.read_bytes(old_file),
-                              "profile_%s" % profile, old["filename"])
+            try:
+                store.make_backup(appid, store.read_bytes(old_file),
+                                  "profile_%s" % profile, old["filename"])
+            except OSError as exc:                         # G13 — 대피 실패면 아무것도 쓰지 않는다
+                # ★ **백업 호출만 좁게 잡는다**(R14 #7). 넓게 잡으면 다른 실패까지 삼켜
+                #   `BACKUP_FAILED`가 거짓 사유가 된다. 접착층이 이 예외를 `PROFILE_META_CORRUPT`로
+                #   오인하던 자리이기도 하다 — 사용자가 **원인과 다른 복구 안내**를 받았다.
+                raise Refused("거부: 백업에 실패해 저장을 중단했습니다 (%s). 프로필은 그대로입니다."
+                              % exc, code=codes.BACKUP_FAILED)
     meta = store.write_profile(appid, profile, os.path.basename(path), data, src=path)
-    return {"meta": meta, "warning": warning}
+    return {"meta": meta, "warning": warning, "outcome": "saved"}
 
 
 def apply_profile(reg, appid, profile):
-    """프로필을 제자리에 적용한다. 적용 전에 현재 상태를 이전 프로필로 체크인한다."""
+    """프로필을 제자리에 적용한다 — **한 방향이다**(저장된 프로필 → 게임 설정 파일).
+
+    ★ 13판 A11(2026-08-15): 적용 과정에서 프로필 슬롯을 **어떤 경우에도** 덮어쓰지 않는다.
+      12판까지 여기 있던 체크인(적용 직전 현재 파일을 직전 적용 슬롯에 되쓰기)은 삭제됐다 —
+      실기에서 "적용을 여섯 번 눌렀는데 파일이 한 번도 안 바뀐" 원인이 그것이었다(설계 §14-A).
+    """
     appid = str(appid)
     entry = game_or_fail(reg, appid)
     path = entry["config_path"]
@@ -491,33 +535,15 @@ def apply_profile(reg, appid, profile):
     # 이 경로를 탄다. 원래 주석("체크인이 덮기 전에 학습부터")이 강제하던 순서 제약도
     # 학습을 안 하는 이상 사라진다. 사정은 M1-FIELD-ISSUES-2026-08-03.md.
 
-    # ---- 체크인: 현재 디스크 상태를 직전 프로필로 되쓴다 (G3)
-    previous = entry.get("last_applied")
-    if previous not in ("dock", "internal"): previous = None    # v2: 손상 값은 경로 조각이 된다
+    # ---- 체크인은 13판에서 삭제됐다 (설계 §14-A · A11)
+    #
+    # 여기 있던 블록은 적용 **직전에** 현재 디스크를 `last_applied` 슬롯으로 되쓰고, 그 값을
+    # 다시 디스크에 썼다. 직전 적용이 지금 적용과 같은 프로필이면 「방금 바꾼 값 → 그 슬롯 →
+    # 다시 디스크」가 되어 **파일이 한 바이트도 안 바뀐다**(실기 6회 재현, 로그는 성공을 6회 찍었다).
+    # 근본은 *직전 적용 기록이 현재 파일의 정체를 증명하지 못한다*는 것이다 — 게임 업데이트·
+    # 수동 복원·클라우드 동기화가 같은 차이를 만든다.
+    # `state`는 남긴다: 아래 백업 조건이 쓴다.
     state = disk_state(reg, appid)
-    if state["exists"]:
-        if not previous:
-            notes.append("체크인 건너뜀: 이전에 적용한 프로필 기록이 없습니다 (G3).")
-        elif state["matches"] == previous:
-            notes.append("체크인 불필요: 디스크가 '%s'와 동일합니다." % previous)
-        elif state["matches"] and state["matches"] != previous:
-            notes.append(
-                "체크인 건너뜀: 디스크가 다른 프로필 '%s'와 정확히 일치합니다 (G3 — 모드 혼선 방지)."
-                % state["matches"]
-            )
-        else:
-            disk_data = store.read_bytes(path)
-            prev_meta = store.load_meta(appid, previous)
-            check_sanity(disk_data, prev_meta.get("size") if prev_meta else None,
-                         prev_meta.get("lines") if prev_meta else None,
-                         what="체크인할 현재 파일")               # G4
-            if prev_meta:
-                prev_file = store.profile_file_path(appid, previous)
-                if prev_file and os.path.exists(prev_file):
-                    store.make_backup(appid, store.read_bytes(prev_file),
-                                      "profile_%s" % previous, prev_meta["filename"])
-            store.write_profile(appid, previous, os.path.basename(path), disk_data, src=path)
-            notes.append("체크인: 현재 설정을 프로필 '%s'에 반영했습니다." % previous)
 
     # ---- 적용
     #
@@ -525,12 +551,21 @@ def apply_profile(reg, appid, profile):
     # 현재 디스크(=직전 프로필)와 크기·줄 수를 비교하면, 두 프로필이 정상적인 이유로
     # 크게 다를 때 전환 자체가 영구히 거부된다 — 그건 이 툴이 하려는 일 그 자체다.
     check_sanity(target_data, what="적용할 프로필")               # G4
+    # ---- 대피본은 **이 파일에만 있는 내용일 때만** 만든다 (설계 §14-B)
+    #
+    # 디스크가 어느 슬롯과 같으면 그 내용은 이미 슬롯에 보존돼 있다. 그때도 백업하면 10칸 링
+    # (`store.BACKUP_KEEP`)을 1칸 태우고, 그만큼 **정작 되돌려야 할 지점이 밀려 사라진다**
+    # (`apply_all`이 :594-601에서 이미 확정한 판단과 같은 근거다).
+    # ⚠️ 그러나 `state`는 위(:497)에서 잰 값이고 쓰기는 아래(:544)다. 그 사이에 게임·클라우드가
+    #   파일을 고유값으로 바꾸면 **어느 슬롯에도 백업에도 없는 내용**을 덮게 된다.
+    #   그래서 **쓰기 직전에 다시 확인한다** — 비용은 sha1 1회뿐이다(파일은 어차피 여기서 다시 읽는다).
     if state["exists"]:
         disk_data = store.read_bytes(path)
-        try:
-            store.make_backup(appid, disk_data, "disk", os.path.basename(path))
-        except OSError as exc:                                   # G13
-            raise Refused("거부: 백업에 실패해 적용을 중단했습니다 (%s). 원본은 그대로입니다." % exc, code=codes.BACKUP_FAILED)
+        if not state["matches"] or store.sha1_bytes(disk_data) != state["sha1"]:
+            try:
+                store.make_backup(appid, disk_data, "disk", os.path.basename(path))
+            except OSError as exc:                               # G13
+                raise Refused("거부: 백업에 실패해 적용을 중단했습니다 (%s). 원본은 그대로입니다." % exc, code=codes.BACKUP_FAILED)
 
     # 권한과 소유자를 그대로 이어받는다. 소유자 보존은 Decky(백엔드가 root) 확장을 막지 않기 위함.
     mode = None
@@ -690,21 +725,66 @@ def forget_sticky(reg, appid):
     return {"removed": removed, "candidates": candidates}
 
 
-def restore_backup(reg, appid, backup_path):
-    """백업을 제자리에 되돌린다. 되돌리기 전 현재 상태도 백업한다."""
+def restore_backup(reg, appid, backup_path, target="config"):
+    """백업을 **되돌릴 곳**으로 되돌린다. 되돌리기 전 그 자리의 현재 내용도 백업한다.
+
+    `target="config"`        → 게임 설정 파일(12판까지의 유일한 동작).
+    `target="dock"|"internal"` → **그 프로필 슬롯**(설계 §14-C · 13판 신설).
+
+    ★ 왜 새 함수가 아니라 인자인가: *"쓰기의 문은 이 함수 하나"*가 계약이고(restore.py:9-11)
+      그래서 G15(`assert_backup_in_root`)·G4(`check_sanity`)가 한 문에 산다. 문을 둘로 만들면
+      언젠가 한쪽에 가드가 빠진다. 두 가드는 **분기보다 앞**에 그대로 있다.
+    ★ 슬롯 복원은 **실행 중을 거부하지 않는다**: 프로필 슬롯은 게임이 읽지도 쓰지도 않는
+      플러그인 데이터다. 거부하면 *"게임 켜 둔 채 프로필만 되돌리기"*라는 안전한 조작이 막힌다
+      (선례 = 실행 중 저장은 허용+경고, :452-455).
+    ★ 슬롯 복원은 `applied_sha1`·`last_learn_sha1`을 **건드리지 않는다** — 디스크가 안 바뀌었다.
+    """
     appid = str(appid)
     entry = game_or_fail(reg, appid)
     path = entry["config_path"]
     check_path(appid, path)
     assert_backup_in_root(appid, backup_path)             # G15 (v2 신설)
-    if running_game(appid):
+    if target == "config" and running_game(appid):
         raise Refused("거부: 게임이 실행 중입니다.", code=codes.GAME_RUNNING)
     if not os.path.exists(backup_path):
         raise Refused("거부: 백업 파일이 없습니다 — %s" % backup_path, code=codes.BACKUP_FILE_MISSING)
     data = store.read_bytes(backup_path)
     check_sanity(data, what="백업 파일")
+    if target in ("dock", "internal"):
+        # 대피 조건은 `save_profile`(:456-460)과 **같은 문법·같은 조건**이다 — meta가 dict이고
+        # 본체가 실재할 때만 대피한다. 아니면 대피할 대상 자체를 특정할 수 없다(설계 §5-C ⓗ·E11).
+        try:
+            old = store.load_meta(appid, target)
+        except (OSError, ValueError):
+            # 복원은 **망가진 상태를 되돌리는 경로**다. 손상된 meta 하나로 그 경로가 막히면
+            # 사용자에게 남는 수단이 없다(restore._disk_state와 같은 판단·같은 이유).
+            old = None
+        old_name = old.get("filename") if isinstance(old, dict) else None
+        if not isinstance(old_name, str) or not old_name:
+            old_name = None
+        if old_name:
+            old_file = store.profile_file_path(appid, target)
+            if old_file and os.path.exists(old_file):
+                try:
+                    store.make_backup(appid, store.read_bytes(old_file),
+                                      "profile_%s" % target, old_name)
+                except OSError as exc:                    # G13 — 대피 실패면 아무것도 쓰지 않는다
+                    # 적용·저장·삭제와 **같은 코드**로 나간다(R14 #7). 예전에는 이 예외가 그대로
+                    # 올라가 접착층에서 `UNEXPECTED`가 됐고, 같은 실패가 경로마다 다른 사유로
+                    # 보였다 — 사용자는 원인과 다른 복구 안내를 받는다.
+                    raise Refused("거부: 백업에 실패해 복원을 중단했습니다 (%s). 원본은 그대로입니다."
+                                  % exc, code=codes.BACKUP_FAILED)
+        # 슬롯 본체의 이름은 **그 슬롯이 이미 쓰던 이름**을 유지한다(모르면 설정 파일 이름 —
+        # `save_profile`이 쓰는 값과 같다). 이름을 갈면 옛 본체가 고아로 남는다.
+        store.write_profile(appid, target, old_name or os.path.basename(path),
+                            data, src=backup_path)
+        return {"restored": backup_path}
     if os.path.exists(path):
-        store.make_backup(appid, store.read_bytes(path), "disk", os.path.basename(path))
+        try:
+            store.make_backup(appid, store.read_bytes(path), "disk", os.path.basename(path))
+        except OSError as exc:                            # G13 — 위 슬롯 갈래와 같은 문법
+            raise Refused("거부: 백업에 실패해 복원을 중단했습니다 (%s). 원본은 그대로입니다."
+                          % exc, code=codes.BACKUP_FAILED)
     store.atomic_write(path, data)
     entry["applied_sha1"] = store.sha1_bytes(data)
     entry["last_learn_sha1"] = None

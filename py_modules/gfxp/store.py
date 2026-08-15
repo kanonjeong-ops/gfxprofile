@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import pwd
+import re
 import tempfile
 import time
 
@@ -272,7 +273,81 @@ def write_profile(appid, profile, filename, data, src):
     return meta
 
 
+def slot_holds(appid, profile, sha1, filename=None):
+    """그 슬롯이 **실제로** 그 내용을 들고 있는가 — 기록(meta)이 아니라 **본체 실측**까지 본다.
+
+    ★★ **판정의 문은 여기 하나다**(2026-08-15 R14 #4·#5). 예전에는 세 소비자가 각자 물었다:
+      · `save_profile`의 무쓰기 분기 — meta sha ∧ 파일명 ∧ 본체 sha (세 가지를 다 봤다)
+      · `disk_state`의 `matches`     — **meta sha만** 봤다
+      · `restore.needs_confirm`의 `already` — **meta sha만** 봤다
+      뒤의 둘이 "이 내용은 저 슬롯에 보존돼 있다"는 **거짓 전제**를 만들 수 있었다(meta는 B라는데
+      본체가 없거나 C인 저장소 손상). 그 전제 위에서 적용은 **대피(백업)를 생략하고** 게임 설정
+      파일을 덮었고, 복원은 *"이미 같다"*며 **손상된 슬롯을 못 고쳤다.**
+      → 셋이 같은 술어를 부른다. 모르면 **거짓**을 돌려준다(안전한 쪽 = 고지·대피·쓰기 경로).
+
+    `filename`을 주면 **그 이름으로 남아 있는지**까지 본다(저장의 무쓰기 판정만 쓴다 —
+    이름이 달라지면 슬롯에 남는 파일이 실제로 바뀌므로 "달라지는 것이 없다"가 거짓이 된다).
+    """
+    if not sha1 or not isinstance(sha1, str):
+        return False
+    try:
+        meta = load_meta(appid, profile)
+    except (OSError, ValueError):
+        return False                          # 기록을 못 읽으면 "들고 있다"고 말할 수 없다
+    if not isinstance(meta, dict) or meta.get("sha1") != sha1:
+        return False
+    if filename is not None and meta.get("filename") != filename:
+        return False
+    name = meta.get("filename")
+    if not isinstance(name, str) or not name:
+        return False                          # 본체를 가리킬 수 없다
+    body = os.path.join(profile_dir(appid, profile), name)
+    return os.path.exists(body) and sha1_file(body) == sha1
+
+
 # ---------------------------------------------------------------- 백업
+
+#: 백업 파일명 `<stamp>-<tag>[-<n>]-<filename>`에서 **생성 순서**를 읽는다.
+#: stamp는 `%Y%m%d-%H%M%S`(하이픈 포함 15자)이고, 그 뒤 tag 다음에 오는 정수가 같은 초 안의
+#: 일련번호다. 접미사가 없으면 0(그 초의 첫 백업)이다.
+_ORDER_RE = re.compile(r"^(\d{8}-\d{6})-[^-]+-(?:(\d+)-)?.+$")
+
+
+def backup_order_key(name):
+    """정렬·prune·표시가 **함께 쓰는** 순서 키 `(stamp, seq, name)`. 클수록 새것이다.
+
+    ★★ 왜 사전순이 아닌가(2026-08-15 R14 #3): 같은 초의 충돌 접미사는 **문자열로 비교하면
+      `-10-`이 `-2-`보다 앞선다.** 역사전순 prune은 그 순서의 꼬리를 자르므로, 같은 초에
+      12건이 쌓이면 **열 번째로 만든 백업이 두 번째 것보다 먼저 잘려 나갔다** —
+      화면과 문서가 약속한 *"오래된 것부터 사라진다"*의 정반대이고, `make_backup`이
+      **방금 지워진 경로를 성공값으로** 돌려주는 자리이기도 했다.
+    ★ 옛 이름과 새 이름이 섞여도 규칙은 하나다: 이 함수는 **파일명만** 보고 순서를 읽으므로
+      기존 백업(같은 명명 규칙으로 만들어진 것)이 그대로 올바른 자리에 놓인다. 명명 규칙을
+      바꾸지 않은 이유가 그것이다 — 바꾸면 마이그레이션 없이는 옛 파일의 순서를 잃는다.
+    ⚠️ 형식을 못 읽는 이름(사용자가 넣은 파일 등)은 `("", -1, name)`으로 **가장 오래된 것**
+      취급한다. 표시 정렬(`restore.backup_rows`)이 이미 같은 결론을 내고 있었고, 두 순서가
+      갈리면 화면이 지워지지 않을 파일 이름을 댄다.
+    """
+    m = _ORDER_RE.match(name)
+    if not m:
+        return ("", -1, name)
+    return (m.group(1), int(m.group(2) or 0), name)
+
+
+def _next_seq(directory, stamp):
+    """같은 초 안에서 **단조 증가하는** 다음 일련번호. 0이면 접미사를 붙이지 않는다.
+
+    ★ 이름 충돌만 피하는 것으로는 부족하다: tag가 다르면 충돌이 안 나서 같은 초의 두 백업이
+      **둘 다 seq 0**이 되고, 그러면 둘 사이의 생성 순서를 파일명만으로는 알 수 없다.
+      그 초의 최대 번호 + 1을 쓰면 순서가 이름에 남는다.
+    """
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return 0
+    used = [key[1] for key in map(backup_order_key, names) if key[0] == stamp]
+    return max(used) + 1 if used else 0
+
 
 def make_backup(appid, data, tag, filename):
     """어떤 쓰기든 그 전에 여기를 거친다. 실패하면 호출자가 작업을 중단해야 한다 (G13)."""
@@ -280,19 +355,29 @@ def make_backup(appid, data, tag, filename):
     os.makedirs(directory, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     safe_tag = tag.replace("/", "_").replace(":", "_")
-    name = "%s-%s-%s" % (stamp, safe_tag, filename)
-    path = os.path.join(directory, name)
-    # 같은 초에 두 번 백업하면 덮어쓰므로 접미사를 붙인다.
-    suffix = 1
+    seq = _next_seq(directory, stamp)
+    path = os.path.join(directory, _backup_name(stamp, safe_tag, seq, filename))
+    # 같은 초에 두 번 백업하면 덮어쓰므로 접미사를 붙인다. (위 `_next_seq`가 이미 비켜 준
+    # 자리라 보통 한 번도 돌지 않는다 — 남겨 두는 것은 **덮어쓰기만은 구조로 막기** 위해서다.)
     while os.path.exists(path):
-        path = os.path.join(directory, "%s-%s-%d-%s" % (stamp, safe_tag, suffix, filename))
-        suffix += 1
+        seq += 1
+        path = os.path.join(directory, _backup_name(stamp, safe_tag, seq, filename))
     atomic_write(path, data)
-    prune_backups(appid)
+    # ★ **방금 쓴 파일은 이 자리에서 지워지지 않는다**(불변식). 순서 키가 옳으면 어차피 맨
+    #   앞이지만, 이름을 못 읽는 극단(위 `backup_order_key`의 폴백)에서도 이 인자가 그 사실을
+    #   보장한다 — 성공값으로 돌려주는 경로가 이미 지워진 경로일 수는 없다.
+    prune_backups(appid, protect=path)
     return path
 
 
+def _backup_name(stamp, safe_tag, seq, filename):
+    if seq <= 0:
+        return "%s-%s-%s" % (stamp, safe_tag, filename)
+    return "%s-%s-%d-%s" % (stamp, safe_tag, seq, filename)
+
+
 def list_backups(appid):
+    """그 게임의 백업 **최신순**. prune·축출 예고·화면 목록이 전부 이 순서를 쓴다."""
     directory = backups_dir(appid)
     if not os.path.isdir(directory):
         return []
@@ -301,12 +386,17 @@ def list_backups(appid):
         for name in os.listdir(directory)
         if not name.startswith(".gfxprofile-tmp-")
     ]
-    return sorted(entries, reverse=True)
+    return sorted(entries, key=lambda p: backup_order_key(os.path.basename(p)), reverse=True)
 
 
-def prune_backups(appid):
-    entries = list_backups(appid)
-    for path in entries[BACKUP_KEEP:]:
+def prune_backups(appid, protect=None):
+    """링을 `BACKUP_KEEP`칸으로 자른다 — **오래된 것부터**(위 `backup_order_key`).
+
+    `protect`는 방금 쓴 파일이다. 절대 지우지 않고, 대신 한 칸을 차지한 것으로 센다.
+    """
+    entries = [p for p in list_backups(appid) if p != protect]
+    keep = BACKUP_KEEP - (1 if protect else 0)
+    for path in entries[keep:]:
         try:
             os.unlink(path)
         except OSError:

@@ -1,6 +1,7 @@
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  makeDeleteConfirmSpec, makeRestoreConfirmSpec, makeRestoreFollowUpSpec, makeSaveConfirmSpec,
+  makeApplyConfirmSpec, makeDeleteConfirmSpec, makeRestoreConfirmSpec, makeRestoreFollowUpSpec,
+  makeResultSpec, makeSaveConfirmSpec,
 } from "./confirmSpecs";
 import { Focusable, ToggleField } from "./deckyui";
 import {
@@ -8,15 +9,16 @@ import {
 } from "./icons";
 import { t, tCode } from "./i18n";
 import {
-  CARD_INNER_STYLE, CARD_STYLE, GfxPopup, ICON_SLOT_STYLE, PopupButton, PopupScrollList,
-  PopupSubView, STACKED_BUTTON_STYLE, STACKED_DESC_PAD, listRowNavProps, subViewKey,
+  CARD_INNER_STYLE, CARD_STYLE, GfxPopup, ICON_SLOT_STYLE, PATH_BREAK_STYLE, PopupButton,
+  PopupScrollList, PopupSubView, ROW_FLOW, STACKED_BUTTON_STYLE, STACKED_DESC_PAD,
+  listRowNavProps, preferredChildEntryProps, subViewKey,
   usePopupData, usePopupGate, type GView,
 } from "./popup";
 import { slotSummary } from "./slots";
 import {
   applyProfile, deleteGame, getOverview, listBackups, restoreBackup, saveProfile,
-  type BackupRow, type ConfirmParams, type DeleteConfirmParams, type Overview, type OverviewGame,
-  type Profile, type RestoreConfirmParams,
+  type ApplyConfirmParams, type BackupRow, type ConfirmParams, type DeleteConfirmParams,
+  type Overview, type OverviewGame, type Profile, type RestoreConfirmParams,
 } from "./rpc";
 
 /**
@@ -53,7 +55,7 @@ const META_STYLE = { fontSize: "11px", color: "#9aa0a6", wordBreak: "keep-all" }
  *   내려오고, 경로에는 끊을 낱말 경계가 없어 그러면 줄이 통째로 넘친다.
  * 소비자는 둘 — 상세 뷰의 `GAME_CONFIG_PATH`, 백업 목록 행의 `BACKUP_ROW_META`(파일명).
  */
-const PATH_STYLE = { ...META_STYLE, wordBreak: "normal" } as const;
+const PATH_STYLE = { ...META_STYLE, ...PATH_BREAK_STYLE } as const;
 /**
  * 동작 버튼 아래 설명 줄 — 들여쓰기가 버튼의 가로 패딩과 같아 **라벨과 축을 공유**한다(§4-G 3항).
  * 이 상수는 `ActionButton`의 desc 전용이다(다른 설명 줄과 섞어 쓰지 말 것 — 축 공유가 깨진다).
@@ -129,6 +131,21 @@ function RunningChip({ game }: { game: OverviewGame }) {
   return <span style={CHIP_STYLE}>{t("RUNNING_CHIP")}</span>;
 }
 
+/**
+ * **`[프로필과 다름]` 칩**(R13 §5-A) — 지금 게임 설정 파일이 저장된 어느 프로필과도 다르다.
+ *
+ * ★★ 목적은 **적용 확인창이 놀라움이 되지 않게** 하는 것이다: 확인창이 뜨는 조건이 바로 이
+ *   상태이므로, 누르기 전에 보이면 창은 예고된 것이 된다(§4-I ⑤-ⓑ — 팝업을 참게 만드는 것이
+ *   아니라 **팝업의 이유를 줄인다**).
+ * ★ 자리도 모양도 `RunningChip`과 같다 — **줄 수가 변하지 않는다**(§4-I ①-ⓒ).
+ * ★ 프로필이 하나도 없으면 그리지 않는다(A6 — 없는 것을 지적하지 않는다).
+ */
+function DivergedChip({ game }: { game: OverviewGame }) {
+  if (game.disk_matches.length > 0) return null;
+  if (!game.has_dock && !game.has_internal) return null;
+  return <span style={CHIP_STYLE}>{t("SLOT_DIVERGED")}</span>;
+}
+
 /** 백업 종류 문구 — **판정은 백엔드의 `kind` 코드**이고 화면은 문구만 고른다. */
 function kindText(row: BackupRow): string {
   if (row.kind === "profile_dock" || row.kind === "profile_internal") {
@@ -140,11 +157,26 @@ function kindText(row: BackupRow): string {
   return t("BACKUP_KIND_UNKNOWN");
 }
 
+/**
+ * **되돌릴 곳** 한 줄 — 판정은 백엔드의 `target`이고 화면은 문구만 고른다(§5-C ⓐ).
+ *
+ * ⚠️ `kind`로 고르지 않는다: 파일명이 바뀐 프로필 대피본은 `unknown`으로 접히고 그때 목적지는
+ *   게임 설정 파일이다(`restore.parse_backup_id`). 두 값의 파생 규칙이 갈리는 날 화면이
+ *   **실제로 쓰이는 곳과 다른 곳**을 가리킨다.
+ */
+function targetText(row: BackupRow): string {
+  if (row.target === "dock" || row.target === "internal") {
+    return t("BACKUP_ROW_TARGET_PROFILE", { profile: t(profileKey(row.target)) });
+  }
+  return t("BACKUP_ROW_TARGET_DISK");
+}
+
 /** 목록 행 하나(§5-A). 게임명 + [eGPU 적용][내장 적용][›] + 메타 한 줄. */
 function GameCard({
   game,
   busy,
   focused,
+  takeFocus,
   onApply,
   onOpen,
 }: {
@@ -152,12 +184,42 @@ function GameCard({
   busy: boolean;
   /** 이 행에 착지시킬 것인가(§4-E ① — 목록 복귀 시 마지막 조작 행). */
   focused: boolean;
+  /** 마운트하면서 **스스로 포커스를 가져올 것인가**(호출부의 `firstCards` 주석이 정본). */
+  takeFocus: boolean;
   onApply: (game: OverviewGame, profile: Profile) => void;
   onOpen: (game: OverviewGame) => void;
 }) {
   const has: Record<Profile, boolean> = { dock: game.has_dock, internal: game.has_internal };
   return (
-    <Focusable {...listRowNavProps} preferredFocus={focused} style={CARD_STYLE}>
+    // ★ ROW_FLOW — 이 카드 안의 focusable은 버튼 3개가 **한 줄에 나란히** 서 있다.
+    //   빠뜨리면 좌우 키가 죽고 위아래로만 순회한다(2026-08-15 실기 ①).
+    //   ★★ 여기가 **실기 ①이 실제로 난 자리**다: 카드 스타일(`CARD_STYLE`)은 flex가 아니라
+    //     배경·패딩만 있는 블록이라, 지정이 없으면 Steam의 방향 추정이 `column`으로 떨어진다
+    //     (추정 규칙은 `ROW_FLOW` 주석). flex 행인 다른 줄들과 갈리는 지점이 이것이다.
+    /* ★★ `autoFocus`가 **같이** 서 있는 이유(D4 — 2026-08-15 실기 타임라인):
+         `preferredFocus`는 *"컨테이너로 포커스가 들어올 때 누구를 고를까"*이고, 그 진입은
+         **팝업이 처음 그려지는 순간 딱 한 번** 일어난다. 그런데 그때 목록은 아직
+         「불러오는 중…」이고 **카드가 존재하지 않는다**(실측: 진입 t+0ms 시점 버튼 1개 ·
+         30ms 뒤에 28개). 없는 자식을 고를 수는 없으니 Steam은 문서 순서로 떨어지고 —
+         필터 토글이 이긴다. 데이터가 도착해도 **다시 들어오는 일이 없으므로** 포커스는
+         거기 머문다(실측: 같은 요소가 y251→y141로 밀려났을 뿐 이동 0회).
+         `autoFocus`는 **마운트 시점에** 그 노드가 스스로 포커스를 요청하는 다른 축이라
+         (`library.js` `OnMount` → `DeferredFocus.RequestFocus`), 늦게 도착한 카드에도 듣는다.
+       ★ 둘은 경쟁하지 않는다 — **같은 카드**를 가리키고, 서로가 못 막는 갈래를 하나씩 맡는다:
+         진입이 늦으면 `preferredFocus`(상세→목록 복귀 실측 확인), 진입이 이르면 `autoFocus`.
+         한쪽만 두면 그 갈래에서만 조용히 어긋난다.
+       ★★ 다만 두 축의 **조건은 다르다**(`focused` vs `takeFocus`): `autoFocus`는 *마운트할
+         때마다* 듣기 때문에, 필터를 끄면서 숨었던 카드가 되돌아오는 순간에도 발동해
+         **필터 줄에 있던 커서를 목록으로 끌어간다**(실측 (580,141)→(479,421)). 사용자는
+         방금 만진 토글 자리에 있길 기대하므로(다시 켤 수도 있다) 그건 포커스 훔치기다.
+         → 조건을 **첫 데이터 도착 한 번**으로 좁힌다(호출부 `firstCards`). */
+    <Focusable
+      {...listRowNavProps}
+      {...ROW_FLOW}
+      preferredFocus={focused}
+      autoFocus={takeFocus}
+      style={CARD_STYLE}
+    >
       <div style={CARD_INNER_STYLE}>
         <div style={ROW_STYLE}>
           <div style={NAME_STYLE}>{game.name}</div>
@@ -170,14 +232,16 @@ function GameCard({
               onClick={() => onApply(game, p)}
               style={{
                 ...APPLY_BUTTON_STYLE,
-                background: game.disk_matches === p ? MARKED_BACKGROUND : undefined,
+                /* ★ 배열 판정(R13 §5-A): 두 프로필의 내용이 같으면 **두 버튼 모두**에 마커가 선다.
+                   12판은 백엔드가 첫 일치만 골라 나머지 한쪽을 "적용 안 됨"이라 거짓말했다. */
+                background: game.disk_matches.includes(p) ? MARKED_BACKGROUND : undefined,
               }}
             >
               <span style={ICON_SLOT_STYLE}>{profileIcon(p)}</span>
               {t("APPLY_SHORT", { profile: t(profileKey(p)) })}
               {/* ★ 마커 자리는 **항상** 있다 — 없을 땐 같은 폭의 빈 자리다(GP#2).
                   마커가 있어도 누를 수 있다: 재적용은 백엔드에서 `already`로 무해하다. */}
-              <span style={MARKER_SLOT_STYLE}>{game.disk_matches === p ? <IconCheck /> : null}</span>
+              <span style={MARKER_SLOT_STYLE}>{game.disk_matches.includes(p) ? <IconCheck /> : null}</span>
             </PopupButton>
           ))}
           {/* ★ 톱니가 아니라 chevron이다(H4) — 톱니는 전역 [설정] 전용이라 여기 쓰면
@@ -190,6 +254,7 @@ function GameCard({
           {/* 문장은 `slots.ts` 한 곳에서 만든다 — 목록과 상세가 같은 말을 해야 한다(F5). */}
           {slotSummary(game)}
           <RunningChip game={game} />
+          <DivergedChip game={game} />
         </div>
       </div>
     </Focusable>
@@ -243,13 +308,71 @@ export function GamesPopup({
   const [backups, setBackups] = useState<BackupRow[] | null>(null);
 
   const load = useCallback(() => getOverview(true), []);
+  /* ★ 게이트를 **먼저** 만든다: 아래 데이터 훅이 §4-I ⑥에서 결과 팝업을 띄우려면 게이트가
+     이미 있어야 한다. `usePopupGate`는 데이터에 의존하지 않으므로 순서만 바꾸면 된다. */
+  const { gate, renderBody } = usePopupGate();
+  /**
+   * 결과 팝업을 띄우는 자리 — **ref로 든다**(§4-I ⑥ 배선).
+   * 데이터 훅이 이 함수를 부르는데, 그 함수는 데이터 훅이 준 `setNote`를 쓴다. 순환을 값으로
+   * 풀면 한쪽이 반드시 낡으므로 **최신 것을 가리키는 상자**를 둔다(문이 `notify`를 드는 방식 그대로).
+   */
+  const showResultRef = useRef<(text: string) => void>(() => {});
   /* ★ 변이 통지·재조회·busy는 **훅 한 곳**을 지난다(§4-F 개정) — 이 파일에는 그 배선이 없다. */
   const { data, noteText, setNote, setReloadNote, noteView, busy, reload, runMutation, runQuery } =
-    usePopupData<Overview>(load, "LOAD_FAILED", onMutate);
-  const { gate, renderBody } = usePopupGate();
+    usePopupData<Overview>(load, "LOAD_FAILED", onMutate,
+      // §4-I ⑥ — 성공했는데 화면이 못 따라온 경우. **판정은 문이 했고** 여기는 그리기만 한다.
+      () => showResultRef.current(t("RESULT_STALE_NOTE")));
+
+  /**
+   * **결과 팝업**(§4-I ②·④) — 새 줄이 생기는 통지는 전부 여기로 나간다.
+   *
+   * ★★ 왜 note가 아닌가: 목록 뷰의 note는 **스크롤 목록 위**에 있어 줄이 하나 생기면 아래 목록
+   *   전체가 내려간다 — 방금 누른 행이 손가락 아래에서 움직이는 자리다.
+   * ★ 창을 못 띄우면 **그 결과를 note로** 말한다(창이 안 떴다는 사실보다 결과가 중요하다).
+   *   그때는 note가 그 사정도 같이 말한다 — 사용자가 왜 여기 적혔는지 알 수 있게.
+   */
+  const showResult = useCallback(
+    (text: string): true => {
+      gate(makeResultSpec(<div>{text}</div>), "RESULT_MODAL_FAILED",
+           (why) => setNote(`${text} ${why}`));
+      // ★ **말했다는 사실**을 문에 돌려준다(§4-I ⑥) — 문은 이걸 보고 stale 창을 겹치지 않는다.
+      //   창을 못 띄운 경우에도 note로 말했으므로 사실은 같다(침묵이 아니다).
+      return true;
+    },
+    [gate, setNote],
+  );
+  showResultRef.current = showResult;
 
   const games = data?.games ?? [];
   const counts = data?.counts;
+
+  /**
+   * **첫 데이터 도착인가** — 카드의 `autoFocus`를 켤 유일한 순간이다(D4 후속).
+   *
+   * ★ 왜 한 번뿐인가: `autoFocus`가 필요한 갈래는 *"팝업 진입 시점엔 목록이 아직 「불러오는
+   *   중…」이라 고를 카드가 없었다"* 하나뿐이다. 그 뒤의 마운트(필터 OFF로 숨었던 카드가
+   *   되돌아오는 것)는 **사용자가 다른 곳을 조작하던 중**이라, 같은 prop이 그때는 포커스
+   *   훔치기가 된다.
+   * ★ 왜 ref를 **effect에서** 내리는가: 렌더 도중 뒤집으면 그 렌더가 버려질 때(동시성 모드의
+   *   재실행) 첫 도착을 놓친다. 커밋 뒤에 내리면 화면에 실제로 나간 렌더가 기준이 된다.
+   * ★ 목록으로 **돌아올 때**의 착지는 이것과 무관하다 — 진입 컨테이너의 `PREFERRED_CHILD`가
+   *   맡는다(`renderList`의 주석 · 실측 확인). 그래서 좁혀도 잃는 갈래가 없다.
+   */
+  const cardsSeenRef = useRef(false);
+  const firstCards = games.length > 0 && !cardsSeenRef.current;
+  useEffect(() => {
+    if (games.length > 0) cardsSeenRef.current = true;
+  }, [games.length]);
+
+  /**
+   * **지금 어느 뷰인가** — 아래 두 판정(무엇을 다시 읽는가 · 결과를 말할 것인가)이 이 값에 달렸다.
+   *
+   * ★ 왜 ref인가: 동작 콜백들은 deps를 고정해 두므로(재생성되면 확인창 안에 갇힌 옛 콜백이
+   *   생긴다) 상태를 직접 읽으면 **첫 렌더의 뷰**를 본다. 최신 것을 가리키는 상자를 둔다 —
+   *   `showResultRef`가 순환을 푸는 방식 그대로다.
+   */
+  const viewRef = useRef(view);
+  viewRef.current = view;
 
   /**
    * 백업 뷰의 목록을 **다시 읽는다**(D-07 ⓐ). 실패해도 화면은 남는다 — 둘째 줄이 말한다.
@@ -276,28 +399,78 @@ export function GamesPopup({
   );
 
   /**
-   * 적용 — **확인창 없이 즉시**다(사용자 확정: 가장 자주 누르는 버튼이라 순수 마찰이다).
+   * **백업 목록을 보고 있으면 그것을 다시 읽는다** — 재조회 판정의 문 하나(D-07 ⓐ 확장).
    *
-   * ★ 성공·실패 **양쪽에서** 체크인을 병기한다(§5-E): 엔진은 체크인을 쓴 **뒤에** 백업·쓰기
-   *   실패로 거부할 수 있어, *"적용은 실패했는데 프로필은 이미 바뀐"* 상태가 실재한다.
-   *   성공 경로에만 붙이면 화면이 그 상태에 침묵한다.
+   * ★★ 왜 호출부가 아니라 여기인가(2026-08-15 QA R1): 백업을 만드는 동작은 복원만이 아니다.
+   *   **적용도 `disk` 대피본을 1건 만들고**, 링이 차 있으면 그 순간 목록의 마지막 행이 사라진다.
+   *   그런데 재조회가 복원 경로에만 손으로 붙어 있어서, 백업 뷰에서 출발한 적용(복원 후속 제안의
+   *   [지금 적용])이 그대로 빠졌다 — **방금 지워진 백업의 [복원] 버튼**이 화면에 남고, 누르면
+   *   `BACKUP_FILE_MISSING`이 뜬다. 규칙을 뷰에 묶어 두면 새 동작이 늘어도 따라온다.
+   */
+  const refreshShownBackups = useCallback(() => {
+    const shown = viewRef.current;
+    if (shown.kind === "backups") refreshBackups(shown.appid);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * 적용이 **실제로 쓴 뒤** — 침묵할지 말할지를 여기 한 곳에서 정한다.
+   *
+   * ★★ 성공 침묵(§4-I ⓪)의 전제는 *"화면이 그 변화를 보인다"*이고, 그 전제는 **뷰마다 다르다**:
+   *   목록·상세에는 적용 마커와 슬롯 요약이 있어 참이지만, **백업 목록 뷰에는 둘 다 없다.**
+   *   거기서 침묵하면 [지금 적용]을 눌러도 화면이 한 픽셀도 안 바뀌고, **무반응은 곧 고장으로
+   *   읽힌다**(A12). 설계가 복원 결과에 대해 같은 근거를 적어 둔 자리(§5-C)와 같은 판단이다.
+   * ★ 판정을 호출부에 두지 않는다 — "지금 어느 뷰였더라"를 기억하게 하면 다음에 추가되는
+   *   동작이 또 빠뜨린다(이번 결함이 정확히 그렇게 났다).
+   */
+  const settleApplied = useCallback(
+    (profile: Profile): boolean | void => {
+      refreshShownBackups();
+      if (viewRef.current.kind !== "backups") return;   // 마커가 그 자리에서 옮겨 간다 — 침묵(⓪)
+      return showResult(t("APPLY_OK", { profile: t(profileKey(profile)) }));
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [showResult],
+  );
+
+  /**
+   * 적용 — **저장된 프로필 → 게임 설정 파일** 한 방향이다(A11). 묻는 조건은 백엔드가 정한다.
+   *
+   * ★★ 결과를 말하는 규칙이 셋이다(§4-I):
+   *   · `applied` → **뷰가 정한다**(`settleApplied`). 마커가 보이는 뷰에서는 침묵, 마커가 없는
+   *     백업 뷰에서는 결과 팝업 — 침묵의 전제가 그 화면에서 성립하지 않는다.
+   *   · `already` → **결과 팝업.** 아무것도 안 바뀐 것은 화면이 못 보이고, 무반응은 곧 고장으로
+   *     읽힌다(A12) — 실기 결함 ③이 정확히 이 자리였다.
+   *   · 거부·실패 → **결과 팝업**(사유).
+   * ★ `CONFIRM_REQUIRED`는 흐름 신호다: 확인창을 띄우고 **받은 토큰을 그대로** 되돌려 재호출한다.
+   *   토큰은 방향에 묶여 있어 다른 프로필에는 소비되지 않는다.
    */
   const runApply = useCallback(
-    (game: OverviewGame, profile: Profile) => {
+    (game: OverviewGame, profile: Profile, token?: string) => {
       // 확정 실행이다 — 재조회·변경 통지는 **성공·실패를 가리지 않고** 훅이 붙인다(§4-F ③).
-      // 체크인만 일어난 실패가 정확히 그 이유다: 디스크·백업이 이미 바뀌었을 수 있다.
-      void runMutation(() => applyProfile(game.appid, profile), "APPLY_FAILED", (res) => {
-        const checkedIn = res.ok
-          ? res.data.checked_in
-          : ((res.params as unknown as { checked_in?: Profile | null }).checked_in ?? null);
-        const base = res.ok
-          ? t("APPLY_ONE_OK", { profile: t(profileKey(profile)) })
-          : tCode(res.code, "APPLY_FAILED");
-        setNote(checkedIn ? `${base} ${t("CHECKIN_ONE", { profile: t(profileKey(checkedIn)) })}` : base);
+      void runMutation(() => applyProfile(game.appid, profile, token), "APPLY_FAILED", (res) => {
+        if (res.ok) {
+          if (res.data.outcome === "applied") return settleApplied(profile);
+          return showResult(t("APPLY_ALREADY", { profile: t(profileKey(profile)) }));
+        }
+        if (res.code === "CONFIRM_REQUIRED") {
+          const p = res.params as unknown as ApplyConfirmParams;
+          gate(
+            makeApplyConfirmSpec(p, profile, () => { runApply(game, profile, p.confirm_token); }),
+            // 토큰이 안 돌아가면 적용은 일어나지 않는다 — 이 문구가 참인 자리다.
+            "APPLY_CONFIRM_MODAL_FAILED",
+            setNote,
+          );
+          return;
+        }
+        // ★ 실패도 **쓴 뒤일 수 있다**(대피본은 만들고 그 다음 쓰기에서 죽는 갈래) — 백업 뷰에
+        //   있다면 목록이 이미 낡았다. 복원의 실패 갈래와 같은 판단·같은 문(D-07 ⓐ).
+        refreshShownBackups();
+        return showResult(tCode(res.code, "APPLY_FAILED"));
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [gate, settleApplied, showResult],
   );
 
   /**
@@ -306,13 +479,29 @@ export function GamesPopup({
    *
    * ★ 실행 중 저장은 **거부가 아니라 경고**다(engine.py:452-455). 봉투의 `warning`을 성공
    *   note에 병기한다 — 저장은 됐지만 값이 게임 종료 시 달라질 수 있다는 사실이다.
+   *
+   * ★★ 결과를 말하는 규칙이 **적용과 대칭**이다(§4-I · R13):
+   *   · `saved` → **침묵.** 슬롯 상태와 저장 시각이 화면에서 바뀌므로 화면 자체가 결과다.
+   *   · `already` → **결과 팝업.** 백엔드가 한 바이트도 쓰지 않은 갈래라 화면이 하나도 안 바뀐다 —
+   *     무반응은 곧 고장으로 읽힌다(A12). 적용의 `APPLY_ALREADY`와 같은 자리·같은 문법이다.
    */
   const runSave = useCallback(
     (appid: string, profile: Profile, token?: string) =>
       runMutation(() => saveProfile(appid, profile, token), "SAVE_FAILED", (res) => {
         if (res.ok) {
-          const ok = t("SAVE_OK", { profile: t(profileKey(profile)) });
-          setNote(res.data.warning ? `${ok} ${res.data.warning}` : ok);
+          if (res.data.outcome === "already") {
+            return showResult(t("SAVE_ALREADY", { profile: t(profileKey(profile)) }));
+          }
+          // ★ 저장 성공은 **침묵**이다(§4-I ⓪·⑤-ⓐ) — 슬롯 상태와 저장 시각이 화면에서 바뀐다.
+          //   단 실행 중 저장의 경고는 **화면이 못 보이는 사실**이라 그때만 말한다.
+          if (res.data.warning) {
+            // ★ 봉투의 `warning`은 **코드**다(R14 #10) — 문장은 여기서 현재 언어로 고른다.
+            //   예전에는 백엔드가 한국어 문장을 실어 보내 **영어 화면에 한국어가 붙었다.**
+            //   미등재 코드는 `tCode`가 fallback으로 흘린다(단일 관문 — 원문 코드가 보인다).
+            return showResult(
+              `${t("SAVE_OK", { profile: t(profileKey(profile)) })} ${tCode(res.data.warning, "UNEXPECTED")}`,
+            );
+          }
           return;
         }
         if (res.code === "CONFIRM_REQUIRED") {
@@ -325,51 +514,58 @@ export function GamesPopup({
           );
           return;
         }
-        setNote(tCode(res.code, "SAVE_FAILED"));
+        return showResult(tCode(res.code, "SAVE_FAILED"));
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [gate],
+    [gate, showResult],
   );
 
   /**
-   * 복원 — 3-상태 계약(§15-C 불변): `already`는 무쓰기 · 설정 파일이 없으면 무토큰 즉시 ·
-   * 그 외는 `CONFIRM_REQUIRED`.
+   * 복원 — 3-상태 계약(§15-C 불변)이고 기준은 **되돌릴 곳**이다(R13 §5-C ⓑ):
+   * `already`는 무쓰기 · 되돌릴 곳이 비어 있으면 무토큰 즉시 · 그 외는 `CONFIRM_REQUIRED`.
    *
-   * ★★ **성공 뒤 재조회**(D-07): 복원은 disk 대피본을 하나 새로 만든다(`engine.py:705-709`) —
-   *   백업 목록의 행 수·순서가 그 자리에서 바뀌고, 링이 차 있으면 가장 오래된 행이 사라진다.
-   *   화면을 그대로 두면 **방금 사라진 백업의 [복원] 버튼**이 남는다. 그래서 백업 목록을
-   *   여기서 다시 읽고(overview 재조회·통지는 훅이 붙인다).
-   * ★ `already`도 **확정 실행의 응답**이라 overview 재조회·통지가 따라온다(§4-F ③ 개정):
-   *   무쓰기 여부를 프론트가 outcome으로 다시 판정하면, 그 판정이 백엔드와 갈리는 날 화면만
-   *   낡는다. 백업 목록은 링이 안 밀렸으므로 여기서 다시 읽지 않는다.
+   * ★★ **목적지는 봉투의 `target`이 정본**이다 — 프론트가 `kind`로 다시 분류하지 않는다.
+   *   두 곳에서 판정하면 언젠가 갈리고, 갈린 순간 *"확인한 곳과 다른 곳에 쓰기"*가 된다.
+   * ★★ **성공 뒤 재조회**(D-07): 복원은 대피본을 하나 새로 만든다 — 백업 목록의 행 수·순서가
+   *   그 자리에서 바뀌고, 링이 차 있으면 가장 오래된 행이 사라진다. 화면을 그대로 두면
+   *   **방금 사라진 백업의 [복원] 버튼**이 남는다.
+   * ★ 슬롯 복원 성공은 **후속 제안**으로 잇는다(§5-C ⓔ, 방향 반전): 되돌린 내용은 아직 프로필에만
+   *   있고 게임은 옛 설정으로 돈다 — 그 사실을 말하고 **적용할지 묻는다**(확인창 하나로 손실 둘을
+   *   승인받지 않으므로, 그 적용 경로가 또 물을 수 있다).
    */
   const runRestore = useCallback(
     (game: OverviewGame, row: BackupRow, token?: string) =>
       runMutation(() => restoreBackup(game.appid, row.backup_id, token), "RESTORE_FAILED", (res) => {
         if (res.ok) {
+          const target = res.data.target;
+          const slot: Profile | null =
+            target === "dock" || target === "internal" ? target : null;
+          const stamp = res.data.stamp_label || res.data.backup_id;
           if (res.data.outcome === "already") {
             // 실패가 아니다 — 되돌릴 것이 없었다는 뜻이고, 쓰기도 링 소모도 0이다.
-            setNote(t("RESTORE_ALREADY"));
-            return;
+            return showResult(slot
+              ? t("RESTORE_ALREADY_PROFILE", { profile: t(profileKey(slot)) })
+              : t("RESTORE_ALREADY"));
           }
-          const stamp = res.data.stamp_label || res.data.backup_id;
-          setNote(t("RESTORE_OK", { stamp }));
-          refreshBackups(game.appid);
-          const kind = res.data.kind;
-          if (kind === "profile_dock" || kind === "profile_internal") {
-            const profile: Profile = kind === "profile_dock" ? "dock" : "internal";
+          // ★ 재조회는 **뷰가 정한다**(R1에서 문 하나로 모았다) — 이 경로는 언제나 백업 뷰에서
+          //   출발하지만, 규칙이 호출부에 흩어져 있으면 다음 동작이 또 빠뜨린다.
+          refreshShownBackups();
+          if (slot) {
             gate(
-              makeRestoreFollowUpSpec(profile, () => { void runSave(game.appid, profile); }),
+              makeRestoreFollowUpSpec(slot, stamp, () => { runApply(game, slot); }),
               // ★ 여기서는 **복원이 이미 끝났다.** "아무것도 안 했다"고 말하면 거짓이다 —
               //   못 한 것은 후속 제안뿐이고, 그 문구가 남은 길을 알려 준다.
-              "RESTORE_FOLLOWUP_MODAL_FAILED",
+              // ★★ 치환자를 **채워서** 준다(R3): 이 문구는 *"[{profile} 적용]을 눌러 주세요"*로
+              //   끝나는데, 값을 안 주면 게이트가 중괄호를 그대로 그려 **어느 버튼인지 지목하지
+              //   못한다.** 적용 버튼은 둘이고 틀린 쪽을 누르면 다른 프로필이 게임에 쓰인다.
+              { key: "RESTORE_FOLLOWUP_MODAL_FAILED", params: { profile: t(profileKey(slot)) } },
               setNote,
             );
-            return;
+            // 후속 제안 창이 **복원 완료 문장을 품고 있다**(RESTORE_OK_PROFILE) — 창으로 말했다.
+            return true;
           }
-          // `disk`·`unknown`은 어느 슬롯의 내용인지 추론할 근거가 없다 — 안내만 한다.
-          setNote(t("RESTORE_OK_MANUAL", { stamp }));
-          return;
+          // `disk`·`unknown`은 게임 설정 파일로 간다 — 어느 슬롯의 내용인지 추론할 근거가 없다.
+          return showResult(t("RESTORE_OK_MANUAL", { stamp }));
         }
         if (res.code === "CONFIRM_REQUIRED") {
           const p = res.params as unknown as RestoreConfirmParams;
@@ -381,11 +577,11 @@ export function GamesPopup({
           return;
         }
         // GAME_RUNNING(조기 거부)·BACKUP_FILE_MISSING(그 사이 prune) 등 — tCode 단일 관문.
-        setNote(tCode(res.code, "RESTORE_FAILED"));
-        refreshBackups(game.appid);
+        refreshShownBackups();
+        return showResult(tCode(res.code, "RESTORE_FAILED"));
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [gate, refreshBackups, runSave],
+    [gate, refreshShownBackups, runApply, showResult],
   );
 
   /**
@@ -396,7 +592,7 @@ export function GamesPopup({
     (appid: string, token?: string) =>
       runMutation(() => deleteGame(appid, token), "DELETE_ACTION_FAILED", (res) => {
         if (res.ok) {
-          setNote(t("DELETE_OK", { name: res.data.name }));
+          // ★ 침묵(§4-I ⓪) — 목록으로 돌아가고 그 행이 사라진다. 화면 자체가 결과다.
           setView({ kind: "list" });
           return;
         }
@@ -413,10 +609,10 @@ export function GamesPopup({
         }
         // `DELETE_FAILED`(부분 삭제)도 여기로 온다 — 다시 해제하면 남은 것부터 이어서 지운다.
         // 그 갈래는 **일부가 이미 지워진** 변이라, 재조회·통지가 성공과 같이 따라온다(§4-F ③).
-        setNote(tCode(res.code, "DELETE_ACTION_FAILED"));
+        return showResult(tCode(res.code, "DELETE_ACTION_FAILED"));
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [gate],
+    [gate, showResult],
   );
 
   /** 백업 뷰로 — 목록을 **먼저 받아** 연다(빈 창이 떴다가 채워지는 중간 상태를 만들지 않는다). */
@@ -424,14 +620,14 @@ export function GamesPopup({
     (game: OverviewGame) =>
       runQuery(() => listBackups(game.appid), "BACKUP_LIST_FAILED", (res) => {
         if (!res.ok) {
-          setNote(tCode(res.code, "BACKUP_LIST_FAILED"));
+          showResult(tCode(res.code, "BACKUP_LIST_FAILED"));
           return;
         }
         setBackups(res.data.backups);
         setView({ kind: "backups", appid: game.appid });
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [showResult],
   );
 
   /** 등록 해제 뒤 착지할 **인접 행**(다음 항목, 없으면 이전). 목록이 비면 null이다. */
@@ -452,8 +648,12 @@ export function GamesPopup({
 
   function renderList() {
     return (
-      <div style={COLUMN_STYLE}>
-        <Focusable style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+      /* ★★ 목록 뷰의 **진입 컨테이너**다(D4): 카드의 `preferredFocus`는 이 선언이 있는
+         컨테이너를 지나 들어올 때만 읽힌다(근거는 `preferredChildEntryProps` 주석 — Steam
+         본체 실측). 필터 줄과 목록을 **함께** 품어야 하므로 자리는 여기 하나뿐이다:
+         스크롤 목록에 붙이면 팝업 진입이 그 바깥에서 시작해 여전히 필터 줄에 선다. */
+      <Focusable {...preferredChildEntryProps} style={COLUMN_STYLE}>
+        <Focusable {...ROW_FLOW} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <div style={{ flex: "1 1 auto", minWidth: 0 }}>
             <ToggleField
               label={t("FILTER_NO_PROFILE_ONLY")}
@@ -473,23 +673,32 @@ export function GamesPopup({
           </PopupButton>
         </Focusable>
 
-        {noteView}
-
         <PopupScrollList>
-          {shown.map((game, index) => (
-            <GameCard
-              key={game.appid}
-              game={game}
-              busy={busy}
-              focused={lastRow ? game.appid === lastRow : index === 0}
-              onApply={runApply}
-              onOpen={(g) => { setLastRow(g.appid); setView({ kind: "detail", appid: g.appid }); }}
-            />
-          ))}
+          {shown.map((game, index) => {
+            // 두 축이 **같은 행**을 가리킨다(GameCard 주석). 조건만 다르다.
+            const rowFocused = lastRow ? game.appid === lastRow : index === 0;
+            return (
+              <GameCard
+                key={game.appid}
+                game={game}
+                busy={busy}
+                focused={rowFocused}
+                takeFocus={firstCards && rowFocused}
+                onApply={runApply}
+                onOpen={(g) => { setLastRow(g.appid); setView({ kind: "detail", appid: g.appid }); }}
+              />
+            );
+          })}
         </PopupScrollList>
 
+        {/* ★★ note는 **목록 아래**다(§4-I ③ · 실기 결함 ③의 재발 방지). 목록 위에 두면 줄이
+            하나 생길 때마다 **아래 목록 전체가 내려가** 방금 누른 행이 손가락 아래에서 움직인다.
+            남은 소비자는 「화면이 낡았다」(재조회 실패 둘째 줄)와 결과 창을 못 띄웠을 때의
+            대타뿐이다 — 동작 결과는 전부 결과 팝업으로 나간다(§4-I ②). */}
+        {noteView}
+
         {/* ★ 「모르는 것을 없다고 말하지 않는다」 — data가 null인 것은 로딩 중이거나 조회
-            실패이지 0개가 아니다. 실패 문구는 위 note가 이미 그린다. */}
+            실패이지 0개가 아니다. 실패 문구는 note가 이미 그린다. */}
         {renderListTail()}
 
         {/* ★ U-8: 제외된 게임이 있을 때만 한 줄. 0건이면 완전 미표시다(A6 간결·"0이면 안 그림").
@@ -505,7 +714,7 @@ export function GamesPopup({
         {counts && counts.excluded > 0 ? (
           <div style={META_STYLE}>{t("GAMES_EXCLUDED_NOTE")}</div>
         ) : null}
-      </div>
+      </Focusable>
     );
   }
 
@@ -530,11 +739,17 @@ export function GamesPopup({
   }
 
   // ── 게임 상세 뷰 (§5-B) ────────────────────────────────────────────────────
+  /**
+   * 상태 줄 **4분기**(R13 §5-B) — `disk_matches`가 배열이 되면서 「둘 다와 같음」이 생겼다.
+   *
+   * ★ `PROFILES_IDENTICAL`(H3)과 **중복이 아니다**: 저쪽은 *저장 기록상 두 슬롯이 서로 같다*이고,
+   *   이쪽은 *지금 게임 파일이 그 둘과 같다*이다. 두 사실은 따로 참일 수 있다.
+   * ★ 프로필이 하나도 없으면 줄 자체를 그리지 않는다(A6 — 없는 것을 지적하지 않는다).
+   */
   function statusLine(game: OverviewGame) {
-    if (game.disk_matches === "dock" || game.disk_matches === "internal") {
-      return t("GAME_DETAIL_STATUS", { profile: t(profileKey(game.disk_matches)) });
-    }
-    // 프로필이 하나도 없으면 줄 자체를 그리지 않는다(A6 — 없는 것을 지적하지 않는다).
+    if (game.disk_matches.length >= 2) return t("GAME_DETAIL_STATUS_BOTH");
+    const only = game.disk_matches[0];
+    if (only) return t("GAME_DETAIL_STATUS", { profile: t(profileKey(only)) });
     if (!game.has_dock && !game.has_internal) return "";
     // 게임에서 방금 조정한 직후가 이 상태다 — 저장 버튼의 존재 이유를 화면이 스스로 설명한다.
     return t("GAME_DETAIL_DIVERGED");
@@ -607,9 +822,11 @@ export function GamesPopup({
   // ── 백업 목록 뷰 (§5-C) ────────────────────────────────────────────────────
   function renderBackups(game: OverviewGame) {
     const rows = backups ?? [];
-    // 프로필 대피본이 목록에 있을 때만 "복원 뒤에 물어본다"고 예고한다 —
+    // 프로필로 되돌아가는 행이 있을 때만 "그 뒤에 물어본다"고 예고한다 —
     // 조건 없는 약속은 실사용 다수인 `disk` 행에서 거짓이 된다(2026-08-10 QA R2의 교훈).
-    const hasProfileRow = rows.some((r) => r.kind === "profile_dock" || r.kind === "profile_internal");
+    // ★ 판정은 **`target`**이다(R13): `kind`로 고르면 파일명이 바뀌어 `unknown`으로 접힌 행에서
+    //   화면과 실제 목적지가 갈린다(`targetText`와 같은 근거·같은 값).
+    const hasProfileRow = rows.some((r) => r.target !== "config");
     return (
       <div style={COLUMN_STYLE}>
         <div style={{ fontSize: "16px", fontWeight: "bold" }}>
@@ -627,25 +844,47 @@ export function GamesPopup({
         <PopupScrollList>
           {rows.map((row) => (
             <Focusable key={row.backup_id} {...listRowNavProps} style={CARD_STYLE}>
-              <div style={{ ...CARD_INNER_STYLE, ...ROW_STYLE }}>
-                <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-                  <div style={{ fontSize: "14px" }}>{kindText(row)}</div>
-                  {/* 파일명이 들어가는 줄이라 `PATH_STYLE`이다 — 문장이 아니라 식별자다. */}
-                  <div style={PATH_STYLE}>
-                    {t("BACKUP_ROW_META", {
-                      stamp: row.stamp_label || t("BACKUP_STAMP_UNKNOWN"),
-                      size: row.size,
-                      filename: row.filename,
-                    })}
+              {/* ★★ 카드 안쪽은 **목록 카드와 같은 이중 구조**다(`CARD_INNER_STYLE` 바깥 ·
+                  `ROW_STYLE` 안쪽). 두 상수를 **한 div에 펼쳐 합치지 않는다**: `CARD_INNER_STYLE`은
+                  세로 스택(`flexDirection:"column"`)이고 `ROW_STYLE`에는 방향이 없어서, 합치면
+                  방향이 `column`으로 살아남고 `alignItems:"center"`가 가로 중앙으로 작동해
+                  **텍스트가 가운데로 좁아지고 [복원]이 그 아래로 내려간다**(2026-08-15 실측:
+                  inner `flex-direction:column` · 글 x339 w240 · 버튼 x412 y377).
+                  같은 것은 같은 방법으로 그린다 — 폭 상한은 바깥, 가로 배치는 안쪽. */}
+              <div style={CARD_INNER_STYLE}>
+                <div style={ROW_STYLE}>
+                  <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+                    <div style={{ fontSize: "14px" }}>
+                      {kindText(row)}
+                      {/* ★ 되돌릴 곳의 **지금 내용이 이 백업과 같다**(§5-C ⓒ) — 누르기 전에 말하면
+                          "아무 일도 안 일어났다"는 결과 팝업이 뜰 이유 자체가 준다.
+                          ⚠️ 모르면 백엔드가 false를 주므로 배지가 안 뜬다(없는 사실을 만들지 않는다). */}
+                      {row.same_as_target ? <span style={CHIP_STYLE}>{t("BACKUP_ROW_SAME")}</span> : null}
+                    </div>
+                    {/* 파일명이 들어가는 줄이라 `PATH_STYLE`이다 — 문장이 아니라 식별자다. */}
+                    <div style={PATH_STYLE}>
+                      {t("BACKUP_ROW_META", {
+                        stamp: row.stamp_label || t("BACKUP_STAMP_UNKNOWN"),
+                        size: row.size,
+                        filename: row.filename,
+                      })}
+                    </div>
+                    {/* ★★ **되돌릴 곳**을 행마다 고정 한 줄로 말한다(§5-C ⓐ·ⓒ). 값은 백엔드가 준
+                        `target`이고 프론트는 `kind`로 재분류하지 않는다 — 두 곳에서 판정하면
+                        화면이 가리키는 곳과 실제로 쓰이는 곳이 갈리는 날이 온다. */}
+                    <div style={META_STYLE}>{targetText(row)}</div>
                   </div>
+                  {/* ★ 같은 내용이어도 **비활성화하지 않는다**(§5-C ⓒ): 패드에서 비활성 버튼은
+                      포커스를 못 받아 사용자가 이유를 알 길이 없다. 눌리면 백엔드가 무쓰기로
+                      끝내고 결과 팝업이 그 사실을 말한다. */}
+                  <PopupButton
+                    disabled={busy}
+                    onClick={() => { void runRestore(game, row); }}
+                    style={{ minWidth: "96px", padding: "6px 8px", fontSize: "13px", flex: "0 0 auto" }}
+                  >
+                    {t("BACKUP_RESTORE")}
+                  </PopupButton>
                 </div>
-                <PopupButton
-                  disabled={busy}
-                  onClick={() => { void runRestore(game, row); }}
-                  style={{ minWidth: "96px", padding: "6px 8px", fontSize: "13px", flex: "0 0 auto" }}
-                >
-                  {t("BACKUP_RESTORE")}
-                </PopupButton>
               </div>
             </Focusable>
           ))}
@@ -658,8 +897,10 @@ export function GamesPopup({
 
   // ── 뷰 선택 ────────────────────────────────────────────────────────────────
   //
-  // ⚠️ 분기를 한 줄에 이어 쓰지 않는다 — `A /> : x ? <B` 형태가 되면 `test_i18n_sets`의
-  //   JSX 텍스트 정규식이 그 사이의 코드를 화면 글자로 오인해 거짓 FAIL을 낸다(실제로 냈다).
+  // ⚠️ *"분기를 한 줄에 이어 쓰지 않는다"*(`A /> : x ? <B` 금지)는 관례의 **근거는 소멸했다** —
+  //   그 사이의 코드를 화면 글자로 오인하던 `qa/test_i18n_sets.py`는 2026-08-15 UI 검사 계열
+  //   삭제에 함께 지워졌다. 지금 이 관례를 강제하는 것은 없다. 아래처럼 **이른 반환 문장으로
+  //   나눠 쓰는 형태**는 읽기 쉬워서 유지할 뿐이고, 어겨도 깨지는 검사는 이제 없다.
   function renderView() {
     if (view.kind === "list") return renderList();
     const game = games.find((g) => g.appid === view.appid);

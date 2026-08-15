@@ -159,8 +159,12 @@ export function t(key: StringKey, params?: Record<string, string | number>): str
  * @param fallback 등재되지 않은 코드일 때 쓸 키. `{code}` 자리에 원문 코드를 실어 보인다 —
  *                 사라지는 것보다 낫고, 무엇이 빠졌는지도 드러난다.
  *
- * ⚠️ `qa/test_i18n_sets.py` 5항이 `codes.py ⊆ i18n`을 강제하므로 **백엔드 코드는 fallback을
- *   타지 않는다.** fallback이 실제로 쓰이는 것은 프론트가 스스로 만든 코드(`TIMEOUT` 등)뿐이다.
+ * ⚠️ **`codes.py ⊆ i18n`을 강제하던 검사(`qa/test_i18n_sets.py`)는 삭제됐다**(2026-08-15 UI 검사
+ *   계열 정리 — 사용자 지정). 지금 남은 `qa/test_i18n_keys.py`는 **ko·en 키 집합 항등과 빈 값
+ *   부재만** 본다. 즉 *"백엔드 코드는 fallback을 타지 않는다"*는 더 이상 보증이 아니다 —
+ *   새 코드를 `codes.py`에 넣고 i18n에 안 넣으면 이 관문이 **fallback으로 흘려 원문 코드를
+ *   화면에 보인다.** 그 동작이 이 함수의 존재 이유이므로 화면이 비지는 않지만, 문구를 등재하는
+ *   것은 이제 **사람의 몫**이다(코드를 추가하는 커밋이 i18n 두 파일을 같이 건드려야 한다).
  */
 export function tCode(code: string, fallback: StringKey): string {
   return code in en ? t(code as StringKey) : t(fallback, { code });

@@ -38,6 +38,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCK = b"quality=dock\nshadows=high\nsource=DOCK-PROFILE\n"
 INTERNAL = b"quality=intl\nshadows=low_\nsource=INTL-PROFILE\n"
 EDITED = b"quality=edit\nshadows=mid_\nsource=USER-EDITED-\n"
+#: 어느 슬롯과도 다른 제3의 상태. R13부터 **적용이 대피본을 만드는 유일한 조건**이 이것이다
+#: (디스크가 어느 슬롯과 같으면 그 내용은 이미 슬롯에 있으므로 링을 태우지 않는다 — §14-B).
+THIRD = b"quality=thrd\nshadows=mid_\nsource=THIRD-STATE-\n"
 
 LOG = []
 
@@ -73,9 +76,26 @@ def rpc(main, name, *args, **kwargs):
 def mkgame(tmp, engine, store, appid, name):
     """합성 게임 하나 — **실제 저장·적용 경로를 태워** 백업 링을 채운다(손으로 밀지 않는다).
 
-    끝난 상태: 디스크 = dock 프로필 내용(DOCK), 백업 3건 —
-    `profile_dock`(DOCK) · `profile_internal`(INTERNAL) · `disk`(DOCK).
-    **대피본은 재저장이 만든다**(빈 슬롯 첫 저장은 대피할 것이 없다) — 실사용의 그 경로를 탄다.
+    끝난 상태: 슬롯 dock=DOCK · internal=INTERNAL / 디스크 = DOCK / 백업 5건 —
+    `profile_internal`(INTERNAL) · `profile_internal`(THIRD) ·
+    `profile_dock`(DOCK) · `profile_dock`(THIRD) · `disk`(**THIRD**).
+    **대피본은 덮어쓰기가 만든다**(빈 슬롯 첫 저장은 대피할 것이 없다) — 실사용의 그 경로를 탄다.
+
+    ⚠️ R13: 마지막 적용 직전에 **어느 슬롯과도 다른 THIRD**를 쓴다. 12판에서는 디스크가 dock과
+      같아도 적용이 `disk` 대피본을 만들었지만, §14-B 이후로는 만들지 않는다 — 그 상태로 두면
+      이 픽스처에 `disk` 행이 아예 없어 아래 단언들이 잴 대상을 잃는다(실제로 잃었다).
+    ⚠️⚠️ R13 후속(2026-08-15): **내용이 같은 재저장은 한 바이트도 쓰지 않는다**
+      (`engine.save_profile` 무쓰기 분기 · `qa/test_save_no_write_when_same.py`). 그래서 예전처럼
+      "같은 내용으로 다시 저장"하면 대피본이 **아예 안 생긴다** — 실제로 이 픽스처가 그렇게
+      비었다. 대피는 **내용이 달라지는 덮어쓰기**에서만 일어난다.
+    ★★ 그런데 아래 ⓞ·②는 **슬롯과 내용이 같은 프로필 대피본**을 필요로 한다. 대피본은
+      *덮이기 전 슬롯 내용*이고 새 슬롯 내용은 *그때의 디스크 내용*이라, **한 번의 저장으로는
+      둘이 같아질 수 없다**(같으면 애초에 안 쓴다). 실사용에서 그 상태가 생기는 길은 하나뿐이다 —
+      **갔다가 돌아오는 것**(A → B → A): 첫 덮어쓰기가 A를 대피시키고, 두 번째가 슬롯을 다시
+      A로 되돌린다. 그래서 슬롯마다 대피본이 2건씩 쌓인다(옛 3건 → 5건).
+    ★ 그 결과 **같은 kind의 행이 둘**이 되므로, 아래 단언들은 「그 kind의 첫 행」이 아니라
+      **`same_as_target`이라는 성질로** 행을 고른다(`pick_same`) — 픽스처 순서에 기대면
+      이 파일이 재는 것이 무엇인지 다음 사람이 알 수 없다.
     """
     reg = store.load_registry()
     cfg = tmp / ("game%s" % appid) / "video.ini"
@@ -85,12 +105,16 @@ def mkgame(tmp, engine, store, appid, name):
     engine.save_profile(reg, appid, "dock")           # 첫 저장 — 대피 없음
     cfg.write_bytes(INTERNAL)
     engine.save_profile(reg, appid, "internal")       # 첫 저장 — 대피 없음
-    cfg.write_bytes(DOCK)
-    engine.save_profile(reg, appid, "dock")           # 재저장 → profile_dock 대피본
+    cfg.write_bytes(THIRD)
+    engine.save_profile(reg, appid, "internal")       # 덮어쓰기 → profile_internal(INTERNAL)
     cfg.write_bytes(INTERNAL)
-    engine.save_profile(reg, appid, "internal")       # 재저장 → profile_internal 대피본
+    engine.save_profile(reg, appid, "internal")       # 되돌아옴 → 슬롯 == 위 대피본
+    cfg.write_bytes(THIRD)
+    engine.save_profile(reg, appid, "dock")           # 덮어쓰기 → profile_dock(DOCK)
     cfg.write_bytes(DOCK)
-    engine.apply_profile(reg, appid, "dock")          # → disk 대피본
+    engine.save_profile(reg, appid, "dock")           # 되돌아옴 → 슬롯 == 위 대피본
+    cfg.write_bytes(THIRD)                            # 어느 슬롯과도 다르다(§14-B 조건)
+    engine.apply_profile(reg, appid, "dock")          # → disk 대피본(THIRD), 디스크는 DOCK이 된다
     store.save_registry(reg)
     return cfg
 
@@ -110,11 +134,14 @@ def main_test():                                                # noqa: C901  (�
         real_engine_restore = engine.restore_backup
         engine_calls = []
 
-        def counted_restore(reg, appid, path):
+        def counted_restore(reg, appid, path, *args, **kwargs):
             """엔진 호출을 **직접 센다** — "already면 엔진을 안 부른다"는 결과가 아니라
-            **호출 자체**로 잰다(파일이 우연히 안 바뀌는 것과 구분된다)."""
-            engine_calls.append((str(appid), path))
-            return real_engine_restore(reg, appid, path)
+            **호출 자체**로 잰다(파일이 우연히 안 바뀌는 것과 구분된다).
+
+            ⚠️ 가변 인자로 받는다: R13에서 엔진에 `target` 인자가 늘었고(§14-C), 고정 3인자
+              래퍼는 그 순간 **TypeError**를 낸다 — 계측기가 대상을 깨는 자리다."""
+            engine_calls.append((str(appid), path) + tuple(args))
+            return real_engine_restore(reg, appid, path, *args, **kwargs)
 
         engine.restore_backup = counted_restore
 
@@ -172,6 +199,19 @@ def main_test():                                                # noqa: C901  (�
               % (appid, kind, [r["kind"] for r in rows(appid)]))
             return None
 
+        def pick_same(appid, kind):
+            """그 kind 중 **되돌릴 곳과 내용이 같은** 행. 픽스처 순서가 아니라 성질로 고른다.
+
+            ★ R13 무쓰기 이후 이 상태는 **갔다가 돌아온 슬롯**에서만 생기고(mkgame 주석),
+              그때 같은 kind의 행이 둘이라 「첫 행」으로는 엉뚱한 것을 집는다.
+            """
+            for row in rows(appid):
+                if row["kind"] == kind and row["same_as_target"]:
+                    return row
+            P("사전 조건 실패 — appid %s에 슬롯과 내용이 같은 kind=%s 행이 없다 (%s)"
+              % (appid, kind, [(r["kind"], r["same_as_target"]) for r in rows(appid)]))
+            return None
+
         # ═══════════════════════════════════════════════════════════════════
         # 사전: 목록 route가 실제 흐름으로 쌓인 백업을 보는가 (측정 경로 도달 확인)
         # ═══════════════════════════════════════════════════════════════════
@@ -203,23 +243,50 @@ def main_test():                                                # noqa: C901  (�
             P("★detail=false에서 backups가 안 온다 — 관리 탭(detail=false 호출)이 N을 못 그린다")
 
         # ═══════════════════════════════════════════════════════════════════
-        # ② 3-상태 ①  `already` — 엔진 미호출 · 쓰기 0 · 링 소모 0
-        #    (지금 디스크 = dock 내용이고, `disk` 대피본도 같은 내용이다)
+        # ⓞ **되돌릴 곳**이 행마다 실려 오는가 (R13 §5-C ⓐ·ⓒ — 화면이 누르기 전에 말한다)
         # ═══════════════════════════════════════════════════════════════════
-        disk_row = pick("100", "disk")
-        if disk_row is None:
+        want_target = {"disk": "config", "profile_dock": "dock", "profile_internal": "internal"}
+        for row in rows100:
+            if "target" not in row or "same_as_target" not in row:
+                P("★ⓞ 행에 target/same_as_target이 없다 — 「되돌릴 곳」을 화면이 그릴 수 없다 (%s)"
+                  % sorted(row))
+                break
+            if row["target"] != want_target.get(row["kind"], "config"):
+                P("★ⓞ kind=%s의 되돌릴 곳이 %s다(기대 %s) — 확인한 곳과 다른 곳에 쓰게 된다"
+                  % (row["kind"], row["target"], want_target.get(row["kind"])))
+        # `profile_internal` 대피본 **하나**는 지금 internal 슬롯과 같은 내용이다(mkgame가 그렇게
+        # 만든다 — 갔다가 돌아온 슬롯). 그 사실이 배지로 나와야 하고, 같은 시각 `disk` 행은
+        # **다르다**(둘 다 맞아야 계측이 유효하다).
+        # ⚠️ kind로 뭉뚱그리지 않는다 — 같은 kind에 True·False가 함께 있는 것이 정상 상태다.
+        same_kinds = {r["kind"] for r in rows100 if r["same_as_target"]}
+        if "profile_internal" not in same_kinds:
+            P("★ⓞ 슬롯과 내용이 같은 프로필 백업에 same_as_target이 안 섰다 — %s"
+              % [(r["kind"], r["same_as_target"]) for r in rows100])
+        if "disk" in same_kinds:
+            P("ⓞ 계측기 무효 — 내용이 다른 disk 행까지 same_as_target이 참이다 (%s)"
+              % [(r["kind"], r["same_as_target"]) for r in rows100])
+
+        # ═══════════════════════════════════════════════════════════════════
+        # ② 3-상태 ①  `already` — 엔진 미호출 · 쓰기 0 · 링 소모 0
+        #    ★ R13: 기준은 **되돌릴 곳**이다(§5-C ⓑ). 지금 internal 슬롯과 `profile_internal`
+        #      대피본의 내용이 같으므로 already다. **12판 규칙(게임 설정 파일만 본다)이면 이 행은
+        #      confirm이었다** — 디스크는 DOCK이라 백업과 다르기 때문이다. 즉 이 단언은 기준이
+        #      목적지로 옮겨졌는지를 직접 가른다.
+        # ═══════════════════════════════════════════════════════════════════
+        same_row = pick_same("100", "profile_internal")
+        if same_row is None:
             return finish()
         before_ids = backup_ids("100")
         before_bytes = cfg100.read_bytes()
         engine_calls.clear()
-        env = rpc(main, "restore_backup", "100", disk_row["backup_id"])
+        env = rpc(main, "restore_backup", "100", same_row["backup_id"])
         if not env.get("ok") or data_of(env).get("outcome") != "already":
-            P("②-a 디스크가 백업과 같은데 already가 아니다 — %s" % env)
+            P("②-a 되돌릴 곳이 백업과 같은데 already가 아니다 — %s" % env)
         if engine_calls:
             P("★②-a already인데 엔진 restore_backup이 호출됐다 — 조기 반환이 안 된다 (%s)"
               % engine_calls)
         # 같은 행을 한 번 더 누른다 — 링이 1칸도 밀리면 안 된다(반증이 재현한 결함).
-        env = rpc(main, "restore_backup", "100", disk_row["backup_id"])
+        env = rpc(main, "restore_backup", "100", same_row["backup_id"])
         if data_of(env).get("outcome") != "already":
             P("②-a 두 번째 탭에서 already가 아니다 — %s" % env)
         if backup_ids("100") != before_ids:
@@ -233,9 +300,10 @@ def main_test():                                                # noqa: C901  (�
 
         # ═══════════════════════════════════════════════════════════════════
         # ① 토큰 계약 + ⑥ 링 소모 (디스크를 손으로 바꿔 「덮어쓰기」 상황을 만든다)
+        #    대상은 `disk` 행 = **게임 설정 파일**이다(현행 계약 그대로 — §7-2 ⓑ).
         # ═══════════════════════════════════════════════════════════════════
         cfg100.write_bytes(EDITED)
-        prof_row = pick("100", "profile_internal")
+        prof_row = pick("100", "disk")
         if prof_row is None:
             return finish()
 
@@ -292,7 +360,7 @@ def main_test():                                                # noqa: C901  (�
 
         # ①-f 타 게임의 토큰
         mkgame(tmp, engine, store, "200", "Neighbour")
-        other = pick("200", "profile_internal")   # 내용이 달라야 confirm 갈래를 탄다
+        other = pick("200", "disk")               # 내용이 달라야 confirm 갈래를 탄다
         tok200 = token_for("200", other["backup_id"]) if other else None
         if tok200:
             env = rpc(main, "restore_backup", "100", prof_row["backup_id"], confirm_token=tok200)
@@ -308,7 +376,7 @@ def main_test():                                                # noqa: C901  (�
             P("⑥ 정상 토큰인데 복원이 안 됐다 — %s" % env)
         if len(engine_calls) != 1:
             P("⑥ 엔진 restore_backup 호출이 %d회다(1회여야 한다)" % len(engine_calls))
-        if cfg100.read_bytes() != INTERNAL:
+        if cfg100.read_bytes() != THIRD:
             P("★⑥ 복원됐다는데 설정 파일이 백업 내용이 아니다 — %r" % cfg100.read_bytes()[:40])
         after_ids = backup_ids("100")
         added, removed = after_ids - before_ids, before_ids - after_ids
@@ -333,7 +401,7 @@ def main_test():                                                # noqa: C901  (�
         while len(backup_ids("100")) < store.BACKUP_KEEP:
             store.make_backup("100", b"filler=%d\n" % len(backup_ids("100")), "disk", "video.ini")
         saturated = backup_ids("100")
-        target = pick("100", "profile_dock")
+        target = pick("100", "disk")          # 게임 설정 파일로 되돌리는 행(내용이 다르다 → confirm)
         if target is None:
             return finish()
         tok = token_for("100", target["backup_id"])
@@ -351,7 +419,7 @@ def main_test():                                                # noqa: C901  (�
         # ② 3-상태 ②  `proceed` — 설정 파일이 없으면 **묻지 않고** 재생한다
         # ═══════════════════════════════════════════════════════════════════
         cfg300 = mkgame(tmp, engine, store, "300", "MissingConfig")
-        row300 = pick("300", "profile_dock")
+        row300 = pick("300", "disk")              # 되돌릴 곳 = 게임 설정 파일(지금 없다)
         if row300 is None:
             return finish()
         os.unlink(str(cfg300))
@@ -359,7 +427,7 @@ def main_test():                                                # noqa: C901  (�
         env = rpc(main, "restore_backup", "300", row300["backup_id"])       # 토큰 없이
         if not env.get("ok") or data_of(env).get("outcome") != "restored":
             P("★② proceed(설정 파일 없음)인데 확인을 요구했다 — 잃을 것이 없는 복원이다 (%s)" % env)
-        if not cfg300.exists() or cfg300.read_bytes() != DOCK:
+        if not cfg300.exists() or cfg300.read_bytes() != THIRD:
             P("★② proceed 복원이 파일을 재생하지 못했다")
         if main._CONFIRM_TOKENS:
             P("② proceed 경로에서 토큰이 발급됐다 — 묻지 않는 경로다")
@@ -369,7 +437,7 @@ def main_test():                                                # noqa: C901  (�
         # ═══════════════════════════════════════════════════════════════════
         cfg400 = mkgame(tmp, engine, store, "400", "RunningGame")
         cfg400.write_bytes(EDITED)
-        row400 = pick("400", "profile_dock")
+        row400 = pick("400", "disk")              # 조기 거부는 **게임 설정 파일 대상에만** 건다
         if row400 is None:
             return finish()
         main._CONFIRM_TOKENS.clear()
@@ -494,12 +562,22 @@ def main_test():                                                # noqa: C901  (�
         else:
             if i_suffix >= i_plain:
                 P("★⑤′ 같은 초 충돌 접미사가 시간순이 아니다(최신이 위여야 한다) — %s" % order)
-        # 음성 대조군 — `store.list_backups`의 사전 역순은 이 픽스처에서 **틀린 순서**를 낸다
-        lex = [os.path.basename(p) for p in store.list_backups("600")]
+        # 음성 대조군 — **사전 역순**은 이 픽스처에서 틀린 순서를 낸다(`-1-` < `-video`).
+        #   ⚠️ R14 #3 이후 `store.list_backups`는 사전순이 아니다(생성 순서 `backup_order_key`).
+        #     그래서 대조군을 그 함수가 아니라 **사전순 자체**로 잡는다 — 두 순서가 하나로
+        #     합쳐졌다는 사실 자체는 아래 ⑤″가 잰다.
+        lex = sorted((os.path.basename(p) for p in store.list_backups("600")), reverse=True)
         li_plain = lex.index("20260809-221530-disk-video.ini")
         li_suffix = lex.index("20260809-221530-disk-1-video.ini")
         if li_suffix < li_plain:
             P("⑤′ 음성 대조군 무효 — 사전 역순이 우연히 맞았다(정렬 결함을 못 잡는 픽스처다)")
+        # ⑤″ **순서는 하나다**(R14 #3) — prune이 자르는 목록과 화면 목록이 같은 순서여야
+        #    축출 예고가 실제로 지워질 파일을 가리킨다(`test_backup_evict_preview` ⓔ와 같은 계약).
+        prune_order = [os.path.basename(p) for p in store.list_backups("600")
+                       if os.path.basename(p) != link_name]
+        if prune_order != order:
+            P("★⑤″ prune 순서와 화면 순서가 다르다 — 화면이 지워지지 않을 파일을 댄다\n"
+              "      prune=%s\n      화면 =%s" % (prune_order, order))
         # unknown 행도 목록에 살아 있어야 한다(형식을 모른다고 백업을 숨기면 복구 수단이 사라진다)
         if "garbage.ini" not in order:
             P("⑤ 미지 형식 백업이 목록에서 사라졌다 — 복구 수단을 숨기면 안 된다")
@@ -518,7 +596,7 @@ def main_test():                                                # noqa: C901  (�
         #    `restore._disk_state`가 조회 실패로 접는다. 이 절이 없으면 그 접기를 지워도 안 걸린다.
         # ═══════════════════════════════════════════════════════════════════
         cfg700 = mkgame(tmp, engine, store, "700", "CorruptNeighbourSlot")
-        row700 = pick("700", "profile_dock")
+        row700 = pick("700", "disk")
         if row700 is not None:
             with open(store.profile_meta_path("700", "internal"), "w", encoding="utf-8") as fh:
                 fh.write('"valid json but not an object"')       # 다른 슬롯이 손상됐다
@@ -533,8 +611,69 @@ def main_test():                                                # noqa: C901  (�
                           confirm_token=params_of(env).get("confirm_token"))
                 if not env.get("ok"):
                     P("★⑦ 손상 meta가 섞인 게임의 복원이 실패했다 — %s" % env)
-                elif cfg700.read_bytes() != DOCK:
+                elif cfg700.read_bytes() != THIRD:
                     P("⑦ 복원됐다는데 설정 파일이 백업 내용이 아니다")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # ⑨ **되돌릴 곳이 프로필 슬롯인 행** (R13 — 설계 §5-C ⓐ · 4-B 1′·4행)
+        #    잠그는 것: ⓐ 슬롯이 백업 내용이 된다 ⓑ **게임 설정 파일은 안 바뀐다**
+        #    ⓒ 대피본이 슬롯의 옛 내용으로 1건 생긴다 ⓓ **실행 중이어도 거부되지 않는다**
+        #    ★ 목적지를 뒤바꾼 구현에서는 ⓐ·ⓑ가 **동시에** 뒤집힌다(음성 대조군을 겸한다).
+        # ═══════════════════════════════════════════════════════════════════
+        cfg800 = mkgame(tmp, engine, store, "800", "SlotRestore")
+        reg800 = store.load_registry()
+        cfg800.write_bytes(THIRD)
+        engine.save_profile(reg800, "800", "internal")   # 슬롯 = THIRD (옛 INTERNAL은 대피본으로)
+        store.save_registry(reg800)
+        cfg800.write_bytes(EDITED)                       # 게임 설정 파일은 여기서 **안 움직여야** 한다
+        slot_row = None
+        for row in rows("800"):
+            if row["kind"] == "profile_internal" and not row["same_as_target"]:
+                slot_row = row
+                break
+        if slot_row is None:
+            P("⑨ 사전 조건 실패 — 슬롯과 내용이 다른 profile_internal 행이 없다 (%s)"
+              % [(r["kind"], r["same_as_target"]) for r in rows("800")])
+            return finish()
+        before_ids = backup_ids("800")
+        main._CONFIRM_TOKENS.clear()
+        # ⓓ 실행 중에도 슬롯 복원은 묻고 진행한다(게임이 읽지도 쓰지도 않는 데이터다).
+        #    같은 세계의 `disk` 행은 ③에서 이미 GAME_RUNNING으로 거부되는 것을 봤다 — 두 대상의
+        #    처분이 **갈린다**는 것이 계약이다.
+        real_running = engine.running_game
+        engine.running_game = lambda appid: str(appid) == "800"
+        try:
+            env = rpc(main, "restore_backup", "800", slot_row["backup_id"])
+        finally:
+            engine.running_game = real_running
+        if not is_confirm(env):
+            P("★⑨-d 실행 중이라고 슬롯 복원이 막혔다 — 프로필 슬롯은 게임이 읽지도 쓰지도 않는다 "
+              "(%s)" % env)
+            return finish()
+        if params_of(env).get("target") != "internal":
+            P("★⑨ 확인창에 실린 되돌릴 곳이 %s다(기대 internal)" % params_of(env).get("target"))
+        env = rpc(main, "restore_backup", "800", slot_row["backup_id"],
+                  confirm_token=params_of(env).get("confirm_token"))
+        if not env.get("ok") or data_of(env).get("outcome") != "restored":
+            P("⑨ 정상 토큰인데 슬롯 복원이 안 됐다 — %s" % env)
+        if cfg800.read_bytes() != EDITED:
+            P("★⑨-b 슬롯 복원이 **게임 설정 파일을 바꿨다** — 사용자가 확인한 곳과 다른 곳에 썼다")
+        body = store.profile_file_path("800", "internal")
+        if not body or store.sha1_file(body) != store.sha1_bytes(INTERNAL):
+            P("★⑨-a 슬롯 본체가 백업 내용이 아니다 — 되돌리기가 목적지에 닿지 않았다")
+        meta800 = store.load_meta("800", "internal") or {}
+        if meta800.get("sha1") != store.sha1_bytes(INTERNAL):
+            P("★⑨ 슬롯 meta가 본체와 어긋난다 — 다음 적용이 PROFILE_CORRUPT로 거부된다 (%s)"
+              % meta800.get("sha1"))
+        added800 = backup_ids("800") - before_ids
+        if len(added800) != 1:
+            P("★⑨-c 슬롯 복원이 대피본을 %d건 만들었다(1건이어야 한다)" % len(added800))
+        if store.sha1_bytes(THIRD) not in {store.sha1_file(p) for p in store.list_backups("800")}:
+            P("★⑨-c 덮어쓰기 직전 슬롯 내용이 백업에 없다 — 되돌릴 지점이 없다")
+        # 같은 행을 한 번 더: 이제 슬롯 == 백업이므로 **already**(링 소모 0)
+        env = rpc(main, "restore_backup", "800", slot_row["backup_id"])
+        if data_of(env).get("outcome") != "already":
+            P("⑨ 되돌린 직후 같은 행이 already가 아니다 — 기준이 목적지가 아니다 (%s)" % env)
 
         # ═══════════════════════════════════════════════════════════════════
         # ⑧ 토큰의 **appid 칸**이 실제로 게임을 가른다 (4-B ③)

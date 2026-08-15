@@ -548,19 +548,103 @@ def main_test():                                                # noqa: C901  (�
         if code_of(env) != codes.CONFIRM_REQUIRED:
             P("★⑧-c 비객체 JSON meta 하나가 전체 초기화 확인창을 봉쇄했다 (실제 %s)" % code_of(env))
 
-        # ⑧-d (#4 중간) 확인창을 연 뒤 같은 내용 재저장 → 낡은 삭제 토큰이 무효가 돼야 한다.
-        #    meta 내용의 sha1 필드만 보면 통과하던 구멍을 meta **파일** sha + 백업 개수로 메웠다.
-        mkgame(tmp, engine, store, "850", "ResaveTarget")
+        # ⑧-d 확인창을 연 사이 상태가 바뀌면 **낡은 삭제 토큰이 거부돼야 한다.**
+        #
+        #    ★★ [2026-08-15 R14 #8 재작성] 예전 픽스처는 **재저장 한 번으로 두 신호(meta 파일
+        #      sha · 백업 개수)를 동시에** 움직였다. 그러면 구현에서 meta sha 신호를 빼고 개수만
+        #      남겨도 이 절이 통과한다 — *두 신호를 함께 재는 검사는 어느 쪽도 잠그지 못한다.*
+        #      게다가 그 픽스처는 슬롯 본체를 손으로 깨뜨려 만들었다(정상 API 밖).
+        #    ★ 지금은 **신호를 하나씩만 움직이는 세 갈래**를 정상 API로 만든다. 각 갈래는 다른
+        #      신호에 눈감은 구현에서 **혼자 FAIL한다**(변이 검증 완료 — 아래 주석):
+        #        -1 슬롯 meta 신호  : 빈 슬롯에 저장 → 링·개수 불변, meta만 바뀜
+        #        -2 백업 개수 신호  : 포화 전 링에서 적용 → meta 불변, 개수 +1
+        #        -3 **링 순서 신호** : 포화 링에서 적용 → 개수 10 불변·meta 불변, **대상만 교체**
+        #      -3이 R14 #2가 잡은 자리다: 확인창은 *"이 백업이 지워집니다"*라고 이름을 대는데
+        #      개수·meta는 하나도 안 움직여 예전 지문으로는 **낡은 토큰이 그대로 통과**했다.
+        cfg850 = mkgame(tmp, engine, store, "850", "TokenSignals", internal=False)
+
+        def metas850():
+            return [store.sha1_file(store.profile_meta_path("850", p)) for p in ("dock", "internal")]
+
+        def ring850():
+            return [os.path.basename(p) for p in store.list_backups("850")]
+
+        def resave(data):
+            """정상 저장 한 번 — 직전 본체가 대피본으로 링에 들어간다(백업 +1)."""
+            cfg850.write_bytes(data)
+            reg_ = store.load_registry()
+            engine.save_profile(reg_, "850", "dock")
+            store.save_registry(reg_)
+
+        def reapply(data):
+            """정상 적용 한 번 — 디스크가 두 슬롯 어느 것과도 달라 **대피본 1건**이 생긴다.
+            슬롯 meta는 한 바이트도 안 바뀐다(적용은 슬롯을 쓰지 않는다 — A11)."""
+            cfg850.write_bytes(data)
+            reg_ = store.load_registry()
+            engine.apply_profile(reg_, "850", "dock")
+            store.save_registry(reg_)
+
+        for i in range(3):                                     # 링을 3건까지 채운다(포화 전)
+            resave(b"quality=r%02d\nshadows=high\nsource=RESAVE-%02d\n" % (i, i))
+
+        # -1 **슬롯 meta 신호만** 움직인다: 빈 슬롯(internal) 첫 저장은 대피가 없다(링 불변).
         tok = token("850")
-        fp_before = main.remove.delete_fingerprint("850")
+        fp_before, ring_before = main.remove.delete_fingerprint("850"), ring850()
         reg = store.load_registry()
-        engine.save_profile(reg, "850", "dock")                # 같은 내용 재저장(대피 발생 → 백업 +1)
+        engine.save_profile(reg, "850", "internal")            # 빈 슬롯 → 백업 0건
         store.save_registry(reg)
+        if ring850() != ring_before:
+            P("⑧-d-1 계측기 무효 — 빈 슬롯 저장이 백업 링을 움직였다(%s → %s). 그러면 이 갈래가 "
+              "meta 신호를 혼자 재지 못한다" % (ring_before, ring850()))
         if main.remove.delete_fingerprint("850") == fp_before:
-            P("★⑧-d 동일 내용 재저장인데 지문이 그대로다 — 낡은 토큰이 통과한다 (Codex #4)")
+            P("★⑧-d-1 슬롯이 새로 저장됐는데 지문이 그대로다 — 낡은 토큰이 통과한다(meta 신호 부재)")
         env = rpc(main, "delete_game", "850", confirm_token=tok)
         if not is_confirm(env) or not registered("850"):
-            P("★⑧-d 동일 재저장 뒤 낡은 삭제 토큰이 통과했다 (%s)" % env)
+            P("★⑧-d-1 빈 슬롯 저장 뒤 낡은 삭제 토큰이 통과했다 (%s)" % env)
+        if not registered("850"):
+            return finish()          # 토큰이 통과해 게임이 사라졌다 — 다음 갈래는 잴 대상이 없다
+
+        # -2 **백업 개수 신호만** 움직인다: 포화 전 링에서 적용 → +1, 슬롯 meta는 불변.
+        tok = token("850")
+        fp_before, metas_before, n_before = main.remove.delete_fingerprint("850"), metas850(), nbackups("850")
+        reapply(b"quality=t1__\nshadows=mid_\nsource=THIRD-STATE-1\n")
+        if metas850() != metas_before:
+            P("⑧-d-2 계측기 무효 — 적용이 슬롯 meta를 바꿨다. 그러면 이 갈래가 개수 신호를 "
+              "혼자 재지 못한다")
+        if nbackups("850") != n_before + 1:
+            P("⑧-d-2 계측기 무효 — 적용이 백업을 1건 늘리지 않았다 (%d → %d)"
+              % (n_before, nbackups("850")))
+        if main.remove.delete_fingerprint("850") == fp_before:
+            P("★⑧-d-2 백업이 1건 늘었는데 지문이 그대로다 — 낡은 토큰이 통과한다(개수 신호 부재)")
+        env = rpc(main, "delete_game", "850", confirm_token=tok)
+        if not is_confirm(env) or not registered("850"):
+            P("★⑧-d-2 백업이 늘어난 뒤 낡은 삭제 토큰이 통과했다 (%s)" % env)
+        if not registered("850"):
+            return finish()          # 토큰이 통과해 게임이 사라졌다 — 다음 갈래는 잴 대상이 없다
+
+        # -3 **링 순서 신호만** 움직인다: 포화 링에서 적용 → 개수도 meta도 그대로, 대상만 교체.
+        while nbackups("850") < store.BACKUP_KEEP:
+            reapply(b"quality=f%02d\nshadows=mid_\nsource=RING-FILL-%02d\n"
+                    % (nbackups("850"), nbackups("850")))
+        tok = token("850")
+        fp_before, metas_before, ring_before = (main.remove.delete_fingerprint("850"),
+                                                metas850(), ring850())
+        reapply(b"quality=t2__\nshadows=mid_\nsource=THIRD-STATE-2\n")
+        if nbackups("850") != store.BACKUP_KEEP or metas850() != metas_before:
+            P("⑧-d-3 계측기 무효 — 개수(%d)나 meta가 함께 움직였다. 그러면 이 갈래가 링 신호를 "
+              "혼자 재지 못한다" % nbackups("850"))
+        if ring850() == ring_before:
+            P("⑧-d-3 계측기 무효 — 포화 링이 돌지 않았다(%s). 축출이 없으면 잴 것이 없다" % ring_before)
+        if main.remove.delete_fingerprint("850") != fp_before:
+            P("⑧-d-3 계측기 무효 — 개수·meta 지문이 움직였다. 이 갈래는 **그 둘이 눈감는** 자리를 "
+              "재는 것이라, 움직이면 링 신호가 없어도 통과해 버린다")
+        if main.restore.ring_fingerprint("850") == main.store.sha1_bytes(
+                "\n".join(ring_before).encode("utf-8")):
+            P("★⑧-d-3 링이 돌았는데 링 지문이 그대로다 — 승인 대상이 바뀐 것을 잴 방법이 없다")
+        env = rpc(main, "delete_game", "850", confirm_token=tok)
+        if not is_confirm(env) or not registered("850"):
+            P("★⑧-d-3 포화 링이 한 칸 돈 뒤 낡은 삭제 토큰이 통과했다 — 확인창이 이름을 댄 "
+              "백업과 **다른 백업**이 지워진다 (%s)" % env)
 
         return finish()
     finally:

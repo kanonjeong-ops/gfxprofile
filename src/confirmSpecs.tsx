@@ -1,9 +1,10 @@
+import type { ReactNode } from "react";
 import { t, tCode, tDefault } from "./i18n";
 import { BACKUP_WARN_APPLIES, PROFILE_NAME_MAX } from "./limits";
-import type { InputConfirmSpec, PlainConfirmSpec } from "./popup";
+import { PATH_BREAK_STYLE, type InputConfirmSpec, type PlainConfirmSpec } from "./popup";
 import type {
-  AddGameConfirmParams, ConfirmParams, DeleteConfirmParams, Profile,
-  ResetConfirmParams, RestoreConfirmParams,
+  AddGameConfirmParams, ApplyAllConfirmParams, ApplyConfirmParams, ConfirmParams,
+  DeleteConfirmParams, EvictedRow, Profile, ResetConfirmParams, RestoreConfirmParams,
 } from "./rpc";
 
 /**
@@ -31,10 +32,13 @@ const COLUMN_STYLE = { display: "flex", flexDirection: "column", gap: "10px" } a
 const META_STYLE = { fontSize: "12px", color: "#9aa0a6", wordBreak: "keep-all" } as const;
 /**
  * 경로 줄 — **낱말 보존을 걸지 않는** 잔글씨다(`GamesPopup`의 같은 이름과 같은 판단).
- * `wordBreak`는 상속되므로 `normal`을 명시해 조상의 `keep-all`을 되돌린다.
+ * 줄바꿈 규칙은 `popup.tsx`의 `PATH_BREAK_STYLE` 하나에서 온다(`wordBreak:"normal"`로 조상의
+ * `keep-all`을 되돌리고, 끊을 자리가 없는 경로를 넘칠 때만 끊는다 — 사유 정본은 그쪽 주석).
+ * ⚠️ **글자 크기는 통일하지 않는다**: 확인창은 12px, 팝업은 11px이다. 갈리면 안 되는 것은
+ *   줄바꿈 규칙 하나뿐이고, 크기까지 묶으면 한쪽 화면의 잔글씨가 남의 사정으로 흔들린다.
  * 소비자는 하나 — 등록 해제 확인창의 `DELETE_CONFIRM_PATH`.
  */
-const PATH_STYLE = { ...META_STYLE, wordBreak: "normal" } as const;
+const PATH_STYLE = { ...META_STYLE, ...PATH_BREAK_STYLE } as const;
 const WARN_STYLE = { color: "#ffb454" } as const;
 
 function profileKey(p: Profile) {
@@ -80,6 +84,9 @@ export function makeSaveConfirmSpec(
             공유**해서 그 게임을 몇 번 적용하면 사라진다. "되돌릴 수 있다"고만 적으면 조건부 참이고,
             조건을 안 적으면 오정보다. */}
         <div style={WARN_STYLE}>{t("SAVE_CONFIRM_BACKUP_LIMIT", { n: BACKUP_WARN_APPLIES })}</div>
+        {/* ★ **지금 지워지는 것**은 위 일반 경고가 아니라 이 줄이 이름으로 말한다(R14 #1) —
+            적용·복원과 **같은 필드·같은 문구**다. 지울 것이 없으면 그리지 않는다. */}
+        {evictNote(params.evicted)}
       </div>
     ),
     okText: t("SAVE_CONFIRM_OK"),
@@ -120,6 +127,9 @@ export function makeDeleteConfirmSpec(
         {/* 대피가 선행한다는 사실을 말한다 — 삭제는 "빈 내용으로 덮어쓰기"이고, 이 툴의
             문법은 "어떤 쓰기든 그 전에 백업"이다(G13). 백업은 삭제 후에도 남는다. */}
         <div>{t("DELETE_CONFIRM_BACKUP", { n: params.backups })}</div>
+        {/* ★ 위 줄은 **남는 쪽**을 말한다. 대피가 링을 밀어내 **사라지는 쪽**은 여기서 이름으로
+            말한다(R14 #1 — 저장·적용·복원과 같은 필드·같은 문구). 없으면 그리지 않는다. */}
+        {evictNote(params.evicted)}
         {/* ★ §9-② 설정 파일 경로 — 대피본에는 meta가 없어(§1-6) 원본 경로를 아는 곳이
             **삭제 전의 registry뿐**이다. 지우기 직전이 그 경로를 보여줄 마지막 기회다.
             ⚠️ 빈 문자열이 올 수 있다(unsafe-key 분기는 entry를 읽지 않는다 — `remove.py:118-123`).
@@ -143,30 +153,203 @@ export function makeDeleteConfirmSpec(
 }
 
 /**
- * 복원 확인 — **덮어쓰는 것은 게임 설정 파일**이라고 분명히 말한다.
+ * **축출 고지 한 줄**(§5-E-3) — 적용·복원이 **같은 필드·같은 문구**를 쓴다.
+ *
+ * ★★ 주어가 *"적용하면"*이 아니라 **"진행하면"**인 이유(§5-E-5 2판 정정): 축출은 백업을 만드는
+ *   순간 일어나고(`store.make_backup`이 `prune`을 품는다), **그 뒤 쓰기가 실패해도 이미 지워진
+ *   뒤다.** "적용하면"이라고 쓰면 실패 갈래에서 그 문장이 거짓이 된다.
+ * ★ **이름을 댄다**(A12 따름정리): 무엇을 잃는지 말하지 않으면 사용자는 승인할 대상을 모른 채
+ *   승인한다. 비어 있으면 **줄 자체를 그리지 않는다**(기존 "0이면 안 그림" 문법).
+ * ★★ **그 이름이 하나를 가리켜야 한다**(2026-08-15 QA 재심 A): 같은 초에 같은 설정 파일로 만들어진
+ *   백업 두 개는 `stamp_label · filename`만으로는 **완전히 같은 문자열**이 된다. 그때만 구분 번호를
+ *   덧붙인다 — 붙일지 말지의 판정은 **백엔드**(`row.dup`)이고, 여기서 다시 세지 않는다.
+ *   원시 파일명을 그대로 노출하지 않는 이유: 사용자가 읽을 물건이 아니다(rpc.ts `EvictedRow`).
+ */
+function evictNote(evicted?: EvictedRow[]) {
+  if (!evicted || evicted.length === 0) return null;
+  const list = evicted
+    .map((row) => {
+      const base = `${row.stamp_label || t("BACKUP_STAMP_UNKNOWN")} · ${row.filename}`;
+      return row.dup > 0 ? `${base} ${t("BACKUP_EVICT_DUP", { n: row.dup })}` : base;
+    })
+    .join(" · ");
+  return <div style={WARN_STYLE}>{t("BACKUP_EVICT_NOTE", { n: evicted.length, list })}</div>;
+}
+
+/**
+ * **여러 게임짜리 축출 고지**(R14 #1) — 일괄 적용·전체 초기화가 공유한다.
+ *
+ * ★★ 왜 이름을 안 대는가: 게임이 여럿이라 게임마다 나열하면 창이 터진다. 그래서 **수만
+ *   약속하고**, 그 수는 게임 하나짜리 확인창이 이름을 대는 산출과 **같은 함수**에서 나온다
+ *   (백엔드 `restore.evict_preview`의 합). 나열은 못 해도 *"몇 건이 사라지는가"*는 정확하다.
+ * ★ 0이면 그리지 않는다 — 기존 "0이면 안 그림" 문법.
+ * ⚠️ 이 창의 다른 숫자와 같은 지위다: **예상**이다(실행 시점에만 나는 실패로 적용이 거부되면
+ *   그 게임의 축출도 안 일어난다 — 어긋나는 방향은 *"지워진다 해 놓고 안 지워지는"* 쪽이다).
+ */
+function evictSummary(n: number, games: number) {
+  if (!n || n <= 0) return null;
+  return <div style={WARN_STYLE}>{t("BACKUP_EVICT_SUMMARY", { n, games })}</div>;
+}
+
+/**
+ * **개별 적용 확인**(R13 §5-E) — *"이 파일에만 있는 내용이 사라지는"* 유일한 갈래에서만 뜬다.
+ *
+ * ★★ 백엔드가 이 창을 띄울지 정한다(`confirm.apply_needs_confirm`). 프론트는 조건을 다시
+ *   계산하지 않는다 — 두 곳에서 판정하면 언젠가 갈리고, 갈린 쪽이 프론트면 **무방비**가 된다.
+ * ★ 탈출구를 같이 준다(`APPLY_CONFIRM_SAVE_HINT`): 지금 파일을 잃고 싶지 않은 사용자에게
+ *   "취소하고 저장부터"라는 길이 있다는 사실 자체가 이 창의 값어치다.
+ */
+export function makeApplyConfirmSpec(
+  params: ApplyConfirmParams,
+  profile: Profile,
+  onOK: () => void,
+): PlainConfirmSpec {
+  const label = t(profileKey(profile));
+  return {
+    kind: "plain",
+    title: t("APPLY_CONFIRM_TITLE", { profile: label }),
+    body: (
+      <div style={COLUMN_STYLE}>
+        <div>{t("APPLY_CONFIRM_BODY", { profile: label })}</div>
+        <div>{t("APPLY_CONFIRM_CURRENT", { state: diskStateText(params) })}</div>
+        <div style={META_STYLE}>{t("APPLY_CONFIRM_KEEP")}</div>
+        {evictNote(params.evicted)}
+        <div style={META_STYLE}>{t("APPLY_CONFIRM_SAVE_HINT", { profile: label })}</div>
+      </div>
+    ),
+    okText: t("APPLY_CONFIRM_OK", { profile: label }),
+    onOK,
+  };
+}
+
+/**
+ * **일괄 적용 확인**(F8 · 설계 §3-E) — 오발동을 막는 마찰이다.
+ *
+ * ★★ 왜 spec이 됐는가(R14 #6): 예전에는 이 창만 `ConfirmModal`을 **직접** 렌더해서
+ *   `useCancelFirstFocus`(취소 우선 포커스)를 지나지 않았다 — 손실 가능한 다른 확인창은 전부
+ *   그 경로를 지나는데 **가장 자주 눌리는 이 창만** OK 위에 커서가 서 있었고, A 한 번의 관성으로
+ *   승인됐다. 그건 물은 것이 아니다. spec으로 옮기면 취소 우선 포커스·1회 종료 빗장·닫기 1회
+ *   래퍼가 **전부 같은 문 하나**에서 온다.
+ * ★ 본문의 `{total}`은 **미리보기 봉투가 준 값**이다(§3-E · Codex D-06) — 토큰을 발급한 그
+ *   시점의 등록 수 스냅샷이라, 화면 숫자가 토큰이 지문 낸 대상과 언제나 같은 것을 가리킨다.
+ *   버킷 5개의 합 = 이 값이 계약이다. 0인 버킷 줄은 그리지 않는다.
+ * ★ 숫자는 전부 백엔드가 센 값이고 화면은 「예상」이라고 말한다 — 실행 결과의 정본은 적용 후
+ *   요약과 백엔드 로그다.
+ * ★ **OK는 항상 활성**이다. `running_refused`는 고지 줄에만 쓰이고 활성 조건에 절대 들어가지
+ *   않는다 — 조건이 되는 순간 E1(실행 중 게임이 일괄 적용을 막지 않는다)이 모달 층에서 뒤집힌다.
+ */
+export function makeApplyAllConfirmSpec(
+  params: ApplyAllConfirmParams,
+  onOK: () => void,
+): PlainConfirmSpec {
+  const profileName = t(profileKey(params.profile));
+  // 0인 버킷은 줄에서 뺀다 — 없는 것을 0으로 나열하면 정작 중요한 숫자가 묻힌다.
+  const parts = (
+    [
+      ["APPLY_ALL_PREVIEW_APPLY", params.would_apply],
+      ["APPLY_ALL_PREVIEW_ALREADY", params.already],
+      ["APPLY_ALL_PREVIEW_NO_PROFILE", params.no_profile],
+      ["APPLY_ALL_PREVIEW_RUNNING", params.running_refused],
+      ["APPLY_ALL_PREVIEW_CANNOT", params.cannot_apply],
+    ] as const
+  )
+    .filter(([, n]) => n > 0)
+    .map(([key, n]) => t(key, { n }));
+  return {
+    kind: "plain",
+    title: t("APPLY_ALL_CONFIRM_TITLE", { profile: profileName }),
+    body: (
+      <div style={COLUMN_STYLE}>
+        <div>{t("APPLY_ALL_CONFIRM_BODY", { total: params.total, profile: profileName })}</div>
+        {parts.length > 0 ? <div>{t("APPLY_ALL_CONFIRM_EXPECT", { list: parts.join(" · ") })}</div> : null}
+        {/* ★ 이 동작도 게임마다 백업을 만들며 오래된 백업을 밀어낸다(R14 #1). 게임이 여럿이라
+            이름 대신 수로 말한다 — 산출은 게임 하나짜리 확인창과 같은 함수다. */}
+        {evictSummary(params.evicted, params.evict_games)}
+      </div>
+    ),
+    okText: t("APPLY_ALL_CONFIRM_OK"),
+    onOK,
+  };
+}
+
+/**
+ * **결과 팝업**(§4-I ④) — 새 부품을 만들지 않고 `kind:"plain"`을 쓰되 **취소가 없는** spec이다.
+ *
+ * ★★ 왜 창인가: 결과를 목록 위 한 줄로 그리면 **아래 목록 전체가 내려간다** — 방금 누른 행이
+ *   손가락 아래에서 움직이는 자리다(§4-I ②). 위치가 흔들릴 수 있는 통지는 팝업으로 뺀다.
+ * ★ 취소가 없는 이유: 되돌릴 것이 없다. 이미 끝난 일을 알리는 창에 [취소]가 있으면 *"취소하면
+ *   되돌려지나?"*라는 없는 선택지를 만든다.
+ * ⚠️ 중첩 깊이는 여전히 ≤1이다 — 확인창이 **닫힌 뒤** 이 창이 뜬다(순차이지 중첩이 아니다).
+ */
+export function makeResultSpec(body: ReactNode, onOK?: () => void): PlainConfirmSpec {
+  return {
+    kind: "plain",
+    title: t("RESULT_TITLE"),
+    body: <div style={COLUMN_STYLE}>{body}</div>,
+    okText: t("RESULT_OK"),
+    noCancel: true,
+    onOK: onOK ?? (() => {}),
+  };
+}
+
+/**
+ * 복원 확인 — **되돌릴 곳을 말한다**(R13 §5-C). 목적지는 백엔드가 준 `target`이 정본이고,
+ * 프론트는 `kind`로 다시 분류하지 않는다.
  *
  * ⚠️ 백업 잔량을 숫자로 약속하지 않는다 — 링 크기는 봉투에 없고, "N칸 중"은 잔량 약속으로
- *   읽혀 오정보가 된다(P8-2 이탈 #8과 같은 판단).
+ *   읽혀 오정보가 된다(P8-2 이탈 #8과 같은 판단). 실제로 **지워질 것**은 `evicted`가 이름으로 말한다.
  */
 export function makeRestoreConfirmSpec(
   params: RestoreConfirmParams,
   onOK: () => void,
 ): PlainConfirmSpec {
-  const fromProfile = params.kind === "profile_dock" || params.kind === "profile_internal";
+  const stamp = params.stamp_label || params.backup_id;
+  const slot = params.target === "dock" || params.target === "internal" ? params.target : null;
+  if (slot) {
+    const label = t(profileKey(slot));
+    return {
+      kind: "plain",
+      title: t("RESTORE_CONFIRM_TITLE_PROFILE", { profile: label }),
+      body: (
+        <div style={COLUMN_STYLE}>
+          <div>{t("RESTORE_CONFIRM_BODY_PROFILE", { profile: label, stamp })}</div>
+          {/* ★ 덮어쓸 대상은 **그 슬롯**이다 — 게임 설정 파일의 4분류를 여기 그리면 딴 것을
+              말한다. 저장 시각을 모르면(손상·미상) 그 줄을 그리지 않는다. */}
+          {params.saved_at ? (
+            <div>{t("RESTORE_CONFIRM_CURRENT_PROFILE", { profile: label, saved_at: params.saved_at })}</div>
+          ) : null}
+          {/* ★★ 대피가 **불가능한** 상태(4-B 9행)는 그 사실을 먼저 말한다 — A12는 *고지하고 묻기*다. */}
+          {params.slot_unreadable ? (
+            <div style={WARN_STYLE}>{t("RESTORE_CONFIRM_SLOT_UNREADABLE")}</div>
+          ) : null}
+          {/* ★★ "백업 한 칸을 씁니다"는 **대피가 실제로 일어날 때만** 참이다(R2). 예전에는 이 줄이
+              9행의 else 가지에 얹혀 있었는데, 그러면 *대피가 없는 다른 갈래*는 아무도 안 본다 —
+              10행(기록만 있고 실물이 없다)이 그 자리였고 화면은 쓰지도 않는 링을 약속했다.
+              판정을 **백엔드의 술어 하나**(`evacuates` = 엔진의 대피 조건)로 옮기면 갈래가
+              늘어도 이 줄이 따라 틀리지 않는다. */}
+          {params.evacuates ? <div style={META_STYLE}>{t("RESTORE_CONFIRM_BACKUP")}</div> : null}
+          {evictNote(params.evicted)}
+          {/* 게임 설정 파일은 안 바뀐다는 사실 + 그래서 뒤에 무엇을 묻는지(§5-C ⓔ). */}
+          <div style={WARN_STYLE}>{t("RESTORE_CONFIRM_SLOT_ASK")}</div>
+        </div>
+      ),
+      okText: t("RESTORE_CONFIRM_OK"),
+      onOK,
+    };
+  }
   return {
     kind: "plain",
     title: t("RESTORE_CONFIRM_TITLE"),
     body: (
       <div style={COLUMN_STYLE}>
-        <div>{t("RESTORE_CONFIRM_BODY", { stamp: params.stamp_label || params.backup_id })}</div>
+        <div>{t("RESTORE_CONFIRM_BODY", { stamp })}</div>
         <div>{t("RESTORE_CONFIRM_CURRENT", { state: diskStateText(params) })}</div>
-        <div style={META_STYLE}>{t("RESTORE_CONFIRM_BACKUP")}</div>
-        {/* 2단계 시맨틱 — 이 창이 끝나도 프로필 슬롯은 그대로다.
-            ★ 후속 제안은 **그 백업이 어느 프로필의 대피본일 때만** 뜬다(`kind`). 그래서 문구도
-              그때만 그 약속을 한다 — 조건 없는 약속은 대다수 경로(=`disk`)에서 거짓이었다. */}
-        <div style={WARN_STYLE}>
-          {fromProfile ? t("RESTORE_CONFIRM_SLOT_ASK") : t("RESTORE_CONFIRM_SLOT_NOTE")}
-        </div>
+        {/* ★ 슬롯 갈래와 **같은 술어**를 쓴다(R2) — 이 갈래에서는 언제나 참이지만(설정 파일이
+            없으면 백엔드가 묻지 않는다), 조건을 자리마다 다시 세우지 않는 것이 규칙이다. */}
+        {params.evacuates ? <div style={META_STYLE}>{t("RESTORE_CONFIRM_BACKUP")}</div> : null}
+        {evictNote(params.evicted)}
+        {/* 저장해 둔 프로필은 그대로다 — `disk`·`unknown` 행에서는 후속 제안도 없다. */}
+        <div style={WARN_STYLE}>{t("RESTORE_CONFIRM_SLOT_NOTE")}</div>
       </div>
     ),
     okText: t("RESTORE_CONFIRM_OK"),
@@ -175,16 +358,30 @@ export function makeRestoreConfirmSpec(
 }
 
 /**
- * 복원 성공 뒤의 **후속 제안**(2단계의 ②) — 백업이 어느 프로필의 대피본인지 백엔드가 `kind`로
- * 알려줄 때만 뜬다. 취소 문구가 "건너뛰기"인 것도 그 성격 때문이다(거부가 아니라 선택).
+ * 프로필 슬롯 복원 뒤의 **후속 제안**(§5-C ⓔ) — *"게임에도 지금 적용할까요?"*
+ *
+ * ★★ R13에서 **방향이 반대가 됐다**: 12판은 「디스크를 되돌렸으니 프로필에도 저장할까」였고,
+ *   지금은 「프로필을 되돌렸으니 게임에도 적용할까」다. 부품은 그대로이고 문구만 뒤집혔다.
+ * ★ 취소 문구가 "건너뛰기"인 것도 그 성격 때문이다(거부가 아니라 선택) — 취소해도 슬롯 복원은
+ *   남는다. 사용자가 원한 일은 이미 됐다.
+ * ★ 여기서 OK를 눌러도 **적용 경로가 다시 물을 수 있다** — 확인창 하나로 손실 둘을 승인받지
+ *   않는다(4-A가 확정한 원칙).
  */
-export function makeRestoreFollowUpSpec(profile: Profile, onOK: () => void): PlainConfirmSpec {
+export function makeRestoreFollowUpSpec(
+  profile: Profile,
+  stamp: string,
+  onOK: () => void,
+): PlainConfirmSpec {
+  const label = t(profileKey(profile));
   return {
     kind: "plain",
     title: t("RESTORE_FOLLOWUP_TITLE"),
     body: (
       <div style={COLUMN_STYLE}>
-        <div>{t("RESTORE_FOLLOWUP_BODY", { profile: t(profileKey(profile)) })}</div>
+        {/* ★ **끝난 일을 먼저 말한다**: 이 창은 제안이지만, 사용자가 방금 누른 복원의 결과를
+            여기서 확인하지 못하면 그 동작은 어디에서도 보고되지 않는다(§4-I — 한 동작 한 팝업). */}
+        <div>{t("RESTORE_OK_PROFILE", { profile: label, stamp })}</div>
+        <div>{t("RESTORE_FOLLOWUP_BODY", { profile: label })}</div>
       </div>
     ),
     okText: t("RESTORE_FOLLOWUP_OK"),
@@ -261,6 +458,10 @@ export function makeResetConfirmSpec(
         {/* ★ A9 ④: 초기화는 registry를 통째로 갈아 끼우므로 **감지 제외 목록도 같이 지워진다.**
             그 사실이 위 warnBlock의 "다시 등록해서 복원한다"를 참으로 만드는 근거이기도 하다. */}
         {params.excluded > 0 ? <div>{t("RESET_CONFIRM_EXCLUDED", { n: params.excluded })}</div> : null}
+        {/* ★ 초기화도 **백업을 만들며 지운다**(R14 #1): 게임마다 슬롯 본체를 대피시키므로 링이
+            찬 게임에서는 가장 오래된 백업이 밀려난다. warnBlock이 "백업은 남습니다"라고 말하는
+            바로 그 창이라, 사라지는 몫을 말하지 않으면 그 문장이 조건부로 거짓이 된다. */}
+        {evictSummary(params.evicted, params.evict_games)}
         {/* ★ 회색(META) — 위 등록 해제 확인창과 **같은 이유·같은 판단**이다(10판 R10-4). */}
         <div style={META_STYLE}>{t("MANAGE_KEEP_CONFIG")}</div>
         <div>{t("RESET_CONFIRM_TYPE", { word: params.challenge })}</div>

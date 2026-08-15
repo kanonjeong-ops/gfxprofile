@@ -12,8 +12,11 @@
     ① restore_backup(profile_dock 백업)   →  **디스크**가 옛 프로필 내용이 된다
     ② save_profile(dock)                  →  그 디스크 내용이 **프로필 슬롯**으로 되돌아간다
 
-`restore_backup`은 이름과 달리 **프로필 슬롯에 쓰지 않는다.** 설정 파일(디스크)에 쓴다.
+`restore_backup(…)`은 **기본값(`target="config"`)에서는 프로필 슬롯에 쓰지 않는다.** 설정 파일에 쓴다.
 ①만 하고 멈추면 슬롯은 여전히 덮어쓴 내용이다.
+(⚠️ R13부터 엔진은 `target="dock"|"internal"`도 받고, **화면의 [복원]은 프로필 백업 행에서 그쪽을
+부른다** — 설계 §14-C. 그 경로는 `qa/test_restore_route.py` ⑨가 잰다. 이 파일이 잠그는 것은
+**엔진의 2단계 절차 자체가 성립하는가**이고, 그 계약은 target 인자와 무관하게 유효하다.)
 
 ★ 이 테스트는 **합성 데이터**만 쓴다. 실사용 게임 설정 파일도 실사용 프로필도 건드리지 않는다.
 """
@@ -77,9 +80,15 @@ def _ui_warn_number():
 
 def _measure_eviction(parent, plays_between):
     """**실제 `apply_profile`을 반복**해서 대피본이 몇 회 만에 링 밖으로 밀리는지 잰다.
+    밀리지 않으면 `None`을 돌려준다 — 그것도 **결과**다(아래 참조).
 
-    `plays_between=True`면 매 적용 전에 게임이 설정 파일을 다시 쓴 상황을 만든다 —
-    그러면 G3 체크인이 발동해 백업이 하나 더 밀린다. **그쪽이 실사용이다.**
+    `plays_between=True`면 매 적용 전에 게임이 설정 파일을 다시 쓴 상황을 만든다.
+    **그쪽이 실사용이고, R13부터는 그쪽에서만 링이 밀린다.**
+
+    ★★ R13(설계 §14-B): 적용은 게임 설정 파일이 **어느 슬롯과도 다를 때만** 대피본을 만든다.
+      그래서 유휴(`plays_between=False`)에서는 A↔B를 아무리 왕복해도 링이 **한 칸도 안 밀린다** —
+      디스크가 언제나 직전에 적용한 슬롯과 같기 때문이다. 12판까지는 그 왕복마다 1건씩 쌓였고,
+      G3 체크인이 있던 시절에는 실사용에서 2건씩 쌓였다.
     """
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="gfxp-evict-", dir=str(parent)))
     for name in [k for k in list(sys.modules) if k.startswith("gfxp")]:
@@ -204,23 +213,26 @@ def main():
         #   합성 `disk` 백업을 손으로 밀어서 **실제 적용 경로를 한 번도 안 탔다.** 그래서
         #   *"적용 1회 = 백업 1개"*라는 틀린 전제 위에서 10회라는 숫자가 나왔고, 그 숫자가
         #   **사용자 확인창에 그대로 실려 나갔다**(위험을 2배 낙관한 거짓 약속).
-        #   진짜는 `apply_profile`이 **최대 2개**를 민다 — G3 체크인이 직전 프로필을 백업하고
-        #   (`engine.py:501-504`) 그다음 `disk` 백업이 또 하나(`:516`).
         #   → **실제 `apply_profile`을 돌려서 잰다.** 그리고 사용자에게 말하는 숫자와 대조한다.
         #
-        #   ★ 두 사용 방식을 다 잰다. 갈리는 이유는 G3 체크인이 **디스크가 직전 프로필과 다를 때만**
-        #     발동하기 때문이다 — 즉 **게임을 띄워 설정이 바뀐 경우가 실사용이고 더 빨리 사라진다.**
+        # ★★ [R13 재작성] 기대값이 **반전됐다**(설계 §7-2 #2). 적용은 이제 디스크가 어느 슬롯과도
+        #   다를 때만 대피본을 만든다(§14-B) — 그래서
+        #     · 유휴(A↔B 왕복만)  → **한 칸도 안 밀린다**(`None`)  ← 0 소모가 새 계약이다
+        #     · 실사용(게임이 재기록) → 1건/회로 밀린다
+        #   *"G3 체크인이 백업을 더 민다"*는 옛 단언은 삭제했다 — 체크인 자체가 사라졌다(§14-A).
+        #   방향 검사(화면 숫자 ≤ 실측)는 **그대로 남긴다**: 그것이 이 절의 존재 이유다.
         evicted = {}
         for label, plays in (("idle", False), ("real", True)):
             evicted[label] = _measure_eviction(tmp, plays)
 
         warn_n = _ui_warn_number()
-        if evicted["idle"] is None or evicted["real"] is None:
-            problems.append(f"적용을 반복해도 대피본이 안 밀렸다({evicted}) — 이 절이 아무것도 못 쟀다")
-        elif evicted["real"] > evicted["idle"]:
+        if evicted["idle"] is not None:
             problems.append(
-                f"실사용 경로가 유휴보다 늦게 밀렸다(real={evicted['real']} > idle={evicted['idle']}) — "
-                f"G3 체크인이 백업을 더 민다는 전제가 깨졌다. 경고 문구의 근거를 다시 세워야 한다")
+                f"★유휴 왕복에서 대피본이 {evicted['idle']}회 만에 밀렸다 — R13은 「디스크가 어느 "
+                f"슬롯과도 다를 때만 백업」이므로 **0 소모**여야 한다(§14-B가 무력화됐다)")
+        if evicted["real"] is None:
+            problems.append("실사용 경로에서도 대피본이 안 밀렸다 — 계측기가 아무것도 못 쟀다 "
+                            "(이 절의 단언이 항진식이 된다)")
         elif warn_n is None:
             problems.append("UI 경고 숫자(BACKUP_WARN_APPLIES)를 src/limits.ts에서 못 읽었다 — "
                             "화면이 말하는 값과 대조할 수 없으면 이 검사는 무의미하다")
