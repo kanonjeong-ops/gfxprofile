@@ -41,13 +41,13 @@ If a game’s current settings differ from every saved profile, a confirmation d
 
 ## Restore After Something Goes Wrong
 
-Open “Restore a backup” from the game’s detail screen. The contents from immediately before an apply or save are backed up automatically. Up to 10 backups are kept per game; when that limit is exceeded, the oldest are removed first.
+Open “Restore a backup” from the game’s detail screen. Contents that would otherwise be lost by an apply or save are backed up automatically. Up to 10 backups are kept per game; when that limit is exceeded, the oldest are removed first.
 
 First check “Goes back into:” on each backup row. A profile backup goes back into that profile; any other backup goes back into the game’s settings file.
 
 ## Clean Up Registrations
 
-“Unregister this game” on a game’s detail screen removes only the plugin’s registration and saved profiles. It does not touch the game’s own settings file. The unregistered game is also excluded from automatic detection.
+“Unregister this game” on a game’s detail screen removes the plugin’s registration and moves its saved profiles into that game’s backups. It does not touch the game’s own settings file. The unregistered game is also excluded from automatic detection.
 
 You can change profile display names under “Settings”.
 

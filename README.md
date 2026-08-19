@@ -10,14 +10,14 @@ Both installation methods require Decky Loader's Developer tab. Enable **Develop
 
 Use either method:
 
-1. **Local ZIP:** Download `gfxprofile.zip` using the fixed release URL below. In the Developer tab, select *Install Plugin from ZIP*, then select the downloaded file.
-2. **Release URL:** In the same area, enter the fixed release URL directly.
+1. **Local ZIP:** Download `gfxprofile.zip` using the fixed release URL below. In the Developer tab, select *Install Plugin from ZIP File*, then select the downloaded file.
+2. **Release URL:** In the Developer tab, enter the fixed release URL under *Install Plugin from URL*.
 
 ```
 https://github.com/kanonjeong-ops/gfxprofile/releases/latest/download/gfxprofile.zip
 ```
 
-The URL always points to the latest release. For installation from an `https://` URL, Decky Loader verifies the downloaded file's SHA-256 hash and stops if it does not match. The expected hash is published in the release notes.
+The URL always points to the latest release. Each release's notes include the SHA-256 checksum of `gfxprofile.zip`.
 
 ## Usage
 
@@ -34,7 +34,7 @@ There are no automatic updates, and the plugin does not notify you when a new re
 
 Registrations, saved profiles, and backups are stored in `~/homebrew/data/gfxprofile/`. Logs are stored in `~/homebrew/logs/gfxprofile/`.
 
-To remove the plugin and its data, uninstall the plugin in Decky, then delete `~/homebrew/data/gfxprofile/`. This leaves no plugin data behind.
+To remove the plugin and its data, uninstall the plugin in Decky, then delete `~/homebrew/data/gfxprofile/` and `~/homebrew/logs/gfxprofile/`.
 
 ## Support
 
