@@ -1,5 +1,5 @@
---- M1/engine.py
-+++ v2/engine.py
+--- 기준선/engine.py
++++ 작업본/engine.py
 @@ -10,18 +10,33 @@
  import re
  import time
@@ -517,8 +517,8 @@
      store.atomic_write(path, data)
      entry["applied_sha1"] = store.sha1_bytes(data)
      entry["last_learn_sha1"] = None
---- M1/store.py
-+++ v2/store.py
+--- 기준선/store.py
++++ 작업본/store.py
 @@ -8,8 +8,11 @@
  import json
  import os
