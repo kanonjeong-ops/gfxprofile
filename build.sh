@@ -267,7 +267,7 @@ if run package; then
   # ★ 빌드와 ZIP을 한 단계로 묶는다. 예전엔 따로였고, 빌드 후 ZIP 갱신을 잊으면
   #   "설치 성공"처럼 보이면서 옛 코드가 설치됐다.
   python3 - <<'PY'
-import hashlib, json, os, pathlib, pwd, re, sys, zipfile
+import hashlib, json, os, pathlib, pwd, re, subprocess, sys, zipfile
 
 proj = pathlib.Path('.').resolve()
 # ★ LICENSE는 **배포물의 법적 필수 파일**이다(2026-08-07 마일스톤 R2).
@@ -278,9 +278,26 @@ ship = ['plugin.json', 'package.json', 'LICENSE', 'THIRD-PARTY-NOTICES.md',
         'licenses/LGPL-2.1.txt', 'main.py', 'dist/index.js']
 ship += [str(p) for p in sorted(pathlib.Path('py_modules').rglob('*.py'))] if pathlib.Path('py_modules').is_dir() else []
 
-missing = [f for f in ship if not (proj / f).is_file()]
-if missing:
-    sys.exit(f"패키지에 넣을 파일이 없다: {missing}")
+# ★ 존재만 보면 **0바이트 파일이 그대로 실린다**(2026-08-19 QA 재심 신규). ZIP의 testzip()은
+#   CRC만 보고, RPC 검사는 plugin.json·dist/index.js만 읽는다 — 빈 main.py를 아무도 못 잡았다.
+bad = [f for f in ship if not (proj / f).is_file() or (proj / f).stat().st_size == 0]
+if bad:
+    sys.exit(f"패키지에 넣을 파일이 없거나 비어 있다: {bad}")
+
+# ★ `py_modules`는 고정 목록이 아니라 rglob 열거다 — **파일이 삭제되면 목록에서 조용히 빠지고**
+#   위 검사는 그 사실을 알 길이 없다(빠진 것은 검사 대상도 아니다). 손으로 쓰는 목록을 따로
+#   만들면 같은 수를 두 곳에 적는 드리프트가 생기므로 **git 인덱스를 명세로 쓴다**:
+#   삭제하면 추적 목록과 어긋나 즉사하고, `git rm`으로 지운 의도적 제거는 둘이 함께 움직여
+#   자연 통과하며 그 변경은 diff에 보인다. 추적 안 된 새 .py가 배포물에 실리는 경로도 함께 닫힌다.
+r = subprocess.run(['git', '-C', str(proj), 'ls-files', '--', 'py_modules'], capture_output=True)
+if r.returncode != 0:
+    sys.exit("git 추적 목록을 읽을 수 없다 — py_modules 명세를 대조할 수 없으므로 거부한다")
+tracked = {x for x in r.stdout.decode().split() if x.endswith('.py')}
+found = {str(x) for x in pathlib.Path('py_modules').rglob('*.py')}
+if tracked != found:
+    sys.exit("py_modules 실물과 git 추적 목록이 다르다\n"
+             f"  추적에만 있다(삭제됨?): {sorted(tracked - found)}\n"
+             f"  실물에만 있다(미추적): {sorted(found - tracked)}")
 
 # (E) 라이선스 정합 — 선언과 원문이 같은 것을 가리켜야 한다
 #   ★ 존재 검사만으로는 부족하다(2026-08-19 QA A-5·A-6): `missing`은 경로가 일반 파일인지만
