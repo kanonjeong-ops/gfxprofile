@@ -271,10 +271,11 @@ import hashlib, json, os, pathlib, pwd, re, sys, zipfile
 
 proj = pathlib.Path('.').resolve()
 # ★ LICENSE는 **배포물의 법적 필수 파일**이다(2026-08-07 마일스톤 R2).
-#   package.json이 `license: BSD-3-Clause`를 선언하는데 원문이 배포 ZIP에 없으면
+#   package.json이 `license: Unlicense`를 선언하는데 원문이 배포 ZIP에 없으면
 #   그 선언이 근거 없는 주장이 된다. 아래 `missing` 검사가 fail-closed로 막는다 —
 #   ship 목록에 넣는 것만으로는 부족하고, 없으면 **패키징 자체가 실패해야** 한다.
-ship = ['plugin.json', 'package.json', 'LICENSE', 'main.py', 'dist/index.js']
+ship = ['plugin.json', 'package.json', 'LICENSE', 'THIRD-PARTY-NOTICES.md',
+        'licenses/LGPL-2.1.txt', 'main.py', 'dist/index.js']
 ship += [str(p) for p in sorted(pathlib.Path('py_modules').rglob('*.py'))] if pathlib.Path('py_modules').is_dir() else []
 
 missing = [f for f in ship if not (proj / f).is_file()]
@@ -284,10 +285,11 @@ if missing:
 # (E) 라이선스 정합 — 선언과 원문이 같은 것을 가리켜야 한다
 declared = json.loads((proj / 'package.json').read_text()).get('license', '')
 license_text = (proj / 'LICENSE').read_text(encoding='utf-8')
-if declared != 'BSD-3-Clause':
-    sys.exit(f"package.json의 license가 BSD-3-Clause가 아니다: {declared!r}")
-if 'BSD 3-Clause License' not in license_text or 'Redistribution and use' not in license_text:
-    sys.exit("LICENSE 원문이 BSD-3-Clause 본문으로 보이지 않는다 — 선언과 실물이 어긋난다")
+if declared != 'Unlicense':
+    sys.exit(f"package.json의 license가 Unlicense가 아니다: {declared!r}")
+if ('free and unencumbered software released into the public domain' not in license_text
+        or 'unlicense.org' not in license_text):
+    sys.exit("LICENSE 원문이 Unlicense 본문으로 보이지 않는다 — 선언과 실물이 어긋난다")
 
 # (F) store metadata — 제출 가능한 구조인가 (2026-08-07 마일스톤 R3)
 #   공식 database workflow는 `publish.image`를 그대로 제출값으로 쓰고, 빈 값·잘못된 scheme을
