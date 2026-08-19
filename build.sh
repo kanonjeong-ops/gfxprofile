@@ -283,13 +283,28 @@ if missing:
     sys.exit(f"패키지에 넣을 파일이 없다: {missing}")
 
 # (E) 라이선스 정합 — 선언과 원문이 같은 것을 가리켜야 한다
+#   ★ 존재 검사만으로는 부족하다(2026-08-19 QA A-5·A-6): `missing`은 경로가 일반 파일인지만
+#     보므로 **0바이트 파일도, 부분 문자열만 든 가짜 본문도 통과**했다. 표준 문안은 고칠 일이
+#     없으므로 **전문 지문**으로 못박는다 — 이것이 "표준 문안 수정 금지"라는 결정에 맞는 도구다.
+LICENSE_SHA256 = 'cdaa0d66b48ff2687d17784d18e7f21683153f6020b990f167cf2154d907674d'   # Unlicense 전문
+LGPL_SHA256 = '38965778962143b687faff3a5b69ef22dd228e0ca4f5a3752893e016ede87c6a'      # LGPL-2.1 전문 504줄
+
 declared = json.loads((proj / 'package.json').read_text()).get('license', '')
-license_text = (proj / 'LICENSE').read_text(encoding='utf-8')
 if declared != 'Unlicense':
     sys.exit(f"package.json의 license가 Unlicense가 아니다: {declared!r}")
-if ('free and unencumbered software released into the public domain' not in license_text
-        or 'unlicense.org' not in license_text):
-    sys.exit("LICENSE 원문이 Unlicense 본문으로 보이지 않는다 — 선언과 실물이 어긋난다")
+for path, want, what in ((proj / 'LICENSE', LICENSE_SHA256, 'LICENSE(Unlicense 전문)'),
+                         (proj / 'licenses/LGPL-2.1.txt', LGPL_SHA256, 'licenses/LGPL-2.1.txt(LGPL-2.1 전문)')):
+    got = hashlib.sha256(path.read_bytes()).hexdigest()
+    if got != want:
+        sys.exit(f"{what}이 정본과 다르다 — 선언과 실물이 어긋난다\n  기록 {want}\n  실물 {got}")
+
+# 고지 파일은 앞으로도 고칠 파일이라 지문을 고정하지 않는다 — 대신 **약속이 살아 있는지** 본다.
+#   THIRD-PARTY-NOTICES.md는 "사본이 licenses/LGPL-2.1.txt에 있다"고 약속하는 문서이므로,
+#   비어 있거나 대상을 잃으면 그 약속이 거짓이 된다.
+notices = (proj / 'THIRD-PARTY-NOTICES.md').read_text(encoding='utf-8')
+missing_terms = [t for t in ('@decky/api', 'LGPL', 'licenses/LGPL-2.1.txt') if t not in notices]
+if missing_terms:
+    sys.exit(f"THIRD-PARTY-NOTICES.md가 고지해야 할 것을 담고 있지 않다: {missing_terms}")
 
 # (F) store metadata — 제출 가능한 구조인가 (2026-08-07 마일스톤 R3)
 #   공식 database workflow는 `publish.image`를 그대로 제출값으로 쓰고, 빈 값·잘못된 scheme을
