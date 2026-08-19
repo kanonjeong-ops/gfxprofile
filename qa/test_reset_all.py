@@ -70,7 +70,8 @@ def main_test():                                                # noqa: C901  (�
             """★ 사전 조건이 무너지면 **여기로 빠져나온다.** 그냥 진행하면 뒤 절이
             traceback으로 죽어 정작 무엇이 깨졌는지가 화면에서 사라진다(진단이 사라지는 실패)."""
             print("전체 초기화 계약 — challenge 바인딩 6종(★registry 불변 변경 포함) · "
-                  "실패 격리 · backups 불가침 · 0게임  (데이터: %s)" % tmp)
+                  "실패 격리 · backups 불가침 · 0게임 · ★레지스트리 버전 가드(U5)  "
+                  "(데이터: %s)" % tmp)
             print("  결과: %s / registry 잔존=%s" % (state["by_id"], state["left"]))
             if problems:
                 print("\nFAIL")
@@ -308,6 +309,42 @@ def main_test():                                                # noqa: C901  (�
             P("★⑤ 게임 설정 파일 원본이 바뀌었다")
         state["by_id"] = {k: v["outcome"] for k, v in rows.items()}
         state["left"] = sorted(store.load_registry()["games"])
+
+        # ═══════════════════════════════════════════════════════════════════
+        # ⑥ ★ 레지스트리 버전 가드 (U5) — **더 새 버전이 만든 데이터**를 만났을 때
+        #
+        #   낡은 플러그인이 모르는 스키마 위에 쓰면 그 필드는 통째로 사라진다. 그래서
+        #   **바꾸는 동작만** 막고, 읽기와 **탈출로(전체 초기화)는 열어 둔다.**
+        #   셋을 **한자리에서** 잰다 — 하나만 보면 나머지가 무너진 것을 못 본다(막기만 하면
+        #   화면이 안 뜨고, 열기만 하면 데이터가 뭉개지고, 탈출로가 막히면 영영 못 벗어난다).
+        # ═══════════════════════════════════════════════════════════════════
+        future = tmp / "game777" / "video.ini"
+        future.parent.mkdir(parents=True, exist_ok=True)
+        future.write_bytes(DOCK)
+        reg = store.default_registry()
+        engine.add_game(reg, "777", str(future), name="FromFuture")
+        engine.save_profile(reg, "777", "dock")
+        reg["version"] = store.REGISTRY_VERSION + 1          # ← 미래 버전이 만든 데이터
+        store.save_registry(reg)
+        before = pathlib.Path(store.registry_path()).read_bytes()
+
+        env = rpc(main, "set_profile_name", "dock", "새 이름")
+        if env.get("ok") or env.get("code") != codes.REGISTRY_NEWER:
+            P("⑥-① 변이 RPC가 REGISTRY_NEWER로 막히지 않았다 — %s" % env)
+        env = rpc(main, "get_overview")
+        if not env.get("ok") or len((env.get("data") or {}).get("games", [])) != 1:
+            P("⑥-② 읽기까지 막혔다 — 화면이 아무것도 못 그린다 (%s)" % env)
+        if pathlib.Path(store.registry_path()).read_bytes() != before:
+            P("★⑥-④ 거부인데 registry.json이 바뀌었다 — 「바뀌지 않았습니다」가 거짓이다")
+
+        tok, _ = ask()
+        env = rpc(main, "reset_all", confirm_token=tok, confirm_text="delete")
+        if not env.get("ok"):
+            P("★⑥-③ 탈출로(전체 초기화)까지 막혔다 — 이 버전으로 새로 시작할 방법이 사라진다 (%s)"
+              % env)
+        if store.load_registry().get("version") != store.REGISTRY_VERSION:
+            P("⑥-③ 초기화가 version을 이 버전으로 되돌리지 않았다 — %s"
+              % store.load_registry().get("version"))
 
         return finish()
     finally:

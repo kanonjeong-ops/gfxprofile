@@ -12,7 +12,7 @@
 가드를 둘 늘리자 기준이 통째로 깨졌다(설계 E2). 집합 기준은 코드가 늘거나 줄어도 안 깨진다.
 
 이 테스트가 있어야 raise에 code를 다는 작업을 기계적으로 해도 안전하다.
-검사 대상: **`py_modules/gfxp/*.py` 전량**(아래 `SKIP` 명시 제외분만 뺀다)의
+검사 대상: **`py_modules/gfxp/*.py` 전량**(아래 `SKIP` 명시 제외분만 뺀다) **+ 접착층 `main.py`**의
 `raise Refused(...)` / `raise RegistryError(...)`
 """
 import ast
@@ -68,7 +68,10 @@ def main():
     #   근거와 함께 아래에 적는다.
     #   ⚠️ `confirm.py`·`labels.py`·`exclude.py`처럼 **오늘은 `raise`가 0건인 파일도 대상이다**
     #     (2026-08-10 qa-lead 지적). 그래야 그중 하나에 첫 `raise`가 생기는 날 자동으로 걸린다.
-    targets = sorted((ROOT / "py_modules" / "gfxp").glob("*.py"))
+    #   ★ **접착층 `main.py`도 대상이다**(2026-08-19 U5). 거부를 던지는 곳이 엔진뿐이라는 전제는
+    #     이미 깨져 있었고(`BAD_IDENTIFIER`·`UNEXPECTED`), U5의 `REGISTRY_NEWER`는 아예
+    #     `main.py`에만 산다 — 여기가 안 보면 그 코드는 **어떤 검사도 지나지 않는다.**
+    targets = sorted((ROOT / "py_modules" / "gfxp").glob("*.py")) + [ROOT / "main.py"]
     skipped = [p.name for p in targets if p.name in SKIP]
     for path in targets:
         if path.name in SKIP:

@@ -33,6 +33,9 @@ BACKUP_FILE_MISSING = "BACKUP_FILE_MISSING"
 # ── 레지스트리 (store.RegistryError) ─────────────────────────────────────────
 REGISTRY_UNREADABLE = "REGISTRY_UNREADABLE"
 REGISTRY_MALFORMED = "REGISTRY_MALFORMED"
+# 이 데이터를 **더 새 버전의 플러그인이 만들었다.** 낡은 코드가 모르는 스키마 위에 쓰면 조용히
+# 뭉개므로, 읽기는 그대로 두고 **바꾸는 동작만** 막는다 (접착층 `main.py`의 `_registry_newer`).
+REGISTRY_NEWER = "REGISTRY_NEWER"
 
 # ── 신설 가드 G14/G15 (v2에서 추가 — M1에는 없다) ────────────────────────────
 SAV_REFUSED = "SAV_REFUSED"                          # .sav 및 savegames 폴더

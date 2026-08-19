@@ -65,6 +65,7 @@
   "BACKUP_FILE_MISSING": "The backup file is missing",
   "REGISTRY_UNREADABLE": "The plugin's game list could not be read. Toggle the plugin off and on, then please try again. If this continues, the game-list file may be damaged. Profiles and backups were not changed.",
   "REGISTRY_MALFORMED": "The plugin's game list has an invalid format. Profiles and backups were not changed.",
+  "REGISTRY_NEWER": "This plugin is older than the version that created its data. Changing actions are stopped to protect the data — install the newer version to continue where you left off, or use [Full reset] to start over on this version. Profiles and backups were not changed.",
   "SAV_REFUSED": "Files with a “.sav” extension and files inside a folder named “savegames” cannot be registered (case-insensitive).",
   "STALE_COPY_REFUSED": "That file is an old copy inside a backup folder",
   "ENGINE_BOILERPLATE_REFUSED": "That is a game engine's internal file, not a settings file",

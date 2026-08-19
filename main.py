@@ -12,6 +12,7 @@
 """
 
 import copy
+import functools
 import inspect
 import json
 import logging
@@ -164,6 +165,65 @@ def route(fn):
             return _fail(codes.UNEXPECTED)
     wrapped.__name__ = fn.__name__
     return wrapped
+
+
+# ── 레지스트리 버전 가드 (U5) ────────────────────────────────────────────────
+# **더 새 버전의 플러그인이 만든 데이터**를 낡은 코드가 쓰면, 모르는 필드가 통째로 사라진다
+# (`store.load_registry`는 아는 키만 채워 넣고, 저장은 그 dict를 통째로 덮어쓴다 — 조용히
+# 뭉개는 쓰기다). 그래서 **읽기는 그대로 두고 바꾸는 동작만** 막는다: 화면은 계속 보이고,
+# 새 버전을 설치하면 이어서 쓰며, 이 버전으로 새로 시작하려면 [전체 초기화]가 남아 있다.
+#
+# ★ 가드는 **접착층에만** 있다 — `store.py`를 고치지 않는다(엔진 fence 무접촉). 엔진은 정책을
+#   모르는 채로 두는 것이 이 프로젝트의 분업이고, 여기서 그것을 깨뜨릴 이유가 없다.
+
+def _registry_newer(reg):
+    """이 레지스트리를 **더 새 버전의 플러그인이 만들었는가.**
+
+    ★ `isinstance`를 쓰지 않는다 — `True`는 `int`의 인스턴스라 `version: true`가 검사를
+      통과하고, 그다음 `True > 1`이 거짓이라 **가드가 조용히 열린다.** 형 자체를 본다.
+    """
+    version = reg.get("version")
+    if type(version) is not int:                    # noqa: E721 — 위 주석 참조
+        raise store.RegistryError(
+            "거부: 레지스트리 형식이 올바르지 않습니다 — version이 정수가 아닙니다.",
+            code=codes.REGISTRY_MALFORMED)
+    return version > store.REGISTRY_VERSION
+
+
+def _guard_not_newer(reg):
+    """관문 둘이 **공유하는 거부**. 문구를 두 벌로 두면 언젠가 갈라진다."""
+    if _registry_newer(reg):
+        raise store.RegistryError(
+            "거부: 이 데이터는 더 새 버전의 플러그인이 만들었습니다 — 데이터를 지키기 위해 "
+            "변경하는 동작을 멈췄습니다.",
+            code=codes.REGISTRY_NEWER)
+
+
+def mutating(fn):
+    """**문 ①** — 데이터를 바꾸는 RPC의 관문. 엔진이 파일을 쓰기 **전에** 막는다.
+
+    ★ 왜 쓰기 직전(문 ②)만으로는 부족한가: 엔진은 게임 설정 파일·프로필·백업을 먼저 쓰고
+      registry 저장은 마지막이다. 거기서 막으면 *"바뀌지 않았습니다"*가 거짓이 된다.
+    ★ `functools.wraps`가 **필수**다. 없으면 `route`가 보는 시그니처가 `(*args, **kwargs)`로
+      납작해져 `param_names`가 비고, 그러면 **위치 인자 검증(`_validate`)이 통째로 빠진다.**
+      `wraps`가 다는 `__wrapped__`를 `inspect.signature`가 따라가 원래 목록을 준다.
+    """
+    @functools.wraps(fn)
+    def guarded(*args, **kwargs):
+        _guard_not_newer(store.load_registry())
+        return fn(*args, **kwargs)
+    return guarded
+
+
+def _save_registry(reg):
+    """**문 ②** — 영속화 직전, **실제로 쓰려는 그 dict**를 검사한다.
+
+    ★ 이 래퍼에 예외 경로는 없다 — reset_all(탈출로)도 여기를 지나지만, 그것이 영속화하는
+      dict는 default_registry() 기반(v1)이라 검사를 자연 통과한다. 탈출을 허용하는 것은
+      예외 분기가 아니라 데이터 자체다 — 구조가 예외를 없앤 자리.
+    """
+    _guard_not_newer(reg)
+    store.save_registry(reg)
 
 
 def _plugin_version():
@@ -579,80 +639,90 @@ class Plugin:
         좌우돼 예산을 예측할 수 없다. 전체 화면(P3)이 열릴 때만 그 값을 낸다.
         """
         reg = store.load_registry()
-        running = _running_appids()          # ★ /proc을 1회만 훑는다 — 아래 주석 참조
-        games = []
-        for appid in sorted(reg["games"], key=lambda a: reg["games"][a].get("name", a)):
-            entry = reg["games"][appid]
-            # ★ F5: 슬롯 상태와 **마지막 저장 시각을 같이** 꺼낸다(meta 읽기 1회 — 위 `_slot_view`).
-            dock_ready, dock_saved, dock_sha = _slot_view(appid, "dock")
-            intl_ready, intl_saved, intl_sha = _slot_view(appid, "internal")
-            config_path = entry.get("config_path")
-            if not isinstance(config_path, str) or not remove._paths_in_position(appid):
-                # ★ 경로가 제자리가 아닌 게임에는 **경로를 말하지 않는다** — `delete_preview`의
-                #   unsafe 분기와 **같은 술어·같은 결론**이다(P11 게이트 ⓒ 통일). 화면이
-                #   "설정 파일: …"이라고 안내할 수 있는 상태가 아니고, 두 화면이 같은 게임을
-                #   두고 다르게 말하면 어느 쪽이 참인지 사용자가 가릴 방법이 없다.
-                config_path = ""
-            games.append({
-                "appid": appid,
-                "name": entry.get("name") or ("appid %s" % appid),
-                "has_dock": dock_ready,
-                "has_internal": intl_ready,
-                # ★ 화면의 "설정 파일: {path}" 한 줄 — **표시 전용**이다(D-08).
-                #   빈 값이면 화면이 그 줄을 안 그린다(기존 "0이면 안 그림" 문법).
-                #   프론트는 이 값으로 경로 연산을 하지 않는다 — 경로 판단은 전부 백엔드다.
-                "config_path": config_path,
-                # ★ 두 프로필의 내용이 같은가(H3) — "갈아끼워도 달라지는 게 없다"를 화면이
-                #   말할 수 있게 한다. **둘 다 적용 가능하고, 두 meta sha가 비어 있지 않은
-                #   문자열이며, 서로 같을 때만** 참이다 — `None == None`류 우연 일치로 참이
-                #   되면 화면이 없는 사실을 말한다(D-04). 재료는 위에서 이미 읽었다(IO 순증 0).
-                "profiles_identical": bool(dock_ready and intl_ready
-                                           and dock_sha and dock_sha == intl_sha),
-                # ★ F5 — 상시 표시용. **「마지막 저장」이지 「마지막 적용」이 아니다.**
-                #   복원(`restore_backup`)은 `last_applied`를 갱신하지 않으므로(M1 fence 동작),
-                #   화면에 "마지막 적용"을 그리면 복원 뒤에 **낡은 값이 사실인 척** 보인다.
-                #   그래서 이 봉투도 화면도 「저장」만 말한다 — 없는 사실을 만들지 않는다.
-                "saved_at": {"dock": dock_saved, "internal": intl_saved},
-                # ★★ **배열이다**(R13 — 설계 §5-A). 두 슬롯의 내용이 같으면 **둘 다** 실린다.
-                #   `engine.disk_state`는 첫 일치에서 멈추므로(engine.py:306-309 `… break`)
-                #   그 값을 그대로 쓰면 봉투가 임의로 한쪽만 고르고, 화면은 나머지 한쪽을
-                #   "적용돼 있지 않다"고 **거짓으로** 말한다.
-                #   ★ 재료는 위에서 이미 읽은 두 meta sha다 — **IO 순증 0**이다.
-                #   ⚠️ `detail=False`면 빈 배열이다(QAM은 이 값을 안 읽는다). 「모른다」를
-                #     빈 배열로 적는 것이 아니라, 그 호출이 **묻지 않은 값**이라는 뜻이다.
-                "disk_matches": _disk_matches(reg, appid, dock_sha, intl_sha) if detail else [],
-                # ★ 「관리」 탭의 `[백업 N]`이 쓰는 수 — **백엔드가 센다**(counts와 같은 규칙).
-                #   ⚠️ 설계(§2-D ⓐ)는 `detail=true` 전용으로 적었으나 **detail과 무관하게** 낸다:
-                #     관리 탭은 Codex #6 이후 `detail=false`로 부른다(그쪽은 원본 설정 파일을
-                #     전수 sha1 하는 비용을 일부러 뺐다). detail을 켜면 그 낭비가 되살아나고,
-                #     이 값의 실제 비용은 **파일을 읽지 않는 listdir 1회**뿐이라 detail 게이트의
-                #     근거(파일 크기에 좌우되는 예측 불가 비용)가 여기엔 적용되지 않는다.
-                "backups": restore.backup_count(appid),
-                "last_applied": entry.get("last_applied"),
-                "cloud_synced": bool(entry.get("cloud_synced")),
-                "running": appid in running,
+        try:
+            running = _running_appids()          # ★ /proc을 1회만 훑는다 — 아래 주석 참조
+            games = []
+            for appid in sorted(reg["games"], key=lambda a: reg["games"][a].get("name", a)):
+                entry = reg["games"][appid]
+                # ★ F5: 슬롯 상태와 **마지막 저장 시각을 같이** 꺼낸다(meta 읽기 1회 — 위 `_slot_view`).
+                dock_ready, dock_saved, dock_sha = _slot_view(appid, "dock")
+                intl_ready, intl_saved, intl_sha = _slot_view(appid, "internal")
+                config_path = entry.get("config_path")
+                if not isinstance(config_path, str) or not remove._paths_in_position(appid):
+                    # ★ 경로가 제자리가 아닌 게임에는 **경로를 말하지 않는다** — `delete_preview`의
+                    #   unsafe 분기와 **같은 술어·같은 결론**이다(P11 게이트 ⓒ 통일). 화면이
+                    #   "설정 파일: …"이라고 안내할 수 있는 상태가 아니고, 두 화면이 같은 게임을
+                    #   두고 다르게 말하면 어느 쪽이 참인지 사용자가 가릴 방법이 없다.
+                    config_path = ""
+                games.append({
+                    "appid": appid,
+                    "name": entry.get("name") or ("appid %s" % appid),
+                    "has_dock": dock_ready,
+                    "has_internal": intl_ready,
+                    # ★ 화면의 "설정 파일: {path}" 한 줄 — **표시 전용**이다(D-08).
+                    #   빈 값이면 화면이 그 줄을 안 그린다(기존 "0이면 안 그림" 문법).
+                    #   프론트는 이 값으로 경로 연산을 하지 않는다 — 경로 판단은 전부 백엔드다.
+                    "config_path": config_path,
+                    # ★ 두 프로필의 내용이 같은가(H3) — "갈아끼워도 달라지는 게 없다"를 화면이
+                    #   말할 수 있게 한다. **둘 다 적용 가능하고, 두 meta sha가 비어 있지 않은
+                    #   문자열이며, 서로 같을 때만** 참이다 — `None == None`류 우연 일치로 참이
+                    #   되면 화면이 없는 사실을 말한다(D-04). 재료는 위에서 이미 읽었다(IO 순증 0).
+                    "profiles_identical": bool(dock_ready and intl_ready
+                                               and dock_sha and dock_sha == intl_sha),
+                    # ★ F5 — 상시 표시용. **「마지막 저장」이지 「마지막 적용」이 아니다.**
+                    #   복원(`restore_backup`)은 `last_applied`를 갱신하지 않으므로(M1 fence 동작),
+                    #   화면에 "마지막 적용"을 그리면 복원 뒤에 **낡은 값이 사실인 척** 보인다.
+                    #   그래서 이 봉투도 화면도 「저장」만 말한다 — 없는 사실을 만들지 않는다.
+                    "saved_at": {"dock": dock_saved, "internal": intl_saved},
+                    # ★★ **배열이다**(R13 — 설계 §5-A). 두 슬롯의 내용이 같으면 **둘 다** 실린다.
+                    #   `engine.disk_state`는 첫 일치에서 멈추므로(engine.py:306-309 `… break`)
+                    #   그 값을 그대로 쓰면 봉투가 임의로 한쪽만 고르고, 화면은 나머지 한쪽을
+                    #   "적용돼 있지 않다"고 **거짓으로** 말한다.
+                    #   ★ 재료는 위에서 이미 읽은 두 meta sha다 — **IO 순증 0**이다.
+                    #   ⚠️ `detail=False`면 빈 배열이다(QAM은 이 값을 안 읽는다). 「모른다」를
+                    #     빈 배열로 적는 것이 아니라, 그 호출이 **묻지 않은 값**이라는 뜻이다.
+                    "disk_matches": _disk_matches(reg, appid, dock_sha, intl_sha) if detail else [],
+                    # ★ 「관리」 탭의 `[백업 N]`이 쓰는 수 — **백엔드가 센다**(counts와 같은 규칙).
+                    #   ⚠️ 설계(§2-D ⓐ)는 `detail=true` 전용으로 적었으나 **detail과 무관하게** 낸다:
+                    #     관리 탭은 Codex #6 이후 `detail=false`로 부른다(그쪽은 원본 설정 파일을
+                    #     전수 sha1 하는 비용을 일부러 뺐다). detail을 켜면 그 낭비가 되살아나고,
+                    #     이 값의 실제 비용은 **파일을 읽지 않는 listdir 1회**뿐이라 detail 게이트의
+                    #     근거(파일 크기에 좌우되는 예측 불가 비용)가 여기엔 적용되지 않는다.
+                    "backups": restore.backup_count(appid),
+                    "last_applied": entry.get("last_applied"),
+                    "cloud_synced": bool(entry.get("cloud_synced")),
+                    "running": appid in running,
+                })
+            # ★ F11 ①: 사용자가 정한 표시명. **빈 문자열이면 기본 이름**이고, 그 기본 이름이
+            #   무엇인지는 백엔드가 모른다 — 번역이라 언어에 따라 다르고 판정은 프론트 i18n
+            #   한 곳에만 있어야 한다. 식별자(`dock`/`internal`)는 이 값과 **무관하게 불변**이다.
+            return _ok(games=games, profile_names=labels.stored(reg), counts={
+                "total": len(games),
+                # ★ 일괄 버튼 라벨이 쓰는 수 — **등록 수가 아니라 그 프로필을 실제로 가진 게임 수**다.
+                #   등록 수를 쓰면 없는 게임은 건너뛰므로 라벨이 거짓말을 한다(M1 ui_tk의 교훈).
+                "dock_ready": sum(1 for g in games if g["has_dock"]),
+                "internal_ready": sum(1 for g in games if g["has_internal"]),
+                "running": sum(1 for g in games if g["running"]),
+                # 두 프로필 중 하나라도 없는 게임 수. 화면의 '프로필 미완성 {n}개' 한 줄이 쓴다.
+                # 프론트에서 games를 다시 세지 않는 이유는 위와 같다 — 두 곳에서 세면 언젠가 어긋난다.
+                "incomplete": sum(1 for g in games if not (g["has_dock"] and g["has_internal"])),
+                # ★ 감지에서 제외한 게임 수(A9). 설정 팝업의 [전체 초기화] 활성 조건이 쓴다 —
+                #   마지막 게임을 등록 해제하면 `total=0`인데 제외 목록은 남으므로, total만 보면
+                #   그 목록을 지울 방법이 UI에서 사라진다(D-01). **원본 키 수**다(격리분 포함 —
+                #   `exclude.excluded_map` 주석 참조).
+                "excluded": len(exclude.excluded_map(reg)),
             })
-        # ★ F11 ①: 사용자가 정한 표시명. **빈 문자열이면 기본 이름**이고, 그 기본 이름이
-        #   무엇인지는 백엔드가 모른다 — 번역이라 언어에 따라 다르고 판정은 프론트 i18n
-        #   한 곳에만 있어야 한다. 식별자(`dock`/`internal`)는 이 값과 **무관하게 불변**이다.
-        return _ok(games=games, profile_names=labels.stored(reg), counts={
-            "total": len(games),
-            # ★ 일괄 버튼 라벨이 쓰는 수 — **등록 수가 아니라 그 프로필을 실제로 가진 게임 수**다.
-            #   등록 수를 쓰면 없는 게임은 건너뛰므로 라벨이 거짓말을 한다(M1 ui_tk의 교훈).
-            "dock_ready": sum(1 for g in games if g["has_dock"]),
-            "internal_ready": sum(1 for g in games if g["has_internal"]),
-            "running": sum(1 for g in games if g["running"]),
-            # 두 프로필 중 하나라도 없는 게임 수. 화면의 '프로필 미완성 {n}개' 한 줄이 쓴다.
-            # 프론트에서 games를 다시 세지 않는 이유는 위와 같다 — 두 곳에서 세면 언젠가 어긋난다.
-            "incomplete": sum(1 for g in games if not (g["has_dock"] and g["has_internal"])),
-            # ★ 감지에서 제외한 게임 수(A9). 설정 팝업의 [전체 초기화] 활성 조건이 쓴다 —
-            #   마지막 게임을 등록 해제하면 `total=0`인데 제외 목록은 남으므로, total만 보면
-            #   그 목록을 지울 방법이 UI에서 사라진다(D-01). **원본 키 수**다(격리분 포함 —
-            #   `exclude.excluded_map` 주석 참조).
-            "excluded": len(exclude.excluded_map(reg)),
-        })
+        except Exception:
+            # ★ 스키마가 갈라져 조립이 죽는 **최악 경로**에서 정확한 고지를 낸다 (U5).
+            #   여기까지 온 예외의 사유가 「이 데이터를 더 새 버전이 만들었다」일 수 있는데,
+            #   그대로 두면 화면에는 UNEXPECTED만 남아 사용자가 할 일을 알 수 없다.
+            #   ⚠️ 호환일 때는 **아무 개입도 하지 않는다** — 아래 `raise`가 원래 실패를 그대로
+            #     올려보내고, route 데코레이터가 늘 하던 대로 봉투에 싣는다.
+            _guard_not_newer(reg)
+            raise
 
-    @route
+    @route          # 바깥 — 봉투. 뒤집히면 RegistryError가 봉투 없이 전송 계층으로 샌다.
+    @mutating       # 안쪽 — 관문. 순서를 뒤집지 마라(위 `mutating` 독스트링).
     def apply_profile(self, appid, profile, confirm_token=None):
         """게임 하나에 적용 — **저장된 프로필 → 게임 설정 파일** 한 방향이다(A11).
 
@@ -693,7 +763,7 @@ class Plugin:
             #   **`save_registry`보다 먼저** 남긴다(QA R4 — 저장이 실패해도 파일은 이미 바뀌었다).
             decky.logger.info("apply_profile session=%s appid=%s profile=%s state=%s",
                               SESSION, appid, profile, state)
-            store.save_registry(reg)
+            _save_registry(reg)
         except engine.Refused:
             raise                       # route 데코레이터가 code·params를 그대로 실패 봉투에 싣는다
         except Exception as exc:        # noqa: BLE001 — 파일이 이미 바뀐 뒤일 수 있는 실패
@@ -706,6 +776,7 @@ class Plugin:
         return _ok(**result, outcome="applied")
 
     @route
+    @mutating
     def apply_all(self, profile, confirm_token=None):
         """주 동작 — 등록된 전부에 같은 프로필을 적용한다.
 
@@ -796,7 +867,7 @@ class Plugin:
                 SESSION, profile, counts,
                 {r["appid"]: r["outcome"] for r in results}, problems,
             )
-            store.save_registry(reg)
+            _save_registry(reg)
         except Exception as exc:        # noqa: BLE001 — `save_registry` 실패도 여기로 온다
             # ⚠️ 엔진 `apply_all`은 게임별 예외를 **내부에서 격리**하므로 여기로 `Refused`가
             #   올라오는 갈래는 없다 — 안 오는 것을 잡는 분기를 두지 않는다(죽은 문 금지).
@@ -807,6 +878,7 @@ class Plugin:
         return _ok(results=results, counts=counts)
 
     @route
+    @mutating
     def save_profile(self, appid, profile, confirm_token=None):
         """현재 디스크 상태를 프로필로 캡처한다. **기존 프로필을 덮어쓸 때만** 확인을 요구한다.
 
@@ -847,7 +919,7 @@ class Plugin:
             SESSION, appid, profile, need, result.get("outcome"),
             (result.get("meta") or {}).get("sha1", "")[:10],
         )
-        store.save_registry(reg)
+        _save_registry(reg)
         return _ok(**result)
 
     # ── 게임 추가 (P6) ───────────────────────────────────────────────────────
@@ -883,6 +955,7 @@ class Plugin:
                    excluded=_excluded_rows(reg))
 
     @route
+    @mutating
     def include_game(self, appid):
         """감지 제외를 해제한다 — **한 버튼 한 쓰기**(A9의 재포함 경로).
 
@@ -899,10 +972,11 @@ class Plugin:
         # ★ 감사 로그는 **`save_registry`보다 먼저** (QA R4).
         decky.logger.info("include_game session=%s appid=%s name=%s was_excluded=%s",
                           SESSION, appid, name, was_excluded)
-        store.save_registry(reg)
+        _save_registry(reg)
         return _ok(excluded=_excluded_rows(reg))
 
     @route
+    @mutating
     def register_confident(self):
         """확신 후보를 **한 번에** 등록한다.
 
@@ -959,10 +1033,11 @@ class Plugin:
             "register_confident session=%s counts=%s added=%s problems=%s",
             SESSION, counts, [r["appid"] for r in results if r["outcome"] == "added"], problems)
         if counts.get("added"):
-            store.save_registry(reg)          # 루프 밖 1회. 등록이 0건이면 쓰지 않는다.
+            _save_registry(reg)          # 루프 밖 1회. 등록이 0건이면 쓰지 않는다.
         return _ok(results=results, counts=counts)
 
     @route
+    @mutating
     def add_game(self, appid, config_path, name=None, confirm_token=None):
         """게임 하나를 등록한다 — 탐지 목록의 후보 1탭 등록과 파일 선택기가 **같은 문**을 쓴다.
 
@@ -1041,7 +1116,7 @@ class Plugin:
             "was_excluded=%s backups=%s path=%s",
             SESSION, appid, entry.get("name"), entry.get("cloud_synced"), warnings, need,
             was_excluded, backups, entry.get("config_path"))
-        store.save_registry(reg)
+        _save_registry(reg)
         # 엔진 entry를 통째로 싣지 않는다 — 내부 필드(sticky_*)는 화면이 쓰지 않고,
         # 구조가 바뀔 때마다 봉투 계약이 같이 흔들린다.
         return _ok(
@@ -1058,6 +1133,7 @@ class Plugin:
 
     # ── 삭제 (P8) ────────────────────────────────────────────────────────────
     @route
+    @mutating
     def delete_game(self, appid, confirm_token=None):
         """등록 + 프로필을 지운다. **백업(`backups/`)은 남긴다** — 마지막 안전망이다.
 
@@ -1096,7 +1172,7 @@ class Plugin:
         decky.logger.info(
             "delete_game session=%s appid=%s name=%s evacuated=%s backups=%s excluded=True",
             SESSION, result["appid"], result["name"], result["evacuated"], result["backups"])
-        store.save_registry(reg)
+        _save_registry(reg)
         return _ok(**result)
 
     @route
@@ -1180,11 +1256,12 @@ class Plugin:
         decky.logger.info(
             "reset_all session=%s counts=%s outcomes=%s problems=%s",
             SESSION, counts, {r["appid"]: r["outcome"] for r in results}, problems)
-        store.save_registry(fresh)
+        _save_registry(fresh)
         return _ok(results=results, counts=counts)
 
     # ── 표시명 (F11 ①) ───────────────────────────────────────────────────────
     @route
+    @mutating
     def set_profile_name(self, profile, name=None):
         """프로필의 **전역 표시명**을 바꾼다. 화면 글자만 바뀐다.
 
@@ -1204,7 +1281,7 @@ class Plugin:
         # ★ 감사 로그는 **`save_registry`보다 먼저** (QA R4).
         decky.logger.info("set_profile_name session=%s profile=%s name=%r",
                           SESSION, profile, names.get(str(profile), ""))
-        store.save_registry(reg)
+        _save_registry(reg)
         return _ok(profile_names=names)
 
     # ── 백업 복원 (P9) ───────────────────────────────────────────────────────
@@ -1220,6 +1297,7 @@ class Plugin:
         return _ok(backups=restore.backup_rows(reg, appid))
 
     @route
+    @mutating
     def restore_backup(self, appid, backup_id, confirm_token=None):
         """백업 하나를 **그 행의 되돌릴 곳**으로 되돌린다.
 
@@ -1270,7 +1348,7 @@ class Plugin:
             decky.logger.info(
                 "restore_backup session=%s appid=%s backup=%s kind=%s target=%s state=%s",
                 SESSION, appid, backup_id, params["kind"], target, state)
-            store.save_registry(reg)
+            _save_registry(reg)
         except engine.Refused:
             raise                       # route 데코레이터가 code·params를 그대로 실패 봉투에 싣는다
         except Exception as exc:        # noqa: BLE001 — 파일·슬롯이 이미 바뀐 뒤일 수 있는 실패

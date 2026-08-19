@@ -8,6 +8,7 @@
 #   pnpm install --offline --force --frozen-lockfile 을 한 번 돌려 .bin 래퍼를 다시 만든다.
 #
 # 단계: install | check | build | grep | package | test | all
+# 릴리스 명령(단계가 아니다 — `all`에 섞이지 않는다): bump <버전> | release   → 절차는 RELEASE.md
 set -euo pipefail
 
 U1_ROOT="${U1_ROOT:-/home/deck/ClaudeWork/GfxProfileToolV2/u1-toolchain/u1-bundle}"
@@ -40,8 +41,8 @@ step="${1:-all}"
 #   예전엔 아무것도 안 하고 마지막 OK를 찍어 종료 코드 0을 냈다 — `build.sh chek` 같은 오타 하나가
 #   "검증 성공"으로 기록된다. 검사가 거짓말을 하면 없느니만 못하다.
 case "$step" in
-  install|check|build|grep|package|test|all) ;;
-  *) echo "알 수 없는 단계: $step (install|check|build|grep|package|test|all)" >&2; exit 2 ;;
+  install|check|build|grep|package|test|all|bump|release) ;;
+  *) echo "알 수 없는 단계: $step (install|check|build|grep|package|test|all|bump <버전>|release)" >&2; exit 2 ;;
 esac
 
 run() { [ "$step" = "$1" ] || [ "$step" = "all" ]; }
@@ -253,6 +254,33 @@ for h in hits:
     print("  " + h)
 sys.exit(1 if hits else 0)
 PY
+
+  # ⑥ U5 — `store.save_registry(`를 **직접** 부르는 곳은 `main.py`의 래퍼 정의 1곳뿐이다.
+  #    ★ 왜 검사가 필요한가: 레지스트리 버전 가드(문 ②)는 래퍼 `_save_registry` 안에 있다.
+  #      교체를 한 곳이라도 빠뜨리면 그 route만 가드 밖으로 새는데, **정상 데이터에서는 아무
+  #      증상이 없다** — 더 새 버전이 만든 데이터를 만나야 드러나고, 그때는 이미 뭉갠 뒤다.
+  #      10곳 중 하나만 빠져도 아래 카운트가 2 이상이 되어 그 자리에서 잡힌다.
+  #    ★ 문자열이 아니라 **AST의 Call 노드**를 센다. 주석·독스트링은 Call을 만들 수 없으므로
+  #      이 프로젝트가 두 번 겪은 "주석에 오탐" 계열이 원리적으로 생기지 않는다(게이트 ②와 같은 문법).
+  python3 - <<'PY'
+import ast, pathlib, sys
+tree = ast.parse(pathlib.Path('main.py').read_text(), filename='main.py')
+wrapper = next((n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == '_save_registry'), None)
+if wrapper is None:
+    sys.exit("불변식 위반 — main.py에 `_save_registry` 래퍼가 없다(문 ②가 통째로 사라졌다)")
+hits = [n.lineno for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+        and n.func.attr == 'save_registry'
+        and isinstance(n.func.value, ast.Name) and n.func.value.id == 'store']
+inside = [ln for ln in hits if wrapper.lineno <= ln <= (wrapper.end_lineno or wrapper.lineno)]
+print(f"main.py의 store.save_registry() 직접 호출 = {len(hits)}곳 "
+      f"(래퍼 정의 안 {len(inside)}곳 — 1/1이어야 한다)")
+for ln in hits:
+    print(f"  main.py:{ln}")
+if len(hits) != 1 or len(inside) != 1:
+    sys.exit("불변식 위반 — 영속화는 `_save_registry` 래퍼 하나만 지나야 한다 (U5 문 ②)")
+PY
 fi
 
 if run package; then
@@ -455,6 +483,184 @@ if run test; then
   done
   rm -f /tmp/gfxp-test.log
   [ "$fails" -eq 0 ] || { echo "엔진 검사 $fails종 실패" >&2; exit 1; }
+fi
+
+# ══ 릴리스 명령 (`bump` / `release`) ═════════════════════════════════════════
+# ★ `run()`을 쓰지 않고 **직접 비교**한다. 그래서 이 둘은 구조적으로 `all`에 섞이지 않는다 —
+#   `bash build.sh all`이 커밋하거나 게시하는 일은 일어날 수 없다.
+# ★ 절차 전문은 RELEASE.md. 여기 있는 것은 그 절차의 기계 부분뿐이다.
+if [ "$step" = "bump" ] || [ "$step" = "release" ]; then
+  # ★★ git·gh는 **실사용자 홈으로** 돌린다. 이 스크립트는 node·pnpm 캐시를 폴더 안에 가두려고
+  #   HOME·XDG_*를 통째로 격리하는데, 그 격리 안에는 **커밋 신원(~/.gitconfig)도 gh 인증
+  #   (~/.config/gh)도 SSH 키도 없다.** 그대로 두면 bump는 "당신이 누구인지 모르겠다"로 죽고,
+  #   release는 로그인해 두고도 인증이 없다고 하며, push는 키를 못 찾는다.
+  #   격리를 모르고 실사용자 홈을 기대하는 코드에 이 프로젝트가 이미 세 번 걸렸다(위 REAL_HOME 주석).
+  #   **한 곳에서만 감싸 두면 호출부가 이것을 기억할 필요가 없다** — 잊을 수 있는 자리를 없앤다.
+  #   ⚠️ `env`는 **외부 프로세스**라 PATH에서 진짜 실행 파일을 찾는다 — 함수 재귀가 아니다.
+  git() { env HOME="$REAL_HOME" XDG_CONFIG_HOME="$REAL_HOME/.config" git "$@"; }
+  gh()  { env HOME="$REAL_HOME" XDG_CONFIG_HOME="$REAL_HOME/.config" gh  "$@"; }
+fi
+
+if [ "$step" = "bump" ]; then
+  # ★ 버전 두 사본(package.json·src/version.ts) 갱신을 **python 한 트랜잭션**으로 한다.
+  #   셸 `sed`로 하면 미적중이 조용히 성공으로 지나가고(0건 치환도 종료 코드 0이다),
+  #   둘 중 하나만 바뀐 **반쪽 상태**가 남는다. 여기서는 그 둘이 구조적으로 불가능하다:
+  #   적중 횟수 1을 단언하고, **둘 다 성공한 뒤에야** 파일을 쓴다.
+  python3 - "${2:-}" <<'PY'
+import json
+import pathlib
+import re
+import subprocess
+import sys
+
+ver = sys.argv[1] if len(sys.argv) > 1 else ""
+if not ver:
+    print("사용법: bash build.sh bump <버전>   (예: bash build.sh bump 0.2.0)", file=sys.stderr)
+    raise SystemExit(2)
+if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", ver):
+    print(f"버전 형식이 아니다: {ver!r} — MAJOR.MINOR.PATCH", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def key(v):
+    return tuple(int(x) for x in v.split("."))
+
+
+# ★ 태그 **삼분법** — 조회 실패와 「아직 없다」는 다른 상태다(fence A4와 같은 원칙).
+#   둘을 뭉치면 git이 죽은 날 하향 검사가 조용히 생략된다.
+r = subprocess.run(["git", "tag", "--list", "v*"], capture_output=True)
+if r.returncode != 0:
+    print("태그 조회 실패 — git 상태를 확인하라", file=sys.stderr)
+    raise SystemExit(1)
+tags = [t for t in r.stdout.decode().split() if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", t)]
+if not tags:
+    print(f"직전 릴리스 태그 없음 — 첫 릴리스로 간주, 버전 하향 검사 생략 "
+          f"(v{ver}이 최초 태그가 된다)")
+else:
+    latest = max(tags, key=lambda t: key(t[1:]))
+    if key(ver) <= key(latest[1:]):
+        print(f"버전이 직전 릴리스 태그보다 크지 않다: {ver} <= {latest[1:]}", file=sys.stderr)
+        raise SystemExit(1)
+
+# ★ CHANGELOG 절을 **여기서** 본다. 잊음을 가장 싼 시점에 잡는 것이고, release는 이 절을
+#   그대로 릴리스 노트로 오려 쓴다 — 없으면 release가 게시 직전에 멈춘다.
+changelog = pathlib.Path("CHANGELOG.md")
+if not changelog.is_file():
+    print("CHANGELOG.md가 없다", file=sys.stderr)
+    raise SystemExit(1)
+if not re.search(r"^## %s( |$)" % re.escape(ver), changelog.read_text(encoding="utf-8"),
+                 flags=re.M):
+    print(f"CHANGELOG.md에 `## {ver}` 절이 없다 — 먼저 쓰고 다시 부르라", file=sys.stderr)
+    raise SystemExit(1)
+
+pkg_path = pathlib.Path("package.json")
+vts_path = pathlib.Path("src/version.ts")
+pkg_text = pkg_path.read_text(encoding="utf-8")
+vts_text = vts_path.read_text(encoding="utf-8")
+
+pkg_new, n_pkg = re.subn(r'("version"\s*:\s*")[0-9]+\.[0-9]+\.[0-9]+(")',
+                         lambda m: m.group(1) + ver + m.group(2), pkg_text)
+vts_new, n_vts = re.subn(r'(PLUGIN_VERSION\s*=\s*")[0-9]+\.[0-9]+\.[0-9]+(")',
+                         lambda m: m.group(1) + ver + m.group(2), vts_text)
+for name, n in (("package.json", n_pkg), ("src/version.ts", n_vts)):
+    if n != 1:
+        print(f"{name}의 버전 자리를 정확히 1곳 찾지 못했다(찾은 곳 {n}) — "
+              f"아무것도 쓰지 않았다", file=sys.stderr)
+        raise SystemExit(1)
+# ★ 치환 횟수만 보면 **엉뚱한 값이 들어가도** 통과한다. 새 값을 그 자리에서 되읽어 단언한다.
+if json.loads(pkg_new).get("version") != ver:
+    print("package.json의 새 version이 기대값과 다르다 — 아무것도 쓰지 않았다", file=sys.stderr)
+    raise SystemExit(1)
+if not re.search(r'PLUGIN_VERSION\s*=\s*"%s"' % re.escape(ver), vts_new):
+    print("src/version.ts의 새 값이 기대와 다르다 — 아무것도 쓰지 않았다", file=sys.stderr)
+    raise SystemExit(1)
+
+pkg_path.write_text(pkg_new, encoding="utf-8")
+vts_path.write_text(vts_new, encoding="utf-8")
+print(f"버전 갱신: package.json · src/version.ts → {ver}")
+PY
+  ver="$2"
+  git add package.json src/version.ts CHANGELOG.md
+  git commit -q -m "release: v$ver"
+  echo "커밋했다: release: v$ver   (push는 하지 않았다 — 다음은 bash build.sh release)"
+fi
+
+if [ "$step" = "release" ]; then
+  ver=$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')
+  [ -n "$ver" ] || { echo "package.json에서 버전을 읽지 못했다" >&2; exit 1; }
+
+  # ① 재료 확인 — 게시 **전에** 다 있는지부터 본다.
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "작업트리가 깨끗하지 않다 — 먼저 커밋하라 (bash build.sh bump <버전>)" >&2
+    git status --short >&2
+    exit 1
+  fi
+  # CHANGELOG의 `## <버전>` 절 본문 = 릴리스 노트의 재료. 절 머리글은 싣지 않는다.
+  #   `sed '/./,$!d'`는 절 머리글 바로 아래의 **빈 줄을 떨어낸다**(뒤쪽 빈 줄은 $( )가 이미 먹는다).
+  notes_body=$(awk -v v="$ver" 'BEGIN{gsub(/\./,"\\.",v)} $0 ~ ("^## " v "( |$)"){f=1;next} /^## /{f=0} f' CHANGELOG.md | sed -e '/./,$!d')
+  [ -n "${notes_body//[[:space:]]/}" ] || { echo "CHANGELOG.md에 ## $ver 절이 없다" >&2; exit 1; }
+
+  # ★ 노트 조립은 **함수 하나**다 — DRY와 실제 게시가 같은 코드를 지난다.
+  #   두 벌로 두면 DRY에서 본 것과 다른 것이 게시된다.
+  assemble_notes() {
+    local digest ai
+    digest=$(cat pkg/gfxprofile.zip.sha256)
+    # ★ AI 고지의 **정본은 README.md 하나**다. 여기에 문구를 복제하면 두 곳이 갈라진다.
+    #   ⚠️ `### About AI use`가 **README의 맨 끝 절**이라는 사실에 기댄다(그 아래를 전부 싣는다) —
+    #     뒤에 절을 더하면 그것까지 노트에 실린다. 절을 추가할 때 이 자리를 같이 본다.
+    ai=$(awk '/^### About AI use$/{f=1} f' README.md)
+    [ -n "$ai" ] || { echo "README.md에 '### About AI use' 절이 없다 — 배포 고지가 빠진다" >&2; exit 1; }
+    { printf '%s\n\n' "$notes_body"
+      printf 'SHA-256 (gfxprofile.zip): %s\n\n' "$digest"
+      printf '%s\n' "$ai"
+    } > pkg/release-notes.md
+  }
+
+  # ② DRY — **지금 브랜치에서** 검사와 노트 조립까지만. checkout·merge·tag·push·gh 전부 안 한다.
+  if [ "${GFXP_RELEASE_DRY:-}" = "1" ]; then
+    echo "== DRY RUN — 게시·태그·push·checkout 없이 검사와 노트 조립까지만 한다 =="
+    bash "$0" all
+    assemble_notes
+    echo "== pkg/release-notes.md =="
+    cat pkg/release-notes.md
+    echo "== 실제 release가 이어서 할 일 (DRY라 하지 않았다) =="
+    echo "  git checkout main && git merge --ff-only dev"
+    echo "  git tag v$ver && git push origin main v$ver"
+    echo "  gh release create v$ver pkg/gfxprofile.zip --verify-tag --title v$ver --notes-file pkg/release-notes.md"
+    exit 0
+  fi
+
+  # ③ 게시 준비 — 각 실패는 **복구 가능한 자리**에 멈춘다.
+  gh auth status >/dev/null 2>&1 || {
+    echo "gh 인증이 없다 — 먼저 gh auth login (대화형이라 사람이 직접 한다)" >&2; exit 1; }
+  git fetch -q origin
+  git checkout -q main || { echo "main으로 이동하지 못했다" >&2; exit 1; }
+  git merge --ff-only dev || {
+    echo "main을 dev로 ff-only 전진시키지 못했다 — 지금 main 위에 서 있다(작업 복귀: git checkout dev)" >&2
+    exit 1; }
+  if git rev-parse -q --verify "refs/tags/v$ver" >/dev/null; then
+    echo "태그 v$ver가 이미 있다 — 버전을 올렸는지 확인하라(지금 main 위에 서 있다)" >&2
+    exit 1
+  fi
+
+  # ④ 릴리스당 **유일한** 파이프라인 실행
+  bash "$0" all
+
+  # ⑤ 노트 조립 — 게시 전에 사람이 읽는다
+  assemble_notes
+  echo "== pkg/release-notes.md =="
+  cat pkg/release-notes.md
+
+  # ⑥ 태그·push — 여기까지도 아직 **게시 전**이다
+  git tag "v$ver"
+  git push origin main "v$ver" || {
+    echo "push가 실패했다 — 아직 게시되지 않았다. 로컬 태그를 지우고 다시 하라: git tag -d v$ver" >&2
+    exit 1; }
+
+  # ⑦ 게시 — **마지막 줄**이다. 이 뒤에 자동으로 하는 일은 없다.
+  gh release create "v$ver" pkg/gfxprofile.zip --verify-tag --title "v$ver" \
+     --notes-file pkg/release-notes.md
+  echo "게시했다: v$ver   작업 복귀: git checkout dev"
 fi
 
 echo "OK"

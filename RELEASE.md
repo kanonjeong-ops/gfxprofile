@@ -1,0 +1,19 @@
+# 릴리스 절차
+
+최초 1회: `gh auth login` (대화형 — 사람이 직접). GitHub에 `main` 브랜치가 있고 기본 브랜치인지 확인.
+
+1. `dev`에서 `CHANGELOG.md` 맨 위에 새 버전 절을 쓴다 — 사용자에게 보이는 변화만.
+   엔진 수정 내역은 고지할 가치가 있는 것만 적고, 사용자 입장에서 차이가 없는 것은 뺀다.
+2. `bash build.sh bump <버전>` — 버전 두 사본을 갱신·검증하고, CHANGELOG 절을 확인한 뒤, 커밋까지 한다.
+3. `bash build.sh release` — main을 dev로 전진시키고, 전체 검사를 한 번 돌리고, 노트를 조립해
+   태그·push 뒤 게시한다. 게시가 마지막 동작이며 그 뒤에는 아무것도 자동으로 하지 않는다.
+4. 다음 작업은 `git checkout dev`에서 시작한다.
+
+게시 없이 점검: `GFXP_RELEASE_DRY=1 bash build.sh release` — 지금 브랜치에서 검사와 노트 조립까지만
+하고 게시·태그·push는 하지 않는다.
+
+QA를 발주할 때 「직전 릴리스 이후 엔진 변경」은 `python3 qa/test_engine_diff_fence.py --show` 출력을
+브리핑에 붙인다.
+
+릴리스마다 하지 않는 것: 유출 감사 전수(직전 태그와의 diff만 본다) · 원격 URL 설치 실증(최초 1회로
+끝) · 데이터를 쓰는 경로에 안 닿는 수정의 QA 라운드.
