@@ -269,10 +269,14 @@ wrapper = next((n for n in ast.walk(tree)
                 if isinstance(n, ast.FunctionDef) and n.name == '_save_registry'), None)
 if wrapper is None:
     sys.exit("불변식 위반 — main.py에 `_save_registry` 래퍼가 없다(문 ②가 통째로 사라졌다)")
+# ★ 수신자를 `store`로 **한정하지 않는다**. `gfxp.store.save_registry(...)`처럼 한 겹만
+#   더 씌워도 한정 조건이 그 호출을 놓치는데, 그건 예전 문자열 검사가 잡던 형태다 —
+#   **검사를 정교하게 만들다가 계약을 좁히면 그 자리가 곧 구멍**이다. 이름이 곧 행위이므로
+#   `save_registry`라는 속성 호출은 수신자가 무엇이든 전부 센다.
+#   (래퍼 `_save_registry(...)`는 Attribute가 아니라 Name 호출이라 애초에 걸리지 않는다.)
 hits = [n.lineno for n in ast.walk(tree)
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-        and n.func.attr == 'save_registry'
-        and isinstance(n.func.value, ast.Name) and n.func.value.id == 'store']
+        and n.func.attr == 'save_registry']
 inside = [ln for ln in hits if wrapper.lineno <= ln <= (wrapper.end_lineno or wrapper.lineno)]
 print(f"main.py의 store.save_registry() 직접 호출 = {len(hits)}곳 "
       f"(래퍼 정의 안 {len(inside)}곳 — 1/1이어야 한다)")
@@ -657,10 +661,14 @@ if [ "$step" = "release" ]; then
     echo "push가 실패했다 — 아직 게시되지 않았다. 로컬 태그를 지우고 다시 하라: git tag -d v$ver" >&2
     exit 1; }
 
-  # ⑦ 게시 — **마지막 줄**이다. 이 뒤에 자동으로 하는 일은 없다.
+  # ⑦ 게시 — **마지막 동작**이다. 이 뒤에 자동으로 하는 일은 없다.
   gh release create "v$ver" pkg/gfxprofile.zip --verify-tag --title "v$ver" \
      --notes-file pkg/release-notes.md
+  # ★ 안내 한 줄을 찍고 **그 자리에서 끝낸다.** 파일 끝의 전역 `echo "OK"`까지 흘러가면
+  #   게시 뒤에 도는 코드가 생기고, RELEASE.md의 *"게시가 마지막 동작"*이 거짓이 된다.
+  #   지금은 상태를 바꾸지 않는 출력뿐이지만, 그 자리는 다음 사람이 무언가를 얹는 자리다.
   echo "게시했다: v$ver   작업 복귀: git checkout dev"
+  exit 0
 fi
 
 echo "OK"

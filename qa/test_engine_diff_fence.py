@@ -8,7 +8,7 @@
   있다"가 된다. 그 순간 신호는 사라진다.
 
   → 기준선을 **직전 릴리스 태그**로 옮긴다. 릴리스마다 리셋되므로 허용 diff는 언제나
-    *"이번 릴리스에서 엔진이 뭐가 바뀌었나"*만 담고, 그 diff가 CHANGELOG의 재료가 된다.
+    *"이번 릴리스에서 엔진이 뭐가 바뀌었나"*만 담고, 그것이 **QA 발주 입력**이 된다(`--show`).
     · **첫 릴리스 태그부터 자립적이다** — 리포만 있으면 돈다(외부 경로 의존 0).
       **그 전까지는 M1 원본이 필요하고 그것은 이 기기의 절대경로다** — 최초 릴리스 전에
       포크한 사람은 PATCHED 두 파일의 기준선이 없다(공개는 첫 릴리스와 함께 이뤄지므로
@@ -16,9 +16,10 @@
     · **최초 태그가 찍히기 전까지는 M1 원본을 기준선으로 쓴다**(부트스트랩). 태그가 생기면
       자동으로 전환되므로 이행 공백이 없다.
     · IDENTICAL 3파일은 기준선을 쓰지 않는다 — 아래 고정 지문과 대조한다.
-  ⚠️ 이 방식의 위험은 `--update`가 반사적으로 눌리는 것이다. 대책은 검사를 하나 더 만드는 것이
-  아니라 **사람이 이미 읽는 것에 묶는 것** — `build.sh release`가 누적 엔진 diff를 찍고 그것이
-  CHANGELOG에 반영됐는지 확인한다(release 명령 신설과 한 묶음).
+  ⚠️ 이 방식의 위험은 `--update`가 반사적으로 눌리는 것이다. 대책은 `--update` 자신이 진다 —
+  **판정 선행**(문제가 있으면 갱신하지 않는다) + **승인 대상 diff 본문을 그 자리에 출력**.
+  승인의 자리는 그 한 번이고, 릴리스 시점에 다시 묻지 않는다(`release`는 완전 비대화형이다).
+  엔진 변경 기록은 **검증하는 AI**가 보는 문서이고 CHANGELOG는 사용자 고지 문서다 — 엮지 않는다.
 
 ★ [2026-08-05 전면 교체] 이전 구현(AST 비교)은 **거짓 통과했다.**
   리뷰가 무단 변경 5개를 동시에 넣고도 PASS를 받아냈다:
@@ -109,8 +110,11 @@ def current_diff(read):
         base = read(name)
         if base is None:
             continue
+        # ⚠️ **양쪽을 바이트로 읽는다** — `read_text()`로 되돌리지 마라. universal newline이
+        #   CRLF를 LF로 바꿔 버려서, 실제 바이트가 다른데 diff가 비고 「빈 diff는 PASS」가 통과한다
+        #   (기준선은 `git show`가 준 바이트라 변환이 없다 — 비대칭이 곧 구멍이다).
         a = base.decode().splitlines(keepends=True)
-        b = (V2 / name).read_text().splitlines(keepends=True)
+        b = (V2 / name).read_bytes().decode().splitlines(keepends=True)
         out.extend(difflib.unified_diff(a, b, fromfile=f"기준선/{name}", tofile=f"작업본/{name}", n=3))
     return "".join(out)
 
@@ -170,8 +174,8 @@ def main():
         ALLOWED.write_text(diff)
         print(f"기준선: {label}")
         print(f"기록본 갱신: {ALLOWED} ({len(diff.splitlines())}행)")
-        # ★ 승인할 것을 그 자리에서 읽게 한다 — 갱신이 통과 의식이 되는 것을 막는 절반이다
-        #   (나머지 절반 = 릴리스 시 CHANGELOG 반영 확인. `release` 명령과 한 묶음).
+        # ★ 승인할 것을 그 자리에서 읽게 한다 — 갱신이 통과 의식이 되는 것을 막는 장치다.
+        #   **승인은 여기서 끝난다** — 릴리스 시점에 다시 묻는 절차는 없다(위 판정 선행과 한 쌍).
         print("--- 아래 diff를 사람이 읽고 승인해야 한다. 허용 목록은 이 파일이 전부다 ---")
         print(diff if diff else "(비어 있음 — 기준선과 완전히 같다)")
         print("--- diff 끝 ---")
