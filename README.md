@@ -34,7 +34,7 @@ There are no automatic updates, and the plugin does not notify you when a new re
 
 Registrations, saved profiles, and backups are stored in `~/homebrew/data/gfxprofile/`. Logs are stored in `~/homebrew/logs/gfxprofile/`.
 
-To remove the plugin and its data, uninstall the plugin in Decky, then delete `~/homebrew/data/gfxprofile/` and `~/homebrew/logs/gfxprofile/`.
+To remove the plugin and its data, uninstall the plugin in Decky, then delete `~/homebrew/data/gfxprofile/`, `~/homebrew/logs/gfxprofile/`, and the empty `~/homebrew/settings/gfxprofile/` folder that Decky Loader creates.
 
 ## Support
 

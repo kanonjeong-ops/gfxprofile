@@ -19,7 +19,9 @@ To modify `@decky/api` and relink it with this plugin:
    `pnpm install && pnpm exec tsc -p third_party/decky-api-1.1.3`.
 2. Point the `@decky/api` dependency in `package.json` at
    `file:third_party/decky-api-1.1.3`, then run `pnpm install && pnpm build`
-   to produce a new `dist/index.js`.
+   to produce a new `dist/index.js`. To edit the library again later, repeat
+   both steps including `pnpm install` — pnpm copies `file:` dependencies,
+   so a rebuild without it silently keeps the old code.
 
 This plugin's own code is released under the Unlicense, so nothing here
 restricts that.
