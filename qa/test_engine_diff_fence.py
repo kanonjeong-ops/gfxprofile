@@ -104,15 +104,27 @@ def baseline():
     return None, f"릴리스 태그도 없고 부트스트랩용 M1 원본도 없다: {M1}"
 
 
-def current_diff(read):
+def current_diff(bases):
+    """**기준선을 여기서 읽지 않는다** — `main()`이 한 번 읽은 스냅샷(`bases`)을 그대로 받는다.
+
+    예전에는 이 함수가 기준선을 **다시 읽고**, 실패하면 `continue`로 그 파일을 조용히 건너뛰었다.
+    첫 읽기는 성공하고 둘째가 실패하면 그 파일이 대조에서 빠지고, 최악의 경우 diff가 비어
+    **「바이트 동일 PASS」로 샜다**(2026-08-19 QA). 읽기를 하나로 합치면 두 스냅샷이 갈리는
+    갈래 자체가 사라진다 — 예외를 처리하는 대신 그 예외가 생기지 않는 구조로 바꾼다.
+    """
     out = []
     for name in PATCHED:
-        base = read(name)
+        base = bases[name]
         if base is None:
+            # ★ **조용히 건너뛰지 않는다.** 판정 갈래는 전부 `problems` 거부를 먼저 지나므로
+            #   여기 오는 None은 `--show`에서만 볼 수 있고, 그때도 사라지지 않고 눈에 남는다.
+            #   (이 줄이 diff를 비지 않게 만들어 「빈 diff PASS」로 새는 길도 함께 닫는다.)
+            out.append(f"!!! {name}: 기준선을 읽지 못했다 — 대조하지 못한 파일이다\n")
             continue
         # ⚠️ **양쪽을 바이트로 읽는다** — `read_text()`로 되돌리지 마라. universal newline이
         #   CRLF를 LF로 바꿔 버려서, 실제 바이트가 다른데 diff가 비고 「빈 diff는 PASS」가 통과한다
         #   (기준선은 `git show`가 준 바이트라 변환이 없다 — 비대칭이 곧 구멍이다).
+        #   ★ 형제가 하나 더 있다: **기록본을 읽는 자리**(아래 `recorded`)도 같은 규칙이다.
         a = base.decode().splitlines(keepends=True)
         b = (V2 / name).read_bytes().decode().splitlines(keepends=True)
         out.extend(difflib.unified_diff(a, b, fromfile=f"기준선/{name}", tofile=f"작업본/{name}", n=3))
@@ -132,8 +144,12 @@ def main():
     problems = []
 
     # PATCHED만 기준선을 탄다. IDENTICAL은 고정 지문이 기준이라 기준선과 무관하다.
+    # ★ 기준선은 파일당 **한 번만** 읽고 그 스냅샷을 끝까지 쓴다 (2026-08-19 QA). 예전엔 여기서
+    #   한 번, `current_diff()`가 또 한 번 읽어 **두 스냅샷이 갈릴 수 있었다** — 자세한 사유는
+    #   그 함수 독스트링. `--update`·`--show`도 같은 스냅샷을 쓴다.
+    bases = {name: read(name) for name in PATCHED}
     for name in PATCHED:
-        if read(name) is None:
+        if bases[name] is None:
             problems.append(f"{name}: 기준선에 이 파일이 없다 — 대조할 수 없으므로 거부한다")
 
     for name, want in IDENTICAL_SHA256.items():
@@ -142,7 +158,7 @@ def main():
             problems.append(f"{name}: 고정 지문과 다르다 (이 파일은 손대지 않기로 했다)\n"
                             f"      기록 {want}\n      실물 {got}")
 
-    diff = current_diff(read)
+    diff = current_diff(bases)
 
     # ★ `--show`는 **게이트가 아니라 출력 모드**다 — 판정하지 않고 언제나 0으로 끝난다.
     #   QA를 발주할 때 「직전 릴리스 이후 엔진이 뭐가 바뀌었나」를 브리핑에 그대로 붙이는 용도다.
@@ -198,7 +214,11 @@ def main():
         print(f"FAIL — 허용 diff 기록본이 없다: {ALLOWED}\n  최초 1회 `--update`로 만들고 리뷰받아라")
         return 1
 
-    recorded = ALLOWED.read_text()
+    # ⚠️ 기록본도 **바이트에서 출발한다** — 위 `current_diff`와 같은 규칙이다(형제를 한쪽만
+    #   고치면 반쪽이 된다). `read_text()`면 universal newline이 기록본의 `\r\n`을 `\n`으로
+    #   바꿔 읽는데 실황 diff는 `\r\n`을 보존하므로, **CRLF가 든 변경을 `--update`로 승인해도
+    #   본검사가 계속 FAIL하고 다시 승인해도 풀리지 않는다**(2026-08-19 QA).
+    recorded = ALLOWED.read_bytes().decode()
     if diff != recorded:
         d = list(difflib.unified_diff(recorded.splitlines(), diff.splitlines(),
                                       fromfile="기록된 허용 diff", tofile="지금의 diff", n=1))

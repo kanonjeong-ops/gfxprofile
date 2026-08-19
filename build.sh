@@ -602,7 +602,11 @@ if [ "$step" = "release" ]; then
   # CHANGELOG의 `## <버전>` 절 본문 = 릴리스 노트의 재료. 절 머리글은 싣지 않는다.
   #   `sed '/./,$!d'`는 절 머리글 바로 아래의 **빈 줄을 떨어낸다**(뒤쪽 빈 줄은 $( )가 이미 먹는다).
   notes_body=$(awk -v v="$ver" 'BEGIN{gsub(/\./,"\\.",v)} $0 ~ ("^## " v "( |$)"){f=1;next} /^## /{f=0} f' CHANGELOG.md | sed -e '/./,$!d')
-  [ -n "${notes_body//[[:space:]]/}" ] || { echo "CHANGELOG.md에 ## $ver 절이 없다" >&2; exit 1; }
+  # ★ 「없다」와 「있는데 비었다」를 **한 문장이 다 말한다** — 거부 사유는 같고(노트로 쓸 본문이
+  #   없다) 사용자가 할 일도 같은데, 문구가 한쪽만 말하면 절을 써 둔 사람이 자기 눈을 의심한다.
+  [ -n "${notes_body//[[:space:]]/}" ] || {
+    echo "CHANGELOG.md의 ## $ver 절이 없거나 본문이 비어 있다 — 릴리스 노트로 쓸 내용이 없다" >&2
+    exit 1; }
 
   # ★ 노트 조립은 **함수 하나**다 — DRY와 실제 게시가 같은 코드를 지난다.
   #   두 벌로 두면 DRY에서 본 것과 다른 것이 게시된다.
@@ -648,7 +652,9 @@ if [ "$step" = "release" ]; then
   fi
 
   # ④ 릴리스당 **유일한** 파이프라인 실행
-  bash "$0" all
+  bash "$0" all || {
+    echo "전체 검사가 실패했다 — 게시·태그·push는 아직 일어나지 않았다(지금 main 위에 서 있다. 작업 복귀: git checkout dev)" >&2
+    exit 1; }
 
   # ⑤ 노트 조립 — 게시 전에 사람이 읽는다
   assemble_notes
