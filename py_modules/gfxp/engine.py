@@ -8,9 +8,8 @@
 
 import os
 import re
-import time
 
-from . import codes, detect, discover, store
+from . import codes, discover, store
 
 
 class Refused(Exception):
@@ -315,101 +314,6 @@ def disk_state(reg, appid):
     return result
 
 
-# ---------------------------------------------------------------- sticky 학습
-
-_KEY_RE = re.compile(r"^\s*([^=<>\s][^=]{0,120}?)\s*=")
-
-
-def _line_key(line):
-    """줄에서 '키'를 뽑는다. 파싱이 아니라 보고용 라벨링이며 실패해도 무해하다."""
-    match = _KEY_RE.match(line)
-    return match.group(1) if match else line.strip()[:80]
-
-
-def learn_sticky(reg, appid):
-    """전환되지 않는 항목(.sav 등이 지배하는 값)을 스스로 알아낸다.
-
-    ⚠️ **2026-08-03부터 어디서도 자동으로 부르지 않는다.** 함수는 남겨 두지만 호출부는
-    전부 뗐다(UI 새로고침·`apply_profile`·CLI `list`/`status` 4곳).
-
-    이유: 이 함수가 보는 것은 "적용 시점 사본과 지금 디스크가 다르다"뿐이고, **그 차이를
-    만든 것이 게임인지 사용자인지 구분할 정보가 툴에 없다.** 프로필 두 벌을 만드는 세팅
-    단계에서는 같은 항목을 여러 번 만지는 것이 정상이라, 사용자의 조작이 그대로 "게임이
-    되돌린 값"으로 학습됐다. 실사용에서 스텔라 블레이드에 거짓 19줄이 등재됐고, 그중
-    17줄이 하필 두 프로필을 가르는 항목이었다(M1-FIELD-ISSUES-2026-08-03.md).
-    **코딩 실수가 아니라 설계 결함이다** — 툴은 "세팅이 끝난 시점"을 모른다.
-
-    되살리려면 세팅/운용 구분이 설계에 들어가야 한다(v2 주제). 아래 로직과 기준선 방어는
-    그때 재사용할 자산이라 지우지 않았다. 되돌림이 실재한다는 것 자체는 T1에서 실측됐다.
-
-    적용 시점 사본(.applied)과 게임이 다시 쓴 디스크 파일을 줄 단위로 비교한다.
-    같은 키가 **같은 값으로 2회 이상** 되돌아오면 확정으로 승격한다.
-    보고 전용이라 실패해도 교체 동작에는 영향이 없다.
-    """
-    entry = store.game(reg, appid)
-    if not entry:
-        return []
-    profile = entry.get("last_applied")
-    if not profile:
-        return []
-    applied_path = store.applied_copy_path(appid, profile)
-    config_path = entry["config_path"]
-    if not (os.path.exists(applied_path) and os.path.exists(config_path)):
-        return []
-    disk_sha1 = store.sha1_file(config_path)
-    if disk_sha1 == entry.get("applied_sha1"):
-        return []                       # 게임이 아직 다시 쓰지 않았다
-    if disk_sha1 == entry.get("last_learn_sha1"):
-        return []                       # 같은 상태를 두 번 세지 않는다
-
-    # **기준선이 기록과 어긋나면 배우지 않는다.**
-    # `.applied`(기준선 파일)와 `applied_sha1`(기록)은 항상 같이 갱신되므로, 어긋났다면
-    # 사본이 낡았다는 뜻이다 — 그걸 기준으로 비교하면 프로필을 재저장하며 정상적으로 바뀐
-    # 줄까지 "게임이 되돌리는 항목"으로 오인하고, 두 번 반복되면 영구 승격된다(QA 5라운드 R2).
-    # 사본을 갱신도 삭제도 못 하는 상황(프로필 폴더 쓰기 불가)에서도 이 검사가 마지막으로 막는다.
-    # **모르는 채로 조용히 있는 편이, 틀린 것을 아는 척하는 것보다 낫다.**
-    if entry.get("applied_sha1") and store.sha1_file(applied_path) != entry["applied_sha1"]:
-        return []
-
-    applied = store.read_bytes(applied_path)
-    disk = store.read_bytes(config_path)
-    if store.looks_binary(applied) or store.looks_binary(disk):
-        return []                       # 바이너리는 줄 비교 불가
-
-    applied_map = {}
-    for line in applied.decode("utf-8", "replace").splitlines():
-        if line.strip():
-            applied_map[_line_key(line)] = line.strip()
-
-    candidates = entry.setdefault("sticky_candidates", {})
-    promoted = []
-    for line in disk.decode("utf-8", "replace").splitlines():
-        if not line.strip():
-            continue
-        key = _line_key(line)
-        current = line.strip()
-        before = applied_map.get(key)
-        if before is None or before == current:
-            continue
-        record = candidates.get(key)
-        if record and record.get("value") == current:
-            record["count"] = record.get("count", 1) + 1
-        else:
-            candidates[key] = {"value": current, "count": 1, "applied_was": before}
-            continue
-        if record["count"] >= 2:
-            sticky = entry.setdefault("sticky_lines", [])
-            if not any(item.get("key") == key for item in sticky):
-                sticky.append({
-                    "key": key,
-                    "value": current,
-                    "learned_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                })
-                promoted.append(key)
-    entry["last_learn_sha1"] = disk_sha1
-    return promoted
-
-
 # ---------------------------------------------------------------- 동작
 
 def add_game(reg, appid, config_path, name=None):
@@ -529,11 +433,10 @@ def apply_profile(reg, appid, profile):
         raise Refused("거부: 프로필 '%s'의 내용이 메타와 어긋납니다 (저장소 손상)." % profile, code=codes.PROFILE_CORRUPT)
 
     notes = []
-    # 여기 있던 learn_sticky() 호출을 뺐다(2026-08-03). **오염의 가장 굵은 경로였다** —
-    # 실사용 흐름이 "적용 → 플레이 → 인게임 조정 → 다시 적용"이라, 이 자리의 학습은
-    # 사용자가 방금 손으로 바꾼 값을 매번 "게임이 되돌린 값"으로 집어삼켰다. 일괄 적용도
-    # 이 경로를 탄다. 원래 주석("체크인이 덮기 전에 학습부터")이 강제하던 순서 제약도
-    # 학습을 안 하는 이상 사라진다. 사정은 M1-FIELD-ISSUES-2026-08-03.md.
+    # 여기 있던 sticky 학습 호출은 2026-08-03에 뺐다 — **오염의 가장 굵은 경로였다.**
+    # 실사용 흐름이 "적용 → 플레이 → 인게임 조정 → 다시 적용"이라, 이 자리의 학습은 사용자가
+    # 방금 손으로 바꾼 값을 매번 "게임이 되돌린 값"으로 집어삼켰다(M1-FIELD-ISSUES-2026-08-03.md).
+    # 학습 코드 자체는 15판에서 삭제됐다(설계 §14-G ⓖ).
 
     # ---- 체크인은 13판에서 삭제됐다 (설계 §14-A · A11)
     #
@@ -577,7 +480,6 @@ def apply_profile(reg, appid, profile):
     except OSError:
         pass
     store.atomic_write(path, target_data, mode, owner)            # G9
-    store.atomic_write(store.applied_copy_path(appid, profile), target_data)
 
     entry["last_applied"] = profile
     entry["applied_sha1"] = store.sha1_bytes(target_data)
@@ -661,68 +563,17 @@ def apply_all(reg, profile):
 def _record_already(entry, appid, profile, meta):
     """디스크가 이미 목표 프로필과 같아 **쓰지 않고 넘어갈 때** 기록을 사실에 맞춘다.
 
-    파일은 안 건드리지만 **기록은 진짜 적용과 똑같이** 맞춰야 한다. 셋 다 필요하다.
+    파일은 안 건드리지만 **기록은 진짜 적용과 똑같이** 맞춰야 한다. 둘 다 필요하다.
 
     1. `last_applied` — 이게 다른 프로필을 가리키고 있으면, 나중에 사용자가 인게임에서
        조정한 뒤의 체크인이 **그 조정을 엉뚱한 프로필에 써 넣는다**(G3는 "디스크가 다른
        프로필과 정확히 일치할 때"만 막아 주는데, 조정 후에는 그 조건이 이미 깨져 있다).
-    2. `.applied` 그림자 사본 — `learn_sticky`가 "게임이 제멋대로 되돌리는 줄"을 찾는
-       **기준선**이다. 이것만 낡은 채로 두면(QA 5라운드 R2) 프로필을 재저장하며 정상적으로
-       바뀐 줄까지 sticky 후보로 오인하고, 두 번 반복되면 `sticky_lines`에 **영구 승격**된다.
-       되돌리는 수단이 없어서 사용자는 멀쩡한 설정을 '전환 안 되는 항목'으로 믿게 된다.
-    3. `last_learn_sha1` — 학습 캐시. 기준선을 갈았으면 같이 무효화해야 다시 판정한다.
+    2. `last_learn_sha1` — 학습 캐시의 잔재다. 학습 코드는 15판에서 삭제됐지만(설계 §14-G ⓖ)
+       필드가 남아 있어, 기록을 진짜 적용과 같은 모양으로 맞춰 둔다.
     """
     entry["last_applied"] = profile
     entry["applied_sha1"] = meta.get("sha1")
     entry["last_learn_sha1"] = None
-    shadow = store.applied_copy_path(appid, profile)
-    try:
-        source = store.profile_file_path(appid, profile)
-        if source and os.path.exists(source):
-            store.atomic_write(shadow, store.read_bytes(source))
-    except OSError:
-        # 그림자 사본은 학습용 보조 자료일 뿐이라, 못 써도 일괄 작업을 실패시키지 않는다 —
-        # 디스크는 이미 옳은 상태이므로 "오류"로 보고하면 오히려 사용자를 오도한다.
-        #
-        # 다만 **낡은 사본을 그대로 두는 것이 가만히 두는 것보다 나쁘다.** 그게 남아 있으면
-        # `learn_sticky`가 그걸 기준선으로 삼아 R2와 똑같은 오염을 만든다. 그래서 지운다 —
-        # 파일이 없으면 `learn_sticky`는 아무것도 배우지 않고 그냥 돌아가고(있는지부터 본다),
-        # 다음 진짜 적용이 사본을 다시 만들면서 정상으로 돌아온다. **모르는 채로 조용히 있는
-        # 편이, 틀린 것을 아는 척하는 것보다 낫다.**
-        try:
-            if os.path.exists(shadow):
-                os.remove(shadow)
-        except OSError:
-            pass                # 지우는 것마저 막혔다면(디렉터리 권한) 더 할 수 있는 게 없다.
-                                # 사용자 쪽 복구 수단은 `forget-sticky`가 맡는다.
-
-
-def forget_sticky(reg, appid):
-    """학습한 sticky 목록을 지운다 — **잘못 배운 것을 되돌리는 유일한 수단이다.**
-
-    **2026-08-03부터 자동 학습은 멈췄다**(`learn_sticky` 참조). 그래서 이 명령은 이제
-    "새로 쌓이는 것을 지우는" 용도가 아니라 **이미 잘못 배운 기록을 청소하는** 용도다.
-    한 번 지우면 다시 쌓이지 않는다.
-
-    sticky 학습은 자동이었고, 같은 키가 두 번 되돌아오면 `sticky_lines`로 확정 승격됐다.
-    그런데 승격을 되돌리는 길이 없어서, 한 번 잘못 배우면 UI의 "이 항목은 프로필로 전환되지
-    않습니다" 목록에 **영구히** 남는다 — 사용자는 멀쩡히 동작하는 설정을 포기하거나 툴을
-    의심하게 된다(QA 5라운드 지적). 원인 하나는 고쳤지만(`_record_already`의 기준선 갱신),
-    학습이 추측인 이상 **되돌리는 수단 자체가 있어야 한다.**
-
-    (학습이 자동이던 시절의 단서 — v2에서 되살릴 때 다시 유효해진다: 지우면 다음 학습부터
-    다시 셌고, 원인이 남아 있으면 같은 항목이 또 올라오는 것이 정상이었다. 또 `restore_backup`
-    직후에는 `.applied` 사본과 `applied_sha1`이 어긋나 학습이 멈춰 있어, 지워도 다음 진짜
-    `apply` 전까지는 새로 배우지 않았다 — 의도된 안전 동작이지 데이터 문제가 아니다.)
-    """
-    appid = str(appid)
-    entry = game_or_fail(reg, appid)
-    removed = len(entry.get("sticky_lines") or [])
-    candidates = len(entry.get("sticky_candidates") or {})
-    entry["sticky_lines"] = []
-    entry["sticky_candidates"] = {}
-    entry["last_learn_sha1"] = None
-    return {"removed": removed, "candidates": candidates}
 
 
 def restore_backup(reg, appid, backup_path, target="config"):
@@ -789,13 +640,3 @@ def restore_backup(reg, appid, backup_path, target="config"):
     entry["applied_sha1"] = store.sha1_bytes(data)
     entry["last_learn_sha1"] = None
     return {"restored": backup_path}
-
-
-def suggest_gpu_map(reg):
-    """현재 VULKAN_ADAPTER가 gpu_map에 없으면 등록을 제안한다."""
-    adapter, source = detect.read_adapter()
-    if not adapter:
-        return None
-    if adapter in reg.get("gpu_map", {}):
-        return None
-    return {"adapter": adapter, "source": source}

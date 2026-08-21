@@ -12,8 +12,5 @@
 게시 없이 점검: `GFXP_RELEASE_DRY=1 bash build.sh release` — 지금 브랜치에서 검사와 노트 조립까지만
 하고 게시·태그·push는 하지 않는다.
 
-QA를 발주할 때 「직전 릴리스 이후 엔진 변경」은 `python3 qa/test_engine_diff_fence.py --show` 출력을
-브리핑에 붙인다.
-
 릴리스마다 하지 않는 것: 유출 감사 전수(직전 태그와의 diff만 본다) · 원격 URL 설치 실증(최초 1회로
 끝) · 데이터를 쓰는 경로에 안 닿는 수정의 QA 라운드.

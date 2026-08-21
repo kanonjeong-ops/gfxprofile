@@ -249,11 +249,6 @@ def profile_file_path(appid, profile):
     return os.path.join(profile_dir(appid, profile), meta["filename"])
 
 
-def applied_copy_path(appid, profile):
-    """적용 시점의 사본. sticky 학습이 '우리가 쓴 내용'과 대조하는 기준이다."""
-    return os.path.join(profile_dir(appid, profile), ".applied")
-
-
 def write_profile(appid, profile, filename, data, src):
     directory = profile_dir(appid, profile)
     os.makedirs(directory, exist_ok=True)

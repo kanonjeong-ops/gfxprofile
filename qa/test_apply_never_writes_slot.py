@@ -14,10 +14,10 @@ sha1만 보면 **같은 바이트를 다시 쓴 경우**를 통과시킨다(체�
 직전 적용 프로필과 디스크가 같으면 같은 내용을 되쓴다). `store.atomic_write`은 tmp→rename이라
 **inode가 바뀌므로**, inode·mtime_ns를 같이 재면 그 재기록이 잡힌다.
 
-### `.applied` 하나만 제외한다 — **그 제외가 계약의 일부다**
-엔진은 적용 말미(`engine.py:545`)와 already 경로(`_record_already`)에서 그림자 사본 `.applied`를
-**의도적으로** 갱신한다. 그래서 조문은 이렇게 읽는다:
-    *"적용은 `.applied` 외에 슬롯의 어떤 파일도 만들거나 바꾸거나 지우지 않는다."*
+### 조문에는 예외가 없다
+    *"적용은 슬롯의 어떤 파일도 만들거나 바꾸거나 지우지 않는다."*
+14판까지는 그림자 사본 `.applied` 하나가 예외였다(적용 말미와 already 경로가 의도적으로 갱신했다).
+15판에서 **그 쓰기 자체가 삭제돼**(설계 §14-G ⓖ) 지킬 예외가 사라졌고, 조문은 그만큼 좁아졌다.
 
 ### 못 재는 것(정직)
 파일시스템이 ns 해상도를 안 주면(fat32 등) 동일 바이트 재기록은 **inode 변화로만** 잡힌다.
@@ -37,7 +37,6 @@ APPID = "666"
 DOCK = b"quality=dock\nshadows=high\nsource=DOCK-PROFILE\n"
 INTERNAL = b"quality=intl\nshadows=low_\nsource=INTL-PROFILE\n"
 EDITED = b"quality=edit\nshadows=mid_\nsource=USER-EDITED-\n"
-APPLIED_MARKER = ".applied"
 
 
 def boot(tmp):
@@ -60,8 +59,8 @@ def rpc(main, name, *args, **kwargs):
     return asyncio.run(getattr(main.Plugin(), name)(*args, **kwargs))
 
 
-def slot_snapshot(store, appid, with_marker=False):
-    """두 슬롯 디렉터리의 파일 상태. `with_marker=False`면 `.applied`를 뺀다(계약).
+def slot_snapshot(store, appid):
+    """두 슬롯 디렉터리의 **모든** 파일 상태. 빼는 이름은 없다(조문에 예외가 없다).
 
     값은 `(name, inode, mtime_ns, sha1)`이다 — **같은 바이트 재기록**까지 잡기 위해서다.
     """
@@ -75,8 +74,6 @@ def slot_snapshot(store, appid, with_marker=False):
             continue
         rows = []
         for name in names:
-            if name == APPLIED_MARKER and not with_marker:
-                continue
             path = os.path.join(directory, name)
             if not os.path.isfile(path):
                 continue
@@ -105,7 +102,6 @@ def main_test():                                                # noqa: C901  (�
         main = boot(tmp)
         from gfxp import codes, engine, store
         problems = []
-        marker_moved = []            # `.applied` 제외가 **실제로 필요한가**의 증거(음성 대조군 ⓑ)
 
         def P(msg):
             problems.append(msg)
@@ -115,15 +111,11 @@ def main_test():                                                # noqa: C901  (�
         def run(label, call, expect_outcome=None, expect_code=None):
             """한 갈래를 돌리고 **슬롯 불변**을 잰다. 반환은 봉투."""
             before = slot_snapshot(store, APPID)
-            before_all = slot_snapshot(store, APPID, with_marker=True)
             env = call()
             after = slot_snapshot(store, APPID)
-            after_all = slot_snapshot(store, APPID, with_marker=True)
             if before != after:
                 P("★[%s] 적용이 프로필 슬롯을 바꿨다(A11 위반)\n      전=%s\n      후=%s"
                   % (label, before, after))
-            if before_all != after_all:
-                marker_moved.append(label)
             if expect_outcome is not None:
                 got = (env.get("data") or {}).get("outcome")
                 if not env.get("ok") or got != expect_outcome:
@@ -211,14 +203,7 @@ def main_test():                                                # noqa: C901  (�
             P("★음성 대조군 ⓐ 무효 — 체크인을 되살린 엔진에서도 슬롯이 그대로로 보였다. "
               "이 검사는 아무것도 재지 않는다")
 
-        # ── 음성 대조군 ⓑ: `.applied` 제외가 **필요했는가**
-        #    (제외 없이 재면 정상 구현도 달라 보인다 = 제외가 장식이 아니라 계약이다)
-        if not marker_moved:
-            P("★음성 대조군 ⓑ 무효 — 어느 갈래에서도 `.applied`가 안 움직였다. 그러면 제외 규칙이 "
-              "아무 일도 안 하는 것이고, 규칙이 지워져도 이 검사는 안 걸린다")
-
-        print("적용의 슬롯 불변 — 4-A 갈래 6종 · 음성 대조군 2 (데이터: %s)" % tmp)
-        print("  `.applied`가 움직인 갈래: %s (제외 규칙이 실재하는 증거)" % marker_moved)
+        print("적용의 슬롯 불변 — 4-A 갈래 6종 · 음성 대조군 1 (데이터: %s)" % tmp)
         if problems:
             print("\nFAIL")
             for p in problems:
