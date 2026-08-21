@@ -58,8 +58,13 @@ def main():
         seen = []
 
         def check(label, expect_need, expect_state=None, expect_note=None):
-            need, params = confirm.needs_confirm(reg, APPID, "dock")
+            # 15판 §14-G ⓕ: 판정 함수가 **지문까지 함께** 낸다(묻는 갈래에서만 — 나머지는 None).
+            # 여기서 잠그는 것은 M1 동치이므로 지문은 유효성만 본다.
+            need, params, fp = confirm.needs_confirm(reg, APPID, "dock")
             seen.append(label)
+            if bool(fp) != bool(need):
+                problems.append(f"[{label}] 지문이 need={need}와 어긋난다(fp={fp!r}) — "
+                                f"★묻는 갈래에는 지문이 있어야 하고, 안 묻는 갈래는 잴 것이 없다")
             if need != expect_need:
                 problems.append(f"[{label}] need={need} (기대 {expect_need}) "
                                 f"★부호가 뒤집혔거나 분기가 빠졌다")

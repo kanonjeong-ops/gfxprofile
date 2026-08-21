@@ -26,6 +26,7 @@
 
 `save_registry`는 여기서 부르지 않는다 — 엔진 문법 그대로 **호출자(접착층 route)**가 부른다.
 """
+import json
 import logging
 import os
 import shutil
@@ -105,20 +106,56 @@ def _paths_in_position(appid):
     return _in_place(real_bk, home_bk, appid)
 
 
-def _meta_or_none(appid, profile):
-    """meta를 읽되 **dict가 아니면 `None`으로 접는다.** 조회 실패(OSError·비JSON)뿐 아니라
-    `"text"`·`[1]`·`1` 같은 **유효 JSON이지만 객체가 아닌** meta도 여기서 접는다 —
-    그러지 않으면 `.get()`이 `AttributeError`를 내고 삭제·초기화가 `UNEXPECTED`로 봉쇄된다
-    (Codex #5). `store.load_meta`는 fence 대상이라 방어를 이쪽에 둔다."""
+def _meta_observe(appid, profile):
+    """슬롯 meta 파일을 **한 번 읽어** `(기록, 파일 지문)`을 같이 낸다.
+
+    · 기록      — dict가 **아니면 `None`으로 접는다.** 조회 실패(OSError·비JSON)뿐 아니라
+      `"text"`·`[1]`·`1` 같은 **유효 JSON이지만 객체가 아닌** meta도 여기서 접는다 —
+      그러지 않으면 `.get()`이 `AttributeError`를 내고 삭제·초기화가 `UNEXPECTED`로 봉쇄된다
+      (Codex #5).
+    · 파일 지문 — **meta 파일 자체의 sha1**이다(기록의 `sha1` *필드*가 아니다 — 아래
+      `delete_fingerprint` 주석이 그 차이의 정본이다). 못 읽으면 `None`.
+
+    ★★ 왜 한 번에 내는가(설계 §14-G ⓕ): 확인창은 이 기록으로 *"{saved_at}에 저장됨"*을 말하고
+      토큰은 같은 파일의 지문에 묶인다. 예전에는 고지가 `load_meta`로, 지문이 `sha1_file`로
+      **각자 한 번씩** 읽어 그 사이에 저장이 끼면 화면은 옛 시각을 말하는데 토큰은 새 기록에
+      묶였다 — 그 토큰은 2차 호출에서 그대로 통과한다.
+    """
+    path = store.profile_meta_path(appid, profile)
     try:
-        meta = store.load_meta(appid, profile)
-    except (OSError, ValueError):
-        return None
-    return meta if isinstance(meta, dict) else None
+        raw = store.read_bytes(path)
+    except OSError:
+        return None, None                      # 없음·권한·디렉터리 — 지문도 없다("absent")
+    digest = store.sha1_bytes(raw)
+    try:
+        meta = json.loads(raw.decode("utf-8"))
+    except ValueError:                         # UnicodeDecodeError도 ValueError다
+        return None, digest                    # 못 읽는 기록이어도 **파일 지문은 사실이다**
+    return (meta if isinstance(meta, dict) else None), digest
+
+
+def _delete_fp(meta_digests, backups):
+    """개별 삭제 지문의 **조립 규칙**은 여기 하나다 — 관측은 부르는 쪽이 한다(§14-G ⓕ).
+
+    자리가 둘이라서 뺐다: **`delete_preview`**(고지를 만들며 이미 읽은 값으로 낸다)와
+    **`delete_fingerprint`**(다게임 `reset_fingerprint`가 게임마다 새로 관측해 부른다).
+    관측 시점이 다른 것은 route가 다르니 정상이지만, **조립 규칙까지 갈리면** 한쪽 토큰만
+    조용히 어긋난다.
+    """
+    return "|".join([(d or "absent") for d in meta_digests] + ["bk=%d" % backups])
+
+
+def _evacuable_total(appid):
+    """이 게임을 지울 때 링에 **밀어 넣을 본체 수** — 축출 예고의 `adding`이다.
+
+    ★ 세는 쪽(`delete_preview`·`evict_on_delete`)과 지우는 쪽(`_evacuate`)이 **같은 목록**을
+      돈다(`store.evacuable_names`). 규칙을 자리마다 다시 적으면 예고와 실제가 갈린다."""
+    return sum(len(store.evacuable_names(appid, p)) for p in PROFILES)
 
 
 def delete_preview(reg, appid):
-    """확인창이 보여줄 것. **순수 조회 — 아무것도 쓰지 않는다.**
+    """`(params, fingerprint)` — 확인창이 보여줄 것 **+ 그 고지에 묶을 토큰 지문**.
+    **순수 조회 — 아무것도 쓰지 않는다.**
 
     미등록이면 여기서 `GAME_NOT_REGISTERED`가 난다(문은 `engine.game_or_fail` 하나).
 
@@ -130,6 +167,16 @@ def delete_preview(reg, appid):
       대피본에는 meta가 없어(설계 §1-6) 원본 경로를 아는 곳이 삭제 **전**의 registry뿐이라,
       지우기 직전 화면이 그 경로를 보여줄 마지막 기회가 여기다. str이 아니면 빈 문자열로
       접는다 — 빈 값이면 화면이 그 줄을 안 그린다(기존 "0이면 안 그림" 문법).
+
+    ★★ **지문을 params와 함께 낸다**(15판 §14-G ⓕ). 예전에는 접착층이 고지를 받은 **뒤**
+      `delete_fingerprint`와 `restore.ring_fingerprint`를 각각 불러 **관측이 3패스**였다
+      (백업 나열만 4회). 그 사이의 변화는 토큰에 구워져 안 보였고, 확인창이 이름을 댄 백업과
+      실제로 지워지는 백업이 갈릴 수 있었다. 지금은 고지에 쓴 바로 그 관측값이 지문이 된다 —
+      부수로 나열이 4회에서 **1회**가 됐다.
+    ⚠️ **소비자가 둘이다** — 삭제 route와 `main._profile_total`(전체 초기화 확인창의 "프로필
+      M개"). 반환을 튜플로 바꾼 것은 **한쪽만 고치면 조용히 깨지는 것을 막기 위해서다**:
+      키를 하나 더 얹으면 `_profile_total`은 아무 말 없이 통과하고, 삭제 route가 `**params`로
+      splat하는 순간 지문이 **화면 봉투로 샌다.**
     """
     appid = str(appid)
     entry = engine.game_or_fail(reg, appid)
@@ -138,23 +185,32 @@ def delete_preview(reg, appid):
         # 안전하지 않은 키 — 외부를 **읽지 않는다**(Codex #2). "지울 프로필 없음"으로 보고하고,
         # 실제 삭제 문에서 escape로 남긴다. 확인창은 이 게임을 빈 것으로 표시한다.
         # 경로도 **말하지 않는다**: 이 게임은 화면이 정상적으로 안내할 수 있는 상태가 아니다.
-        return {"appid": appid, "name": name, "has_dock": False, "has_internal": False,
-                "saved_at": {p: "" for p in PROFILES}, "backups": 0, "config_path": ""}
-    metas = {p: _meta_or_none(appid, p) for p in PROFILES}
+        # 지문도 **아무 파일도 읽지 않는 고정 센티널**이다(양쪽 칸 모두).
+        return ({"appid": appid, "name": name, "has_dock": False, "has_internal": False,
+                 "saved_at": {p: "" for p in PROFILES}, "backups": 0, "config_path": ""},
+                (_UNSAFE_FP, _UNSAFE_FP))
+    from . import restore                       # 순환 회피 — `evict_on_delete`와 같은 이유·같은 문법
+    metas, digests = {}, []
+    for profile in PROFILES:                    # ★ 슬롯 meta는 **슬롯당 한 번**만 읽는다
+        metas[profile], digest = _meta_observe(appid, profile)
+        digests.append(digest)
+    # ★ 링도 **한 번**만 나열한다 — 축출 예고·"현재 백업 N건"·링 지문이 전부 이 한 관측이다.
+    ring = restore.ring_observe(appid, _evacuable_total(appid))
     config_path = entry.get("config_path")
-    return {
+    params = {
         "appid": appid,
         "name": name,
         "has_dock": bool(metas["dock"]),
         "has_internal": bool(metas["internal"]),
         "saved_at": {p: (metas[p] or {}).get("saved_at") or "" for p in PROFILES},
-        "backups": len(store.list_backups(appid)),
+        "backups": ring["count"],
         "config_path": config_path if isinstance(config_path, str) else "",
         # ★ 이 해제가 **실제로 지울 백업**(R14 #1 — 적용·복원·저장과 같은 필드·같은 문구).
         #   대피는 슬롯 본체를 링에 밀어 넣으므로, 링이 차 있으면 그만큼 오래된 백업이 사라진다.
         #   *"현재 백업 N건"*만 말하던 자리가 **무엇이 사라지는지는 말하지 않았다.**
-        "evicted": evict_on_delete(appid),
+        "evicted": ring["evicted"],
     }
+    return params, (_delete_fp(digests, ring["count"]), ring["fingerprint"])
 
 
 def evict_on_delete(appid):
@@ -168,8 +224,7 @@ def evict_on_delete(appid):
     if not _paths_in_position(appid):
         return []                              # 안전하지 않은 키는 조회하지 않는다(Codex #2)
     from . import restore
-    adding = sum(len(store.evacuable_names(appid, p)) for p in PROFILES)
-    return restore.evict_preview(appid, adding=adding)
+    return restore.evict_preview(appid, adding=_evacuable_total(appid))
 
 
 def reset_evict_preview(reg):
@@ -222,13 +277,18 @@ def delete_fingerprint(appid):
 
     안전하지 않은 키는 외부를 읽지 않는 **고정 센티널**로 접는다(Codex #2) — 조회가 곧
     경로 탈출이 되는 상황 자체를 없앤다.
+
+    ⚠️ **개별 삭제 route는 이 함수를 부르지 않는다**(15판 §14-G ⓕ). 그쪽 지문은
+      `delete_preview`가 고지를 만들며 **이미 읽은 값**으로 낸다 — 여기를 다시 부르면 관측이
+      둘로 갈려 그 사이의 변화가 토큰에 구워진다. 여기 남는 소비자는 **다게임**
+      `reset_fingerprint`(게임마다 새로 관측한다)와 검사의 계측기다.
+      조립 규칙은 `_delete_fp` **한 곳**이라 두 자리가 규칙으로 갈릴 수는 없다.
     """
     appid = str(appid)
     if not _paths_in_position(appid):
         return _UNSAFE_FP
-    parts = [store.sha1_file(store.profile_meta_path(appid, p)) or "absent" for p in PROFILES]
-    parts.append("bk=%d" % len(store.list_backups(appid)))
-    return "|".join(parts)
+    return _delete_fp([_meta_observe(appid, p)[1] for p in PROFILES],
+                      len(store.list_backups(appid)))
 
 
 def reset_fingerprint(reg):

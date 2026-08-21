@@ -530,40 +530,19 @@ def _restore_scope(target, backup_id):
     return "%s:%s:%s" % (_RESTORE_SCOPE, target, backup_id)
 
 
-def _state_fingerprint(reg, appid, profile):
-    """토큰에 묶을 상태 지문 — **확인창을 띄운 사이에 무언가 바뀌었는지**를 재는 값이다.
-
-    조회가 실패하면 `None`을 넣는다. `None`도 지문의 일부라서, 조회 실패 상태에서 발급한 토큰은
-    조회가 되기 시작하면 **불일치로 거부된다**(안전한 방향이다 — 다시 물으면 되고, 그 사이
-    사용자가 본 화면은 이미 낡았다).
-
-    ★★ 두 번째 칸에 **백업 링의 지문**을 합성한다(R14 #2). 저장·적용 확인창은 *"이 백업이
-      지워집니다"*라고 **이름을 대며** 승인을 받는데, 그 사이 다른 동작이 링을 한 칸 돌리면
-      승인 대상이 달라진다 — 예전에는 낡은 토큰이 그대로 통과해 **사용자가 승인하지 않은
-      파일이** 지워졌다(포화 링에서는 개수도 그대로라 어떤 신호에도 안 걸렸다).
-      합성이 안전한 이유는 `_consume`이 튜플 **전체 동등 비교**만 하고 문자열을 되쪼개지
-      않기 때문이다(아래 `_consume`) — 슬롯 수를 늘리지 않고 지문만 넓힌다.
-    """
-    try:
-        meta = store.load_meta(appid, profile)
-        # 비-dict meta(손상 JSON)는 `.get`이 AttributeError를 내고 except가 못 잡는다 →
-        #   None으로 접는다(조회 실패와 같은 안전한 방향). 2026-08-09 조사 발견.
-        meta_sha1 = meta.get("sha1") if isinstance(meta, dict) else None
-    except (OSError, ValueError):
-        meta_sha1 = None
-    disk_sha1 = _disk_state_safe(reg, appid).get("sha1")
-    return meta_sha1, "%s|ring=%s" % (disk_sha1, restore.ring_fingerprint(appid))
-
-
 def _profile_total(reg):
     """등록 게임들이 실제로 가진 프로필 슬롯 수 — 전체 초기화 확인창의 "프로필 M개".
 
     프론트가 다시 세지 않게 백엔드가 준다(`get_overview`의 counts와 같은 규칙 —
     두 곳에서 세면 언젠가 어긋난다). 판정은 `remove.delete_preview` 한 곳에서만 나온다.
+
+    ⚠️ `delete_preview`는 15판부터 **`(params, 지문)`**을 돌려준다(§14-G ⓕ). 여기서 지문을
+      버리는 것은 **이 화면이 토큰을 발급하지 않기 때문**이다 — 전체 초기화의 토큰은
+      `remove.reset_fingerprint`가 전 게임을 묶어 따로 낸다. 이 자리는 슬롯 수만 센다.
     """
     total = 0
     for appid in reg["games"]:
-        info = remove.delete_preview(reg, appid)
+        info, _fp = remove.delete_preview(reg, appid)
         total += int(info["has_dock"]) + int(info["has_internal"])
     return total
 
@@ -741,12 +720,17 @@ class Plugin:
         """
         reg = store.load_registry()
         # 실행 중 게임·미등록은 여기서 `Refused`로 나간다(route 데코레이터가 봉투에 싣는다).
-        state, params = confirm.apply_needs_confirm(reg, appid, profile)
+        # ★★ 판정 함수가 **params와 지문을 함께** 돌려준다(15판 §14-G ⓕ). 예전에는 여기서
+        #   `_state_fingerprint`를 따로 불러 meta·디스크·링을 **다시** 읽었고, 그 두 관측
+        #   사이의 변화가 토큰에 구워져 영구히 안 보였다. 접착층은 이제 옮기기만 한다.
+        #   ⚠️ 지문은 `params`가 아니라 별도 변수다 — `**params`로 splat해도 화면 봉투에
+        #     안 샌다(`apply_all`의 같은 규칙).
+        state, params, fp = confirm.apply_needs_confirm(reg, appid, profile)
         if state == "already":
             # 쓰기 0 · 백업 0 · 링 소모 0. **무반응이 아니라 결과다** — 화면이 그 사실을 말한다(§4-I).
             return _ok(outcome="already", **params)
         if state == "confirm":
-            meta_sha1, disk_sha1 = _state_fingerprint(reg, appid, profile)
+            meta_sha1, disk_sha1 = fp
             scope = _apply_scope(profile)
             if not _consume(confirm_token, str(appid), scope, meta_sha1, disk_sha1):
                 # ★ 여기서 **파일을 건드리지 않는다.** 없든 위조든 만료든 방향이 다르든 상태가
@@ -890,9 +874,11 @@ class Plugin:
         (`codes.FLOW_CODES`). 토스트·로그에서 에러로 취급하지 마라.
         """
         reg = store.load_registry()
-        need, params = confirm.needs_confirm(reg, appid, profile)
+        # ★★ 판정 함수가 **params와 지문을 함께** 돌려준다(15판 §14-G ⓕ — 적용과 같은 문법).
+        #   고지에 쓴 그 관측값이 그대로 지문이 되므로, 고지와 지문 사이에 낄 창이 없다.
+        need, params, fp = confirm.needs_confirm(reg, appid, profile)
         if need:
-            meta_sha1, disk_sha1 = _state_fingerprint(reg, appid, profile)
+            meta_sha1, disk_sha1 = fp
             if not _consume(confirm_token, appid, profile, meta_sha1, disk_sha1):
                 # ★ 여기서 **파일을 건드리지 않는다.** 토큰이 없든 위조든 만료든 상태가 바뀌었든
                 #   전부 같은 자리로 온다 — 사유를 갈라 봐야 화면이 할 일은 "다시 물어보기" 하나다.
@@ -1148,14 +1134,16 @@ class Plugin:
           띄운 사이 어느 슬롯이든 저장되면 낡은 토큰이 거부되고 다시 묻는다(TOCTOU).
         """
         reg = store.load_registry()
-        params = remove.delete_preview(reg, appid)         # 미등록이면 GAME_NOT_REGISTERED
-        # 시각 표기는 **한 함수**를 지난다(F5) — 같은 값이 화면마다 다른 모양으로 보이지 않게.
-        params["saved_at"] = {p: _saved_label(v) for p, v in (params.get("saved_at") or {}).items()}
-        fp = remove.delete_fingerprint(appid)
+        # ★★ 판정 함수가 **params와 지문을 함께** 돌려준다(15판 §14-G ⓕ). 예전에는 여기서
+        #   `delete_fingerprint`와 `ring_fingerprint`를 각각 더 불러 **관측이 3패스**였고,
+        #   그 사이의 변화가 토큰에 구워졌다. 지금은 고지에 쓴 그 관측값이 지문이다.
         # ★ 네 번째 칸은 **백업 링의 지문**이다(R14 #2). 확인창이 *"이 백업이 지워집니다"*라고
         #   이름을 대므로, 그 사이 링이 돌면(포화 링은 개수가 10으로 불변이라 `delete_fingerprint`의
         #   개수 신호에 안 걸린다) 승인 대상이 달라진다 — 그때는 새 목록으로 다시 묻는다.
-        ring = restore.ring_fingerprint(appid)
+        # ⚠️ 지문은 `params`가 아니라 별도 변수다 — 아래 `**params` splat에 안 섞인다.
+        params, (fp, ring) = remove.delete_preview(reg, appid)   # 미등록이면 GAME_NOT_REGISTERED
+        # 시각 표기는 **한 함수**를 지난다(F5) — 같은 값이 화면마다 다른 모양으로 보이지 않게.
+        params["saved_at"] = {p: _saved_label(v) for p, v in (params.get("saved_at") or {}).items()}
         if not _consume(confirm_token, str(appid), _DELETE_SCOPE, fp, ring):
             # ★ 여기서 **아무것도 지우지 않는다.** 토큰이 없든 위조든 만료든 사이에 상태가
             #   바뀌었든 전부 같은 자리다 — 화면이 할 일은 "다시 물어보기" 하나뿐이다.
@@ -1317,7 +1305,10 @@ class Plugin:
         """
         reg = store.load_registry()
         # 실행 중 게임·경로 봉쇄·미등록은 여기서 `Refused`로 나간다(route 데코레이터가 봉투에 싣는다).
-        state, params = restore.needs_confirm(reg, appid, backup_id)
+        # ★★ 판정 함수가 **params와 지문을 함께** 돌려준다(15판 §14-G ⓕ — 적용·저장·삭제와
+        #   같은 문법). 예전에는 여기서 `restore.fingerprint`를 따로 불러 되돌릴 곳의 본체·
+        #   백업 파일·링을 **다시** 읽었고, 그 두 관측 사이의 변화가 토큰에 구워졌다.
+        state, params, fp = restore.needs_confirm(reg, appid, backup_id)
         target = params["target"]
         # 표시 문자열 변환은 **백엔드 한 곳**이다(`_slot_view`의 saved_at과 같은 함수).
         if "saved_at" in params:
@@ -1326,7 +1317,7 @@ class Plugin:
             # 쓰기 0 · 대피 0 · 링 소모 0. `apply_all`의 already와 같은 판단이다.
             return _ok(outcome="already", **params)
         if state == "confirm":
-            fp_target, fp_backup = restore.fingerprint(reg, appid, backup_id)
+            fp_target, fp_backup = fp
             scope = _restore_scope(target, backup_id)
             if not _consume(confirm_token, str(appid), scope, fp_target, fp_backup):
                 # ★ 여기서 **파일을 건드리지 않는다.** 없든 위조든 만료든 목적지가 다르든

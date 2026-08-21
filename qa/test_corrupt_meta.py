@@ -5,13 +5,14 @@
 비JSON 바이트를 **그대로/예외로** 돌려준다. 이를 소비하는 세 갈래가 방어 없이 dict로 다루면:
   · `store.profile_file_path`가 `meta["filename"]`에서 TypeError (→ _profile_ready → get_overview)
   · `engine.disk_state`가 `meta.get`에서 AttributeError (fence, engine.py:306 — get_overview detail·저장 지문)
-  · `(meta or {}).get`이 비-dict에서 AttributeError (_state_fingerprint)
+  · `(meta or {}).get`이 비-dict에서 AttributeError (저장·적용 지문의 meta 칸)
 → 손상 슬롯 **하나** 때문에 현황 탭 전체가 UNEXPECTED로 안 뜨는 등 광범위 봉쇄가 났다.
 이 조사가 잡은 것은 Codex #5(삭제·초기화 봉쇄, test_delete_game ⑧-c에서 잠금)의 **현황·저장 갈래**다.
 
 방어 자리(fence 밖 소비자):
   · main._profile_ready — load_meta가 dict 아니면 적용 불가로 접음
-  · main._state_fingerprint — 비-dict면 meta_sha1=None
+  · confirm._meta_sha1 / apply_needs_confirm — 비-dict면 meta 칸이 None
+    (15판 §14-G ⓕ에서 `main._state_fingerprint`가 판정 함수 안으로 들어갔다 — 방어는 같이 옮겼다)
   · main._disk_state_safe — disk_state 소비를 한 곳에 모아 넓은 except로 감쌈(두더지 잡기 방지)
 
 손상 meta는 악의가 아니라 **디스크 사고로도 도달 가능한 실제 상태**다(save_profile docstring도 그리 적음).

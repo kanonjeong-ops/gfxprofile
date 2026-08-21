@@ -32,11 +32,68 @@ MISSING = "missing"               # 설정 파일이 없다
 LOOKUP_FAILED = "lookup_failed"   # 조회 자체가 실패했다(권한·손상 등)
 
 
+def _state_fp(meta_sha1, disk_sha1, ring):
+    """저장·적용 토큰 지문의 **조립 규칙**은 여기 하나다 — 관측은 부르는 쪽이 한다(§14-G ⓕ).
+
+    `(슬롯 meta의 sha1, 디스크 sha1 + 링 지문)`. 조회 실패는 `None`을 그대로 싣는다 —
+    없음도 지문의 일부라, 조회 실패 상태에서 발급한 토큰은 조회가 되기 시작하면 거부된다
+    (안전한 방향이다 — 다시 물으면 되고, 그 사이 사용자가 본 화면은 이미 낡았다).
+
+    ★★ 둘째 칸에 **백업 링의 지문**을 합성한다(R14 #2). 저장·적용 확인창은 *"이 백업이
+      지워집니다"*라고 **이름을 대며** 승인을 받는데, 그 사이 다른 동작이 링을 한 칸 돌리면
+      승인 대상이 달라진다 — 예전에는 낡은 토큰이 그대로 통과해 **사용자가 승인하지 않은
+      파일이** 지워졌다(포화 링에서는 개수도 그대로라 어떤 신호에도 안 걸렸다).
+      합성이 안전한 이유는 `main._consume`이 튜플 **전체 동등 비교**만 하고 문자열을 되쪼개지
+      않기 때문이다 — 슬롯 수를 늘리지 않고 지문만 넓힌다.
+    ★ 이 함수는 예전 `main._state_fingerprint`가 하던 일의 **조립 절반**이다. 관측 절반은
+      판정 함수로 옮겼다: 고지를 만들며 이미 읽은 값에서 지문이 나와야 그 사이의 변화가
+      토큰에 구워지지 않는다(§14-G ⓕ).
+    """
+    return meta_sha1, "%s|ring=%s" % (disk_sha1, ring)
+
+
+def _meta_sha1(appid, profile):
+    """슬롯 meta가 **기록하고 있는 내용 sha1**. 못 읽거나 비-dict면 `None`.
+
+    비-dict meta(손상 JSON)에서 `.get`이 AttributeError를 내면 저장 지문 산출이 통째로 죽는다
+    (2026-08-09 조사) — 그래서 `isinstance`로 접는다. 조회 실패도 `None`이다."""
+    try:
+        meta = store.load_meta(appid, profile)
+    except (OSError, ValueError):
+        return None
+    return meta.get("sha1") if isinstance(meta, dict) else None
+
+
+def _ring_observe(appid, adding=1):
+    """§5-E-3의 산출 함수를 부른다 — **정본은 `restore.ring_observe` 하나**다(적용·저장 공용).
+
+    돌려주는 것은 `{"evicted": [...], "fingerprint": …}`: **축출 예고와 그 지문이 한 번의
+    나열에서 같이 나온다**(§14-G ⓕ — 일괄 적용·전체 초기화가 쓰던 문법 그대로다).
+
+    `adding`은 그 동작이 **만들 백업의 수**다. 적용은 1건이라 기본값을 쓰고, 저장은 슬롯의
+    본체 수만큼 만드므로 그 수를 넘긴다 — 개수가 틀리면 화면이 실제와 다른 목록을 이름으로 댄다.
+
+    ⚠️ import를 함수 안에서 한다: `restore`가 이 모듈을 import하므로(restore.py 상단)
+      최상단에서 맞import하면 순환이 된다. 순환을 CPython의 부분초기화 동작에 기대는 것보다,
+      **부르는 자리에서 한 줄**로 끊는 편이 실패 모드가 없다(그 기대가 깨지면 플러그인이
+      통째로 안 뜬다).
+    """
+    from . import restore
+    return restore.ring_observe(appid, adding)
+
+
 def needs_confirm(reg, appid, profile):
-    """`(need, params)` — 저장이 기존 프로필을 실제로 덮어쓰는가.
+    """`(need, params, fingerprint)` — 저장이 기존 프로필을 실제로 덮어쓰는가.
 
     `need`가 True일 때만 `params`에 확인창이 쓸 정보가 실린다
     (`size` · `sha1_short` · `saved_at` · `disk_state` [· `matched_profile`]).
+
+    ★★ **지문을 params와 함께 낸다**(15판 §14-G ⓕ). 예전에는 접착층이 고지를 받은 **뒤**
+      `main._state_fingerprint`를 불러 meta·디스크·링을 **다시** 읽었고, 그 두 관측 사이의
+      변화는 토큰에 구워져 영구히 안 보였다. 지금은 고지에 쓴 바로 그 관측값이 지문이 된다.
+    ⚠️ 지문은 **묻는 갈래에서만** 낸다(`need`가 False면 `None`) — 토큰을 쓰지 않는 갈래라
+      잴 것이 없고, 재면 정상 저장마다 링 나열이 붙는다.
+    ⚠️ **지문은 봉투로 나가지 않는다** — `params`가 아니라 **세 번째 반환값**이다.
     """
     appid = str(appid)
     try:
@@ -47,7 +104,7 @@ def needs_confirm(reg, appid, profile):
         #   **결과는 「아무것도 안 쓰고 실패」**로 M1과 동치다(설계 5분기표 4행).
         #   ⚠️ 그래서 이 note의 문구는 *"확인 없이 저장을 시도합니다"*가 아니라
         #      **"프로필 정보가 손상되어 저장할 수 없습니다"**로 옮겨야 한다 — 결과와 어긋나면 오정보다.
-        return False, {"note": "META_UNREADABLE"}
+        return False, {"note": "META_UNREADABLE"}, None
 
     # ★★ 판정은 「기록이 있는가」가 **아니라** 「본체가 있는가」다(설계 §14-G ⓐ). 예전에는
     #   `if not meta:`였다 — `meta.json`이 없거나 `{}`·`null`·`0`·`""`이면 **정상 본체가 바로
@@ -61,7 +118,7 @@ def needs_confirm(reg, appid, profile):
     #   거울을 없애고 같은 술어를 직접 본다 — 축출 예고의 **개수**도 여기서 나온다(아래 `evicted`).
     bodies = store.evacuable_names(appid, profile)
     if not bodies:
-        return False, {}                      # 진짜 빈 슬롯 — 잃을 것이 없다(엔진도 대피하지 않는다)
+        return False, {}, None                # 진짜 빈 슬롯 — 잃을 것이 없다(엔진도 대피하지 않는다)
     if not isinstance(meta, dict):
         meta = {}                             # 기록은 못 믿어도 본체는 있다 — 재료는 아래에서 실측한다
 
@@ -70,13 +127,24 @@ def needs_confirm(reg, appid, profile):
     except (engine.Refused, OSError, ValueError):
         state = None                          # ★ `{}`가 아니라 `None` — 아래에서 「조회 실패」와
                                               #   「파일 없음」을 갈라야 하기 때문이다
+    disk_sha1 = state.get("sha1") if state else None
 
-    if state is not None and state.get("sha1") and state["sha1"] == meta.get("sha1"):
-        return False, {}                      # 내용이 이미 같다 — 덮어써도 달라지는 것이 없다
+    if state is not None and disk_sha1 and disk_sha1 == meta.get("sha1"):
+        return False, {}, None                # 내용이 이미 같다 — 덮어써도 달라지는 것이 없다
 
+    # ★★ 표시 재료는 **필드 단위로** 기록과 실측을 가른다(설계 §14-G ⓐ / 2026-08-22 보강).
+    #   예전에는 `if not meta:` 하나였다 — 그래서 `{"foo": 1}`처럼 **비지는 않았지만 크기·해시가
+    #   없는** 기록에서는 그 갈래에 못 들어가고, 화면이 멀쩡한 본체를 옆에 두고 *"지금 저장돼
+    #   있는 것: 0 B"*라 말했다. 「기록이 통째로 비었나」가 아니라 **「이 칸을 못 믿나」**가
+    #   기준이어야 갈래가 하나 남는다(구조로 예외를 없앤다).
+    #   기록이 멀쩡하면 실측하지 않는다 — 기존 문구·검사가 그 값을 전제한다.
+    size, sha1_short = _slot_materials(appid, profile, meta, bodies)
+    ring = _ring_observe(appid, len(bodies))
     params = {
-        "size": meta.get("size") or 0,
-        "sha1_short": (meta.get("sha1") or "")[:10],
+        "size": size,
+        "sha1_short": sha1_short,
+        # ★ `saved_at`은 **기록에서만** 온다. 기록이 없으면 저장 시각은 **모르는 것이 사실**이고,
+        #   파일 mtime은 저장 시각이 아니다(복사·복원·터치로도 바뀐다) — 지어내면 그 자체가 거짓이다.
         "saved_at": meta.get("saved_at") or "",
         "disk_state": _classify(state),
         # ★ 이 저장이 **실제로 지울 백업**(R14 #1 — 적용·복원과 같은 필드·같은 문구).
@@ -86,37 +154,44 @@ def needs_confirm(reg, appid, profile):
         #     축출을 예고**한다 — 이 확인창은 지워질 백업을 *이름으로* 대는 자리라 예고한 목록과
         #     실제 축출이 일치해야 한다(설계 §14-G ⓐ / 조사 §2-B).
         #   대피가 없는 갈래(본체 0개)는 여기 오지 않는다 — 위에서 이미 「안 묻는다」로 돌아섰다.
-        "evicted": _evict_preview(appid, len(bodies)),
+        #   ★★ 그 목록과 **그 지문이 한 번의 나열에서 같이 나온다**(§14-G ⓕ) — 아래 토큰 지문이
+        #     쓰는 링이 지금 화면이 이름을 대는 바로 그 링이다.
+        "evicted": ring["evicted"],
     }
-    if not meta:
-        # ★★ **기록을 못 믿는 것이 이 갈래의 전제이므로 재료도 본체에서 잰다**(설계 §14-G ⓐ).
-        #   위 세 줄은 전부 meta에서 나오는데, meta가 `{}`·`null`·`0`·`""`·비-dict라 여기 온
-        #   갈래에서는 그 값이 전부 비어 화면이 *"지금 저장돼 있는 것: 0 B"*라고 말한다 —
-        #   **바로 옆에 멀쩡한 본체가 있는데도.** 이 확인창은 「무엇을 잃는가」를 대는 자리라
-        #   그 숫자가 거짓이면 고지가 아니라 오정보다. 새 문구를 만들 필요는 없다: 실측값을
-        #   채우면 기존 `SAVE_CONFIRM_CURRENT`가 그대로 참이 된다.
-        #   ★ 재는 대상은 **엔진이 대피시킬 바로 그 목록**(`bodies`)이다 — 규칙을 여기 다시
-        #     적으면 언젠가 한쪽만 어긋나 화면과 실제가 갈린다.
-        #   ★ `saved_at`은 **빈 채로 둔다**: 기록이 없으니 저장 시각은 **모르는 것이 사실**이다.
-        #     파일 mtime은 저장 시각이 아니다(복사·복원·터치로도 바뀐다) — 지어내면 그 자체가 거짓이다.
-        #   ★ 실측이 실패해도(OSError) **저장을 막지 않는다**: 그 값만 0·빈 문자열로 두고 확인창은
-        #     그대로 뜬다. 이 갈래의 본질은 확인과 대피이지 표시값이 아니다.
-        directory = store.profile_dir(appid, profile)
-        total = 0
-        for name in bodies:
-            try:
-                total += os.path.getsize(os.path.join(directory, name))
-            except OSError:
-                pass                          # 그 파일만 안 세고 넘어간다
-        params["size"] = total
-        if len(bodies) == 1:
-            # ★ 해시는 **본체가 하나일 때만** 댄다. 여럿인데 하나를 고르면 화면이 *어느 것의
-            #   해시인지 말할 수 없는 값*을 사실처럼 내놓는다 — 그건 거짓말이다. 모르면 비운다.
-            #   (`store.sha1_file`은 읽기 실패 시 `None`이라 예외로 새지 않는다.)
-            params["sha1_short"] = (store.sha1_file(os.path.join(directory, bodies[0])) or "")[:10]
     if state is not None and state.get("matches"):
         params["matched_profile"] = state["matches"]
-    return True, params
+    return True, params, _state_fp(meta.get("sha1"), disk_sha1, ring["fingerprint"])
+
+
+def _slot_materials(appid, profile, meta, bodies):
+    """확인창이 대는 `(size, sha1_short)` — **기록이 못 미더운 칸만 본체에서 잰다**(§14-G ⓐ).
+
+    ★★ 왜 필드 단위인가: 이 확인창은 「무엇을 잃는가」를 대는 자리다. 기록이 통째로 비었을
+      때만 실측하면, `{"foo": 1}`처럼 **비지는 않았는데 크기·해시가 없는** 기록에서 화면이
+      멀쩡한 본체를 옆에 두고 *"지금 저장돼 있는 것: 0 B"*라 말한다 — 고지가 아니라 오정보다.
+      갈래를 넓히는 대신 **판정의 단위를 바꾸면** 그 예외 자체가 없어진다.
+    ★ 재는 대상은 **엔진이 대피시킬 바로 그 목록**(`bodies` = `store.evacuable_names`)이다 —
+      규칙을 여기 다시 적으면 언젠가 한쪽만 어긋나 화면과 실제가 갈린다.
+    ★ 해시는 **본체가 하나일 때만** 댄다. 여럿인데 하나를 고르면 화면이 *어느 것의 해시인지
+      말할 수 없는 값*을 사실처럼 내놓는다 — 그건 거짓말이다. 모르면 비운다.
+    ★ 실측이 실패해도(OSError) **저장을 막지 않는다**: 그 값만 0·빈 문자열로 두고 확인창은
+      그대로 뜬다. 이 갈래의 본질은 확인과 대피이지 표시값이 아니다.
+    """
+    size = meta.get("size") or 0
+    sha1_short = (meta.get("sha1") or "")[:10]
+    if size and sha1_short:
+        return size, sha1_short               # 기록이 멀쩡하다 — 파일을 열지 않는다
+    directory = store.profile_dir(appid, profile)
+    if not size:
+        for name in bodies:
+            try:
+                size += os.path.getsize(os.path.join(directory, name))
+            except OSError:
+                pass                          # 그 파일만 안 세고 넘어간다
+    if not sha1_short and len(bodies) == 1:
+        # `store.sha1_file`은 읽기 실패 시 `None`이라 예외로 새지 않는다.
+        sha1_short = (store.sha1_file(os.path.join(directory, bodies[0])) or "")[:10]
+    return size, sha1_short
 
 
 #: 개별 적용 판정의 3-상태 (설계 §5-E-2). `restore.needs_confirm`과 **같은 문법**이다.
@@ -156,7 +231,7 @@ def _matching_profiles(appid, disk_sha1):
 
 
 def apply_needs_confirm(reg, appid, profile):
-    """`(state, params)` — 개별 적용의 **3-상태 계약**이다(설계 §5-E-2).
+    """`(state, params, fingerprint)` — 개별 적용의 **3-상태 계약**이다(설계 §5-E-2).
 
         "already"  게임 설정 파일이 이미 목표 슬롯과 같다 → 접착층이 **엔진을 부르기 전에**
                    반환한다. 파일도 링도 건드리지 않는다.
@@ -172,6 +247,12 @@ def apply_needs_confirm(reg, appid, profile):
     ★ 슬롯 없음·손상은 **조기 거부하지 않는다**: 버튼이 이미 비활성이고(GamesPopup), 도달하려면
       확인창을 띄운 사이 슬롯이 사라져야 한다. 그때는 확인 뒤 엔진이 거부하고 **파일은 한 바이트도
       안 바뀐다**(설계 §15-D E10).
+
+    ★★ **지문을 params와 함께 낸다**(15판 §14-G ⓕ). 예전에는 접착층이 3-상태를 받은 **뒤**
+      `main._state_fingerprint`를 불러 meta·디스크·링을 **다시** 읽었고, 그 두 관측 사이의
+      변화는 토큰에 구워져 영구히 안 보였다(디스크 sha1은 이 route에서만 **두 번** 읽혔다).
+    ⚠️ 지문은 **`confirm` 갈래에서만** 낸다(`already`·`proceed`는 `None`) — 토큰을 쓰지 않는다.
+    ⚠️ **지문은 봉투로 나가지 않는다** — `params`가 아니라 **세 번째 반환값**이다.
     """
     appid = str(appid)
     engine.game_or_fail(reg, appid)                  # 미등록 → GAME_NOT_REGISTERED
@@ -201,34 +282,25 @@ def apply_needs_confirm(reg, appid, profile):
         params["matched_profile"] = matches[0]
 
     if state is None:
-        return "confirm", params                     # 모르면 묻는다
+        # 모르면 묻는다. 디스크 조회가 실패했으므로 지문의 디스크 칸도 `None`이고, 그 `None`이
+        # 곧 지문의 일부다 — 조회가 되기 시작하면 낡은 토큰이 거부된다(안전한 방향).
+        return "confirm", params, _state_fp(_meta_sha1(appid, profile), None,
+                                            _ring_observe(appid, 0)["fingerprint"])
     if not state.get("exists"):
-        return "proceed", params                     # 파일 없음 — 잃을 것이 없다(재생)
+        return "proceed", params, None               # 파일 없음 — 잃을 것이 없다(재생)
     try:
         meta = store.load_meta(appid, profile)
     except (OSError, ValueError):
         meta = None
+    # ★ 이 값이 곧 지문의 meta 칸이다 — 판정과 토큰이 **같은 한 번의 읽기**를 쓴다(§14-G ⓕ).
     target_sha1 = meta.get("sha1") if isinstance(meta, dict) else None
     if target_sha1 and disk_sha1 and target_sha1 == disk_sha1:
-        return "already", params
+        return "already", params, None
     if matches:
-        return "proceed", params                     # 다른 슬롯과 같다 — 그 내용은 보존돼 있다
-    params["evicted"] = _evict_preview(appid)        # 여기서만 대피본이 생긴다(§14-B)
-    return "confirm", params
-
-
-def _evict_preview(appid, adding=1):
-    """§5-E-3의 산출 함수를 부른다 — **정본은 `restore.evict_preview` 하나**다(적용·복원 공용).
-
-    `adding`은 그 동작이 **만들 백업의 수**다. 적용은 1건이라 기본값을 쓰고, 저장은 슬롯의
-    본체 수만큼 만드므로 그 수를 넘긴다 — 개수가 틀리면 화면이 실제와 다른 목록을 이름으로 댄다.
-
-    ⚠️ import를 함수 안에서 한다: `restore`가 이 모듈을 import하므로(restore.py:29) 최상단에서
-      맞import하면 순환이 된다. 순환을 CPython의 부분초기화 동작에 기대는 것보다, **부르는
-      자리에서 한 줄**로 끊는 편이 실패 모드가 없다(그 기대가 깨지면 플러그인이 통째로 안 뜬다).
-    """
-    from . import restore
-    return restore.evict_preview(appid, adding)
+        return "proceed", params, None               # 다른 슬롯과 같다 — 그 내용은 보존돼 있다
+    ring = _ring_observe(appid)                      # 여기서만 대피본이 생긴다(§14-B)
+    params["evicted"] = ring["evicted"]
+    return "confirm", params, _state_fp(target_sha1, disk_sha1, ring["fingerprint"])
 
 
 def already_registered(reg, appid):

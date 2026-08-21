@@ -42,9 +42,13 @@ SECOND = b"quality=2nd__\nshadows=mid_\nsource=SLOT-BODY-2-\n"    # 두 번째 �
 EDITED = b"quality=edit\nshadows=low_\nsource=USER-EDITED--\n"    # 지금 게임 설정 파일
 OUTSIDE = b"quality=outs\nshadows=none\nsource=OUTSIDE-FILE-\n"   # 슬롯 **바깥**의 파일(링크 대상)
 
-#: 「기록이 비었다」의 전 형태. **없음**까지 포함한다 — 실물에서 가장 흔한 모양이다.
+#: 「기록을 못 믿는다」의 전 형태. **없음**까지 포함한다 — 실물에서 가장 흔한 모양이다.
+#: ★ 마지막 것은 **비지 않았는데 재료가 없는** 기록이다: 판정이 「기록이 통째로 비었나」면
+#:   이 갈래는 실측을 못 받아 화면이 *"지금 저장돼 있는 것: 0 B"*라 말한다. 기준은 필드 단위여야
+#:   한다(설계 §14-G ⓐ / 2026-08-22 보강).
 EMPTY_METAS = [("없음", None), ("{}", "{}"), ("[]", "[]"), ("null", "null"),
-               ("false", "false"), ("0", "0"), ('""', '""')]
+               ("false", "false"), ("0", "0"), ('""', '""'),
+               ("무관한 키만", '{"foo": 1}')]
 
 
 def boot(tmp):
@@ -148,6 +152,14 @@ def main_test():                                                # noqa: C901  (�
             if got.get("sha1_short") != store.sha1_bytes(SAVED)[:10]:
                 P("★ⓐ[meta=%s] 본체가 하나인데 해시를 못 대거나 틀리게 댔다 — 화면=%r / 실측=%r"
                   % (label, got.get("sha1_short"), store.sha1_bytes(SAVED)[:10]))
+            # ★ 크기·해시는 본체에서 **재지만** 저장 시각은 **재지 않는다.** 기록이 없으면 저장
+            #   시각은 *모르는 것이 사실*이고, 파일 mtime은 저장 시각이 아니다(복사·복원·터치로도
+            #   바뀐다). 없는 값을 그럴듯한 값으로 메우는 것은 실측이 아니라 **지어내기**이고,
+            #   이 확인창은 「무엇을 잃는가」를 대는 자리라 지어낸 한 줄이 곧 거짓말이다.
+            if got.get("saved_at"):
+                P("★ⓐ[meta=%s] 기록이 없는데 저장 시각을 댔다 — 화면=%r (mtime을 끌어다 쓰면 "
+                  "복사·복원·터치가 만든 시각을 '저장한 시각'이라 말하게 된다)"
+                  % (label, got.get("saved_at")))
             env = rpc(main, "save_profile", appid, "dock",
                       confirm_token=params_of(env).get("confirm_token"))
             if not env.get("ok"):

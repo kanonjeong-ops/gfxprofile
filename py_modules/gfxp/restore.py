@@ -150,11 +150,53 @@ def _mark_duplicates(rows):
     return rows
 
 
+def ring_observe(appid, adding=1):
+    """백업 링을 **한 번 나열해** 축출 예고·링 지문·칸 수를 같이 낸다 —
+    `{"evicted": [...], "fingerprint": …, "count": N}`.
+
+    ★★ **왜 한 번인가**(설계 §14-G ⓕ): 예전에는 고지(`evict_preview`)와 토큰 지문
+      (`ring_fingerprint`)이 **각자 링을 나열**했다. 그 두 관측 사이에 링이 돌면 확인창은
+      **옛 목록의 이름**을 대고 토큰은 **새 목록**에 묶여, 2차 호출에서 그 토큰이 그대로
+      통과했다 — *사용자가 승인한 이름과 실제로 지워지는 파일이 다른* 상태다. 창은 좁지만
+      (실측 183~217µs) 좁은 창은 **없는 창이 아니다.**
+      다게임 경로(`apply_all`·`reset_all`)는 처음부터 *"축출 예고와 그 지문은 한 번의 산출에서
+      같이 나온다"*였다 — 이 함수가 그 문법을 단일 게임 경로로 옮긴 것이고, 그래서 판정 함수가
+      params와 지문을 **함께** 돌려줄 수 있다.
+    ★ 지문은 `adding`과 무관하게 **링 전체의 이름 순서**다(아래 `ring_fingerprint` 주석):
+      축출이 0건이어도 링이 돌면 지문은 움직여야 한다.
+    ★ `count`도 같은 나열에서 낸다 — 화면의 *"현재 백업 N건"*이 지문이 잰 링과 다른 순간의
+      링을 세면, 같은 확인창 안에서 두 숫자가 서로 다른 시각을 가리킨다.
+    ★ 안전하지 않은 경로는 **읽지 않는다**(P8 Codex #2) — 고정 센티널과 빈 목록·0으로 접는다.
+    """
+    appid = str(appid)
+    if not remove._paths_in_position(appid):
+        return {"evicted": [], "fingerprint": _UNSAFE_FP, "count": 0}
+    names = [os.path.basename(p) for p in store.list_backups(appid)]
+    observed = {"evicted": [],
+                "fingerprint": store.sha1_bytes("\n".join(names).encode("utf-8")),
+                "count": len(names)}
+    if adding <= 0:
+        return observed                              # 백업을 안 만드는 갈래는 지울 것도 없다
+    rows = []
+    for name in names:                               # ★ 먼저 **링 전체**를 만든다 (아래 이유)
+        info = parse_backup_id(name)
+        rows.append({"backup_id": name, "kind": info["kind"],
+                     "stamp_label": info["stamp_label"], "filename": info["filename"],
+                     "dup": 0})
+    # ★ 구분 번호는 **링 전체를 보고** 매긴 뒤 자른다 — 지워질 것만 보고 매기면, 쌍둥이 중
+    #   하나만 지워질 때 번호가 안 붙어 화면이 남는 쪽까지 가리키는 이름을 댄다.
+    _mark_duplicates(rows)
+    observed["evicted"] = rows[max(0, store.BACKUP_KEEP - adding):]
+    return observed
+
+
 def evict_preview(appid, adding=1):
     """이 동작이 백업을 **`adding`건 만들 때 실제로 지워질** 파일들(설계 §5-E-3).
 
     ★★ **산출 함수는 하나다** — 적용·복원·저장·등록 해제·일괄 적용·전체 초기화가 전부 여기를
       부른다(R14 #1). 경로마다 따로 세면 어느 하나는 반드시 화면과 실제가 어긋난다.
+      **지문이 함께 필요한 자리(단일 게임 확인창)는 `ring_observe`를 직접 부른다** — 여기를
+      한 번 더 부르면 관측이 둘로 갈린다(위 ⓕ).
     ★★ 정렬은 `store.list_backups`(=prune이 실제로 자르는 목록)다. 표시 목록(`backup_rows`)도
       **같은 순서**를 쓴다 — 순서의 정본은 `store.backup_order_key` 하나다(R14 #3에서 통합).
     ★ `BACKUP_KEEP - adding`인 이유: 새 백업이 목록 맨 앞에 `adding`건 끼어들면 기존 항목이 그만큼
@@ -164,23 +206,12 @@ def evict_preview(appid, adding=1):
     ★ 항목은 **고유 `backup_id`를 싣고** 거기에 화면이 그릴 조각을 얹는다(봉투 계약
       `EvictedRow`). id는 화면에 그리지 않는다 — 대상이 하나임을 **증명**하는 자리이고
       (토큰 지문·검사가 이 값으로 실제 삭제분과 대조한다), 사람이 읽는 것은 조각 쪽이다.
+    ★ `adding<=0`을 **여기서** 먼저 끊는다: 지문이 필요 없는 호출자(다게임 합산)가 지울 것도
+      없는 게임에서 링을 나열하지 않게 하려는 것이다(비용 단락 — 답은 어느 쪽이든 `[]`다).
     """
-    appid = str(appid)
-    if not remove._paths_in_position(appid):
-        return []                                    # 제자리가 아니면 조회하지 않는다(P8 Codex #2)
     if adding <= 0:
-        return []                                    # 백업을 안 만드는 갈래는 지울 것도 없다
-    rows = []
-    for path in store.list_backups(appid):           # ★ 먼저 **링 전체**를 만든다 (아래 이유)
-        name = os.path.basename(path)
-        info = parse_backup_id(name)
-        rows.append({"backup_id": name, "kind": info["kind"],
-                     "stamp_label": info["stamp_label"], "filename": info["filename"],
-                     "dup": 0})
-    # ★ 구분 번호는 **링 전체를 보고** 매긴 뒤 자른다 — 지워질 것만 보고 매기면, 쌍둥이 중
-    #   하나만 지워질 때 번호가 안 붙어 화면이 남는 쪽까지 가리키는 이름을 댄다.
-    _mark_duplicates(rows)
-    return rows[max(0, store.BACKUP_KEEP - adding):]
+        return []
+    return ring_observe(appid, adding)["evicted"]
 
 
 def evict_digest(plan):
@@ -208,12 +239,12 @@ def ring_fingerprint(appid):
     ★ 개수가 아니라 **순서 있는 이름 전체**를 잰다: 포화 링에서는 개수가 10으로 불변인 채
       대상만 바뀌므로 개수 신호로는 잡히지 않는다(그 경로가 실제 재현 시나리오였다).
     ★ 안전하지 않은 경로는 **읽지 않는다** — `backup_count`·`evict_preview`와 같은 센티널 문법.
+    ★★ **산출은 `ring_observe` 한 곳이다**(§14-G ⓕ). 확인창이 이름을 대는 자리에서는 이 함수를
+      따로 부르지 않는다 — 고지와 지문이 각자 링을 나열하면 그 사이의 변화가 토큰에 구워진다.
+      여기 남는 이유는 *"링만 재고 싶은"* 소비자(검사의 계측기)가 그 뜻을 이름으로 말할 수 있게
+      하기 위해서다.
     """
-    appid = str(appid)
-    if not remove._paths_in_position(appid):
-        return _UNSAFE_FP
-    names = "\n".join(os.path.basename(p) for p in store.list_backups(appid))
-    return store.sha1_bytes(names.encode("utf-8"))
+    return ring_observe(appid, 0)["fingerprint"]
 
 
 def _entries(appid):
@@ -368,8 +399,22 @@ def _disk_state(reg, appid):
         return None
 
 
+def _restore_fp(current, backup, ring):
+    """복원 토큰 지문의 **조립 규칙**은 여기 하나다 — 관측은 부르는 쪽이 한다(§14-G ⓕ).
+
+    `(되돌릴 곳의 sha1, 백업 파일 sha1 + 링 지문)`. 조회 실패는 `"absent"`로 적는다 —
+    없음도 지문의 일부다(없다가 생기면 무효가 되는 쪽이 안전).
+
+    ★ 왜 조립만 하는가: 이 값을 내는 자리가 둘이다 — **판정 함수**(`needs_confirm`이 고지를
+      만들며 이미 잰 값으로 낸다)와 **`fingerprint`**(새로 관측해 낸다, 검사의 오라클).
+      관측이 갈리는 것은 자리마다 재는 시점이 다르기 때문이라 정상이지만, **조립 규칙까지
+      갈리면** 검사가 초록인 채로 route의 토큰만 어긋난다. 규칙은 한 줄에 둔다.
+    """
+    return (current or "absent", "%s|ring=%s" % (backup or "absent", ring))
+
+
 def needs_confirm(reg, appid, backup_id):
-    """`(state, params)` — **3-상태 계약**이다(불리언이 아니다). 판정 기준은 **되돌릴 곳**이다.
+    """`(state, params, fingerprint)` — **3-상태 계약**이다(불리언이 아니다). 판정 기준은 **되돌릴 곳**이다.
 
         "already"  되돌릴 곳이 이미 그 백업과 같다 → 접착층이 **엔진을 부르기 전에 반환**한다.
                    엔진 `restore_backup`에는 already 스킵이 없어(무조건 대피+쓰기) 낙하시키면
@@ -386,6 +431,15 @@ def needs_confirm(reg, appid, backup_id):
       집행의 문은 여전히 엔진 G5 하나이고(여기는 예의상 조회), TOCTOU는 그 G5가 잡는다.
     ★ **축출 고지(`evicted`)는 대피가 실제로 일어나는 갈래에만** 실린다(적용과 대칭 — §5-E-3).
       `already`·`proceed`·대피 불가 갈래는 링을 쓰지 않으므로 지워질 파일도 없다.
+
+    ★★ **지문을 params와 함께 낸다**(15판 §14-G ⓕ). 예전에는 접착층이 고지를 받은 **뒤** 다시
+      `fingerprint()`를 불렀고, 그 두 관측 사이의 변화가 토큰에 구워져 영구히 안 보였다.
+      지금은 고지에 쓴 **바로 그 관측값**(되돌릴 곳의 sha1 · 백업 sha1 · `ring_observe`)이
+      그대로 지문이 된다.
+    ⚠️ 지문은 **`confirm` 갈래에서만** 낸다(`already`·`proceed`는 `None`) — 토큰을 쓰지 않는
+      갈래라 잴 것이 없고, 재면 링 나열이 매 조회마다 붙는다.
+    ⚠️ **지문은 봉투로 나가지 않는다** — `params`가 아니라 **세 번째 반환값**이다. 접착층이
+      `**params`로 splat해도 화면 계약에 새 필드가 생기지 않는다(main.py:840-842와 같은 규칙).
     """
     appid = str(appid)
     _assert_in_position(appid)                       # 0단계
@@ -428,14 +482,17 @@ def needs_confirm(reg, appid, backup_id):
     if target == TARGET_CONFIG:
         config_path = entry.get("config_path") or ""
         if not os.path.exists(config_path):
-            return "proceed", params                 # 잃을 것이 없다(재생) — 대피도 없다
+            return "proceed", params, None           # 잃을 것이 없다(재생) — 대피도 없다
         # 엔진은 설정 파일이 **있을 때만** 그것을 대피시킨다(engine.restore_backup 끝단).
         params["evacuates"] = True
+        # ★ 이 sha1이 곧 **되돌릴 곳의 지문**이다(`target_sha1(reg, appid, "config")`와 같은 값·
+        #   같은 파일). 판정에 쓴 값을 그대로 토큰에 묶으므로 둘이 다른 시점을 볼 수 없다.
         disk_sha = store.sha1_file(config_path)
         if disk_sha and backup_sha and disk_sha == backup_sha:
-            return "already", params
-        params["evicted"] = evict_preview(appid)
-        return "confirm", params
+            return "already", params, None
+        ring = ring_observe(appid)                   # ★ 고지와 지문이 **한 나열**을 공유한다(ⓕ)
+        params["evicted"] = ring["evicted"]
+        return "confirm", params, _restore_fp(disk_sha, backup_sha, ring["fingerprint"])
 
     # ---- 프로필 슬롯으로 되돌린다 (설계 4-B 2·3·4·9·10행)
     meta = _slot_meta(appid, target)
@@ -454,23 +511,32 @@ def needs_confirm(reg, appid, backup_id):
         if store.slot_body_exists(appid, target):
             # 9행 — 기록이 손상됐고 실물은 남아 있다. **대피할 대상을 특정할 수 없으므로**
             # 확인창이 그 사실을 말하고 묻는다(A12 = 고지하고 묻기이지 모르면 막기가 아니다).
+            # ★ 되돌릴 곳의 지문은 **`None`(=absent)**이다: `target_sha1`도 여기서는 본체
+            #   이름을 못 만들어 `None`을 낸다 — 그 값을 다시 재지 않고 그대로 쓴다.
             params["slot_unreadable"] = True
-            return "confirm", params
-        return "proceed", params                     # 3행 — 빈 슬롯. 잃을 것이 없다
+            return "confirm", params, _restore_fp(
+                None, backup_sha, ring_observe(appid, 0)["fingerprint"])
+        return "proceed", params, None               # 3행 — 빈 슬롯. 잃을 것이 없다
     if not source:
         # 10행 — 기록만 있고 실물이 없다. **묻는 것은 유지한다**: 이 슬롯은 지금 깨져 있고,
         # 복원은 그 깨진 자리에 쓰는 동작이다(3행처럼 "빈 슬롯"이라고 단정할 근거가 없다).
         # 다만 위에서 `evacuates=False`·`saved_at=""`이 되었으므로 확인창은 **없는 대피와
         # 없는 저장 시각을 말하지 않는다.**
-        return "confirm", params
+        # ★ `source`가 비었다 = 그 이름의 본체가 없다 = `target_sha1`도 `None`이다(같은 술어).
+        return "confirm", params, _restore_fp(
+            None, backup_sha, ring_observe(appid, 0)["fingerprint"])
     # ★ 판정은 **본문 실측**이다(R14 #5 — `target_sha1`과 같은 값·같은 함수). meta의 기록값으로
     #   판정하면 *"기록은 B인데 본문은 C"*인 손상 슬롯에서 `already`가 되어 **복구 버튼이 그
     #   자리에서 막힌다** — 복원은 바로 그 손상을 되돌리려는 경로다.
+    # ★★ 이 값이 곧 **되돌릴 곳의 지문**이다 — 판정과 토큰이 같은 관측을 쓴다(ⓕ). 예전에는
+    #   접착층이 `fingerprint()`를 다시 불러 이 본체를 **한 번 더 읽었고**, 그 사이의 변화가
+    #   토큰에 구워졌다.
     slot_sha = target_sha1(reg, appid, target)
     if slot_sha and backup_sha and slot_sha == backup_sha:
-        return "already", params                     # 2행
-    params["evicted"] = evict_preview(appid)         # 4행 — 대피 1건이 링을 쓴다
-    return "confirm", params
+        return "already", params, None               # 2행
+    ring = ring_observe(appid)                       # 4행 — 대피 1건이 링을 쓴다
+    params["evicted"] = ring["evicted"]
+    return "confirm", params, _restore_fp(slot_sha, backup_sha, ring["fingerprint"])
 
 
 def fingerprint(reg, appid, backup_id):
@@ -488,10 +554,17 @@ def fingerprint(reg, appid, backup_id):
       안전하고, 슬롯을 늘리지 않아 발급·소비 양쪽 계약이 한 줄도 안 바뀐다.
 
     조회 실패는 `"absent"`로 적는다 — 없음도 지문의 일부다(없다가 생기면 무효가 되는 쪽이 안전).
+
+    ⚠️ **복원 route는 이 함수를 부르지 않는다**(15판 §14-G ⓕ). route가 쓰는 지문은
+      `needs_confirm`이 고지를 만들며 **이미 잰 값**으로 낸 것이다 — 여기를 다시 부르면 관측이
+      둘이 되어 그 사이의 변화가 토큰에 구워진다. 이 함수는 *"지금 이 조합의 지문은 무엇인가"*를
+      **새로 관측**해 묻는 자리(검사의 사전 조건·계측기)를 위해 남는다.
+      조립 규칙은 `_restore_fp` **한 곳**이라 두 자리가 규칙으로 갈릴 수는 없다.
     """
     appid = str(appid)
     if not remove._paths_in_position(appid):
         return _UNSAFE_FP, _UNSAFE_FP
-    current = target_sha1(reg, appid, target_of(backup_id)) or "absent"
-    backup = store.sha1_file(os.path.join(store.backups_dir(appid), str(backup_id))) or "absent"
-    return current, "%s|ring=%s" % (backup, ring_fingerprint(appid))
+    return _restore_fp(
+        target_sha1(reg, appid, target_of(backup_id)),
+        store.sha1_file(os.path.join(store.backups_dir(appid), str(backup_id))),
+        ring_observe(appid, 0)["fingerprint"])
