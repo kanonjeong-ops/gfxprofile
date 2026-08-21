@@ -84,6 +84,13 @@ def build_world(tmp, engine, store):
         백업 = profile_dock(R) · profile_dock(C) · profile_dock(R) · profile_internal(R)
     `profile_dock` R 백업이 **두 건**인 것이 ⓒ(다른 backup_id 재사용)를 재는 재료다 —
     둘은 내용도 목적지도 같고 **이름만 다르다.**
+
+    ⚠️⚠️ **그 두 번째 건만은 손으로 놓는다**(2026-08-22, 설계 §14-G ⓔ). 이제 앱은 같은 태그에
+      같은 내용이 있으면 백업을 **안 만들므로** 정상 경로로는 그런 쌍이 생기지 않는다. 그런데
+      ⓒ가 재는 계약은 여전히 살아 있다 — 규칙은 **앞으로 만들 백업에만** 걸리고 소급 정리를 하지
+      않으므로, ⓔ 이전에 쌓인 링에는 그 쌍이 그대로 남아 있다(실물 링 81칸이 그 상태다).
+      그래서 픽스처만 *그 시절의 링*을 재현한다. 놓는 방식은 정상 명명 규칙(`<stamp>-<tag>-
+      <filename>`)을 그대로 따르는 파일 하나이고, 그 밖의 모든 상태는 실제 저장 경로가 만든다.
     """
     reg = store.load_registry()
     cfg = tmp / "game" / "video.ini"
@@ -102,6 +109,14 @@ def build_world(tmp, engine, store):
     cfg.write_bytes(C)
     engine.save_profile(reg, APPID, "internal")    # 대피 profile_internal(R) · internal = C
     store.save_registry(reg)
+    # ★ 위 독스트링의 ⚠️⚠️ — `profile_dock(R)` 두 번째 건(=ⓔ 이전 링의 잔재)을 재현한다.
+    #   stamp를 아주 예전으로 두어 목록 맨 끝에 놓는다(링은 4칸이라 prune에 안 걸린다).
+    seed = [p for p in store.list_backups(APPID)
+            if store.parse_backup_id(os.path.basename(p))["kind"] == "profile_dock"
+            and store.sha1_file(p) == store.sha1_bytes(R)][0]
+    store.atomic_write(
+        os.path.join(store.backups_dir(APPID), "20200101-000000-profile_dock-video.ini"),
+        store.read_bytes(seed))
     return cfg
 
 
@@ -129,11 +144,11 @@ def main_test():                                                # noqa: C901  (�
         # ── 재현 세계가 실제로 「모든 칸이 같은」 상태인가 (여기가 무너지면 아래는 아무것도 못 잰다)
         names = [os.path.basename(p) for p in store.list_backups(APPID)]
         dock_r = [n for n in names
-                  if restore.parse_backup_id(n)["kind"] == "profile_dock"
+                  if store.parse_backup_id(n)["kind"] == "profile_dock"
                   and store.sha1_file(os.path.join(store.backups_dir(APPID), n))
                   == store.sha1_bytes(R)]
         intl_r = [n for n in names
-                  if restore.parse_backup_id(n)["kind"] == "profile_internal"
+                  if store.parse_backup_id(n)["kind"] == "profile_internal"
                   and store.sha1_file(os.path.join(store.backups_dir(APPID), n))
                   == store.sha1_bytes(R)]
         if len(dock_r) < 2 or len(intl_r) < 1:

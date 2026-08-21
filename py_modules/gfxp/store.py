@@ -328,6 +328,10 @@ def evacuable_names(appid, profile):
     ★ 세는 쪽과 지우는 쪽이 **같은 함수**를 돈다(R14 #1): 하나는 세고 하나는 지우는데 기준이
       갈리면 확인창이 약속한 축출 수와 실제가 어긋난다. 그래서 규칙을 여기 한 곳에 둔다 —
       부산물(`is_byproduct`)·**링크**·비일반 파일 제외, 그 밖은 전부 본체다.
+    ⚠️ **이 목록의 길이가 곧 「링에 쌓일 백업 수」는 아니다**(설계 §14-G ⓔ, 2026-08-22):
+      같은 태그에 같은 내용이 이미 있으면 `make_backup`이 아무것도 쓰지 않는다. 대피 **대상**은
+      여전히 이 목록 전부이고(그래서 지우는 쪽은 그대로 이 함수를 돈다), 그중 **몇 건이 실제로
+      파일이 되는가**는 `pending_backups`가 가른다 — 축출 예고는 그쪽을 세야 한다.
     ★ 예전에는 **점으로 시작하는 이름을 통째로** 뺐다. 리눅스 게임의 `.gamerc` 같은 본체가
       그래서 대피에서 빠졌고, 삭제는 `ok: true` · `evacuated: {}`로 끝났다(설계 §14-G ⓑ).
     ⚠️ **링크는 여기서 빠진다.** 삭제 쪽에서는 `remove._evacuate`가 슬롯 안의 링크를 아예
@@ -378,10 +382,75 @@ def slot_body_exists(appid, profile):
 
 # ---------------------------------------------------------------- 백업
 
-#: 백업 파일명 `<stamp>-<tag>[-<n>]-<filename>`에서 **생성 순서**를 읽는다.
-#: stamp는 `%Y%m%d-%H%M%S`(하이픈 포함 15자)이고, 그 뒤 tag 다음에 오는 정수가 같은 초 안의
-#: 일련번호다. 접미사가 없으면 0(그 초의 첫 백업)이다.
-_ORDER_RE = re.compile(r"^(\d{8}-\d{6})-[^-]+-(?:(\d+)-)?.+$")
+
+def profile_tag(profile):
+    """그 슬롯의 대피본이 다는 tag. **조립은 여기 한 곳**이다.
+
+    자리마다 `"profile_%s" % profile`을 손으로 적으면 아래 `KINDS`만 늘어나거나 조립부만
+    늘어나는 날이 온다 — 그 순간 대피본의 태그가 `KINDS` 밖으로 나가 **자기가 만든 백업을
+    형식 불명으로 읽는다.**
+    """
+    return "profile_%s" % profile
+
+
+#: `make_backup`이 붙이는 tag 전량 = *"우리가 만든 이름인가"*를 가르는 목록. 밖은 `unknown`이다.
+#: (적용·복원 직전 대피본 `disk` + 슬롯 대피본 두 개.)
+KIND_DISK = "disk"
+KIND_UNKNOWN = "unknown"
+KINDS = (KIND_DISK, profile_tag("dock"), profile_tag("internal"))
+
+#: **stamp는 하이픈을 품는다**(`%Y%m%d-%H%M%S` = 8+1+6 = 15자). 첫 `-`로 자르면 깨진다 —
+#: 고정폭으로 떼고 형태를 정규식으로 확인한다(설계 §2-C 경고).
+_STAMP_LEN = 15
+_STAMP_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$")
+#: 같은 초 충돌 접미사 — `<stamp>-<tag>-<n>-<filename>`.
+_SEQ_RE = re.compile(r"^(\d+)-(.+)$")
+
+
+def parse_backup_id(backup_id):
+    """백업 파일명 하나를 조각으로 되읽는다 — 아래 `_backup_name`의 **역함수**다.
+
+    `<stamp>-<tag>[-<n>]-<filename>` → `kind` · `stamp` · `stamp_label` · `seq` · `filename`.
+    형태가 안 맞으면 `kind="unknown"`, `stamp=""`, `filename=원본 이름 그대로` —
+    화면은 kind 코드로 i18n 문구를 고르므로 미지 형식도 안전하게 그려진다.
+    **파싱은 백엔드가 한다**(프론트는 문자열을 안 쪼갠다).
+
+    ★★ **「형식 불명」의 정의는 여기 하나다**(설계 §14-G ⓔ, 2026-08-22). 예전에는 이 파서가
+      `restore`에 살고, 순서 키(`backup_order_key`)는 **자기 정규식**으로 같은 이름을 따로
+      읽었다 — 그쪽은 tag를 `[^-]+`로 **아무 문자열이나** 받았다. 그래서 우리가 만들지 않는
+      tag를 단 파일이 화면에서는 *형식 불명*(종류도 시각도 안 뜬다)인데 정렬에서는 *정상 백업*
+      으로 취급됐다. **이름을 만드는 곳과 읽는 곳을 한 파일에 둔다** — 갈려 있던 것이 정의가
+      두 벌이 된 원인이다.
+    ⚠️ 남는 모호성: 파일명 자체가 `12-video.ini`처럼 시작하면 그 `12`가 충돌 접미사로 읽힌다.
+      명명 규칙에 내재된 모호성이라 여기서 해소할 수 없고, 영향은 **같은 초 안의 표시 순서**
+      뿐이다(복원 대상은 `backup_id` 전체 문자열로 지정되므로 오동작은 없다).
+    """
+    name = str(backup_id)
+    unknown = {"kind": KIND_UNKNOWN, "stamp": "", "stamp_label": "", "seq": 0, "filename": name}
+    if len(name) <= _STAMP_LEN or name[_STAMP_LEN] != "-":
+        return unknown
+    m = _STAMP_RE.match(name[:_STAMP_LEN])
+    if not m:
+        return unknown
+    rest = name[_STAMP_LEN + 1:]
+    for kind in KINDS:
+        if not rest.startswith(kind + "-"):
+            continue
+        tail = rest[len(kind) + 1:]
+        seq = 0
+        seq_match = _SEQ_RE.match(tail)
+        if seq_match:
+            seq, tail = int(seq_match.group(1)), seq_match.group(2)
+        if not tail:
+            return unknown
+        return {
+            "kind": kind,
+            "stamp": name[:_STAMP_LEN],
+            "stamp_label": "%s-%s-%s %s:%s:%s" % m.groups(),
+            "seq": seq,
+            "filename": tail,
+        }
+    return unknown
 
 
 def backup_order_key(name):
@@ -398,11 +467,14 @@ def backup_order_key(name):
     ⚠️ 형식을 못 읽는 이름(사용자가 넣은 파일 등)은 `("", -1, name)`으로 **가장 오래된 것**
       취급한다. 표시 정렬(`restore.backup_rows`)이 이미 같은 결론을 내고 있었고, 두 순서가
       갈리면 화면이 지워지지 않을 파일 이름을 댄다.
+    ★ *"형식을 못 읽는다"*의 뜻은 **위 `parse_backup_id`가 정한다**(§14-G ⓔ). 예전에는 여기에
+      자기 정규식이 따로 있었고 그것이 tag를 아무 문자열이나 받아서, **화면은 형식 불명이라는데
+      정렬은 정상 백업으로 세는** 이름이 있었다.
     """
-    m = _ORDER_RE.match(name)
-    if not m:
+    info = parse_backup_id(name)
+    if info["kind"] == KIND_UNKNOWN:
         return ("", -1, name)
-    return (m.group(1), int(m.group(2) or 0), name)
+    return (info["stamp"], info["seq"], name)
 
 
 def _next_seq(directory, stamp):
@@ -420,12 +492,97 @@ def _next_seq(directory, stamp):
     return max(used) + 1 if used else 0
 
 
+def backup_holds(entries, tag, sha1):
+    """그 **태그의** 백업 링이 이미 그 내용을 담고 있는가 — 담고 있으면 그 경로, 아니면 `""`.
+
+    ★★ `entries`는 **부르는 쪽이 이미 나열해 둔** 링(`list_backups`의 결과)이다 — 여기서 다시
+      나열하지 않는다(§14-G ⓕ). 확인창은 축출 예고·링 지문·이 판정을 **한 번의 나열**에서
+      내야 한다: 나열이 둘이면 그 사이에 링이 도는 창이 생기고, 그러면 화면이 댄 이름과 실제로
+      지워지는 파일이 갈린다. 관측은 부르는 쪽이 한 번, 규칙은 여기 한 곳이다.
+
+    ★★ **중복 판정의 문은 여기 하나다**(설계 §14-G ⓔ). 아래 `make_backup`의 무쓰기 갈래도,
+      확인창의 축출 예고도 이 술어를 본다. 규칙을 고지층에 다시 적으면 언젠가 어긋나고,
+      어긋나는 순간 화면이 *일어나지 않을 삭제*를 말하거나 *일어날 삭제*를 침묵한다.
+    ★ **태그별이다 — 전역이 아니다**(사용자 확정 2026-08-22): 되돌릴 곳이 다른 두 행은 서로를
+      대신하지 못한다(§5-C ⓐ). 두 프로필의 내용이 같을 때 전역으로 거르면 한쪽 태그의 행이
+      통째로 사라지고, 화면은 그것을 *"이쪽은 백업이 없다"*로 읽는다.
+    ★ **형식 불명(`unknown`)은 판정에 참여하지 않는다**: 앱이 만들지 않는 이름 = 바깥에서 들어온
+      파일이고, 그 행이 되돌아가는 곳은 게임 설정 파일이라 프로필 대피본을 대신하지 못한다.
+      그것과 같다는 이유로 대피를 건너뛰지 않고, 그것을 지우지도 않는다 — 태그별로 나눈 이유와
+      같은 이유다. (태그 인자 자체가 `unknown`이어도 같은 조건에서 걸러진다.)
+    ★ **링크는 참여하지 않는다**: 엔진 G15가 링크된 백업의 복원을 **거부**하므로 그것은 되돌릴
+      수 있는 행이 아니다(`restore._entries`가 목록에서 빼는 이유와 같다) — 대신할 수 없는 것이
+      대피를 막으면 안 된다. 링크를 열지 않으므로 `.sav` 경계도 그대로다.
+    ★ 모르면(`sha1`이 없다) **담고 있지 않다**고 답한다 — 대피하는 쪽·고지하는 쪽이 안전하다.
+    """
+    if not sha1 or not isinstance(sha1, str):
+        return ""
+    for path in entries:
+        if os.path.islink(path):
+            continue
+        kind = parse_backup_id(os.path.basename(path))["kind"]
+        if kind == KIND_UNKNOWN or kind != tag:
+            continue
+        if sha1_file(path) == sha1:
+            return path
+    return ""
+
+
+def pending_backups(entries, items):
+    """`items`(= `(tag, sha1)` 쌍들)를 링에 넣을 때 **실제로 파일이 생기는 것들**만 남긴다.
+
+    `entries`는 위 `backup_holds`와 같은 뜻이다 — **한 번 나열한 링**을 그대로 받는다(ⓕ).
+
+    축출 예고의 `adding`이 이 목록의 길이다 — 확인창은 *"이 백업이 지워집니다"*라며 이름을 대는
+    자리라, 만들지도 않을 백업까지 세면 화면이 **일어나지 않을 삭제**를 약속한다.
+
+    ★ 같은 쌍이 두 번 오면 **한 번만** 센다: 먼저 쓴 것이 그 다음 것의 중복이 되므로 실제로도
+      한 건만 생긴다(한 슬롯에 내용이 같은 본체가 둘 있는 저장·삭제가 그 자리다).
+    ★ `sha1`을 모르면(읽기 실패) **쓸 것으로 센다** — 예고보다 덜 지워지는 쪽이 안전하다.
+      침묵한 삭제가 과하게 예고한 삭제보다 나쁘다.
+    ⚠️ 못 재는 것: 이 동작이 만드는 백업이 링을 밀어내면서 **비교 대상이던 사본이 그 자리에서
+      잘려 나가면** 뒤 항목이 중복이 아니게 된다. 그때는 예고보다 한 건 더 지워진다 — 슬롯 본체가
+      여럿이고 그중 하나가 링의 맨 끝 사본과 같아야 도달하는 갈래다.
+    """
+    out, seen = [], set()
+    for tag, sha1 in items:
+        if not sha1:
+            out.append((tag, sha1))
+            continue
+        key = (tag, sha1)
+        if key in seen or backup_holds(entries, tag, sha1):
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
 def make_backup(appid, data, tag, filename):
-    """어떤 쓰기든 그 전에 여기를 거친다. 실패하면 호출자가 작업을 중단해야 한다 (G13)."""
+    """어떤 쓰기든 그 전에 여기를 거친다. 실패하면 호출자가 작업을 중단해야 한다 (G13).
+
+    ★★ **같은 태그에 같은 내용이 이미 있으면 아무것도 쓰지 않는다**(설계 §14-G ⓔ). 디스크
+      설정은 dock ↔ internal 두 내용 **사이를 왕복**하므로, 내용을 안 보고 매번 쌓으면 링 10칸이
+      같은 사본으로 찬다 — 실측 81칸 중 지금 어디에도 없어 백업이 있어야만 되찾을 수 있는
+      내용은 **7종**뿐이었고 **세 게임은 10칸 전부가 사본**이었다. 마모의 주범은 실패가 아니라
+      정상 동작이다. 판정은 이 문 하나다(다섯 호출부가 전부 여기를 지난다).
+    ★ **남기는 것은 「먼저 담긴 것」** = 이미 있는 것을 지우고 새로 담지 **않는다.** 사용자가
+      보는 결과는 같고(같은 내용이 한 칸) 갈리는 것은 구현 안정성인데, **쓰지 않는 쪽이
+      안전하다** — 반대 방식은 *파일을 지우는 자리*를 하나 새로 만든다. 이 프로젝트에는 무쓰기
+      갈래의 문법이 이미 둘 있다(적용의 `already` · 저장의 `already`).
+    ★ **반환값이 무쓰기를 말한다**: 만들었으면 경로, 안 만들었으면 `None`이다. 이미 그 내용을
+      담고 있는 백업의 경로를 대신 돌려주지 않는 것은, 돌려주면 부르는 쪽이 *방금 만든 것*과
+      구별할 수 없기 때문이다. (다섯 호출부는 지금 전부 반환을 버린다 — 계약이 필요한 곳은
+      고지층이고 그쪽은 위 `pending_backups`로 **같은 판정**을 미리 본다.)
+    ★ 규칙은 **앞으로 만들 백업에만** 걸린다. 이미 쌓인 사본을 소급해서 정리하지 않는다 —
+      그래서 구현 직후의 링은 포화 상태 그대로이고, 중복이 빠져 여유가 생기는 것은 링이 한 바퀴
+      돈 **뒤**다(그 사이에는 §15-D에 적은 잔여 위험이 실제로 열려 있다).
+    """
+    safe_tag = tag.replace("/", "_").replace(":", "_")
+    if backup_holds(list_backups(appid), safe_tag, sha1_bytes(data)):
+        return None                     # ★ 디렉터리조차 만들지 않는다 — 무쓰기는 무쓰기다
     directory = backups_dir(appid)
     os.makedirs(directory, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    safe_tag = tag.replace("/", "_").replace(":", "_")
     seq = _next_seq(directory, stamp)
     path = os.path.join(directory, _backup_name(stamp, safe_tag, seq, filename))
     # 같은 초에 두 번 백업하면 덮어쓰므로 접미사를 붙인다. (위 `_next_seq`가 이미 비켜 준

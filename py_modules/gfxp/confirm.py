@@ -64,14 +64,15 @@ def _meta_sha1(appid, profile):
     return meta.get("sha1") if isinstance(meta, dict) else None
 
 
-def _ring_observe(appid, adding=1):
+def _ring_observe(appid, items=()):
     """§5-E-3의 산출 함수를 부른다 — **정본은 `restore.ring_observe` 하나**다(적용·저장 공용).
 
     돌려주는 것은 `{"evicted": [...], "fingerprint": …}`: **축출 예고와 그 지문이 한 번의
     나열에서 같이 나온다**(§14-G ⓕ — 일괄 적용·전체 초기화가 쓰던 문법 그대로다).
 
-    `adding`은 그 동작이 **만들 백업의 수**다. 적용은 1건이라 기본값을 쓰고, 저장은 슬롯의
-    본체 수만큼 만드므로 그 수를 넘긴다 — 개수가 틀리면 화면이 실제와 다른 목록을 이름으로 댄다.
+    `items`는 그 동작이 **만들려는 백업들**(`(tag, sha1)` 쌍)이다. 개수가 아닌 이유는 §14-G ⓔ:
+    같은 태그에 같은 내용이 이미 있으면 아무것도 안 만들고, 안 만들면 안 지운다. 그 중복 판정도
+    **같은 한 번의 나열** 안에서 이뤄진다(ⓕ) — 부르는 쪽이 미리 세면 나열이 둘이 된다.
 
     ⚠️ import를 함수 안에서 한다: `restore`가 이 모듈을 import하므로(restore.py 상단)
       최상단에서 맞import하면 순환이 된다. 순환을 CPython의 부분초기화 동작에 기대는 것보다,
@@ -79,7 +80,7 @@ def _ring_observe(appid, adding=1):
       통째로 안 뜬다).
     """
     from . import restore
-    return restore.ring_observe(appid, adding)
+    return restore.ring_observe(appid, items)
 
 
 def needs_confirm(reg, appid, profile):
@@ -139,7 +140,15 @@ def needs_confirm(reg, appid, profile):
     #   기준이어야 갈래가 하나 남는다(구조로 예외를 없앤다).
     #   기록이 멀쩡하면 실측하지 않는다 — 기존 문구·검사가 그 값을 전제한다.
     size, sha1_short = _slot_materials(appid, profile, meta, bodies)
-    ring = _ring_observe(appid, len(bodies))
+    # ★★ 축출 예고의 개수는 **실제로 링에 쌓일 백업 수**다(설계 §14-G ⓔ). 대피 대상은 위
+    #   `bodies` 전부지만, 같은 태그에 같은 내용이 이미 있으면 `store.make_backup`이 아무것도
+    #   쓰지 않으므로 **지워지는 백업도 없다.** 목록의 길이를 그대로 쓰면 확인창이 이름을 대며
+    #   *일어나지 않을 삭제*를 약속한다. 판정은 엔진의 무쓰기 갈래와 **같은 술어**
+    #   (`store.backup_holds`)를 지난다 — 규칙을 여기 다시 적으면 언젠가 어긋난다.
+    directory = store.profile_dir(appid, profile)
+    tag = store.profile_tag(profile)
+    ring = _ring_observe(
+        appid, [(tag, store.sha1_file(os.path.join(directory, name))) for name in bodies])
     params = {
         "size": size,
         "sha1_short": sha1_short,
@@ -149,10 +158,11 @@ def needs_confirm(reg, appid, profile):
         "disk_state": _classify(state),
         # ★ 이 저장이 **실제로 지울 백업**(R14 #1 — 적용·복원과 같은 필드·같은 문구).
         #   저장은 슬롯을 덮기 전에 본체를 대피시키고, 그 대피가 링을 **본체 수만큼** 태운다.
-        #   ★★ 그래서 `adding`은 1이 아니라 **위에서 센 본체의 개수**다: 하드코딩된 1은 본체가
+        #   ★★ 그래서 `adding`은 1이 아니라 **실제로 쌓일 대피본의 수**다: 하드코딩된 1은 본체가
         #     하나뿐일 때만 맞는 숫자였고, 본체가 둘 이상인 슬롯에서 화면이 **실제보다 적은
         #     축출을 예고**한다 — 이 확인창은 지워질 백업을 *이름으로* 대는 자리라 예고한 목록과
-        #     실제 축출이 일치해야 한다(설계 §14-G ⓐ / 조사 §2-B).
+        #     실제 축출이 일치해야 한다(설계 §14-G ⓐ / 조사 §2-B). 반대 방향의 거짓말(중복이라
+        #     안 만드는데 지운다고 말하기)은 `ring_observe`가 그 한 나열 안에서 막는다(§14-G ⓔ).
         #   대피가 없는 갈래(본체 0개)는 여기 오지 않는다 — 위에서 이미 「안 묻는다」로 돌아섰다.
         #   ★★ 그 목록과 **그 지문이 한 번의 나열에서 같이 나온다**(§14-G ⓕ) — 아래 토큰 지문이
         #     쓰는 링이 지금 화면이 이름을 대는 바로 그 링이다.
@@ -285,7 +295,7 @@ def apply_needs_confirm(reg, appid, profile):
         # 모르면 묻는다. 디스크 조회가 실패했으므로 지문의 디스크 칸도 `None`이고, 그 `None`이
         # 곧 지문의 일부다 — 조회가 되기 시작하면 낡은 토큰이 거부된다(안전한 방향).
         return "confirm", params, _state_fp(_meta_sha1(appid, profile), None,
-                                            _ring_observe(appid, 0)["fingerprint"])
+                                            _ring_observe(appid)["fingerprint"])
     if not state.get("exists"):
         return "proceed", params, None               # 파일 없음 — 잃을 것이 없다(재생)
     try:
@@ -298,7 +308,10 @@ def apply_needs_confirm(reg, appid, profile):
         return "already", params, None
     if matches:
         return "proceed", params, None               # 다른 슬롯과 같다 — 그 내용은 보존돼 있다
-    ring = _ring_observe(appid)                      # 여기서만 대피본이 생긴다(§14-B)
+    # ★ 여기서만 대피본이 생긴다(§14-B). 그마저도 **같은 태그에 같은 내용이 이미 있으면
+    #   만들어지지 않으므로**(§14-G ⓔ) 지워질 백업도 없다 — 엔진의 무쓰기 갈래와 같은 술어를
+    #   본다(`store.backup_holds`). 디스크 sha1은 위에서 이미 잰 그 값이다(관측을 늘리지 않는다).
+    ring = _ring_observe(appid, [(store.KIND_DISK, disk_sha1)])
     params["evicted"] = ring["evicted"]
     return "confirm", params, _state_fp(target_sha1, disk_sha1, ring["fingerprint"])
 
@@ -447,6 +460,9 @@ def apply_all_evict_preview(reg, profile, running):
                    축출도 안 일어난다 — 예고보다 **덜** 지워지는 안전한 방향이라 화면은 「예상」이라
                    말한다. ⓑ 게임별 예외로 건너뛴 게임의 내부 상태(모르면 약속하지 않는다).
                    ⓒ **축출이 0건인 게임의 링 변화** — 지울 것이 없으면 약속한 것도 없다.
+      ⚠️ **중복이라 대피본을 안 만드는 갈래(§14-G ⓔ)는 여기 안 든다** — 그것은 위에서 이미 세어
+        뺐다(`store.pending_backups`). ⓐ와 섞어 읽지 말 것: ⓐ는 *실패*라 못 재는 것이고, 중복은
+        **정상 갈래**라 재는 것이다. 둘을 뭉뚱그리면 "예고가 원래 헐겁다"는 변명이 생긴다.
       ⚠️ 그래서 §3-C의 *"디스크 sha1을 지문에서 뺀다"*는 **여전히 유효하되 범위가 좁아졌다**:
         설정 파일이 다시 쓰여도 토큰은 그대로다 — **그 변화가 지워질 백업을 바꾸는 때**(=그 게임의
         링이 이미 가득 찬 때)만 예외다. 그때는 확인→재확인이 마찰이 아니라 **고지의 정정**이다.
@@ -462,7 +478,9 @@ def apply_all_evict_preview(reg, profile, running):
             state = engine.disk_state(reg, appid)
             if not state.get("exists") or state.get("matches"):
                 continue                      # 대피본을 안 만드는 갈래(§14-B)
-            rows = restore.evict_preview(appid)
+            # ★ 같은 태그에 같은 내용이 이미 있으면 대피본이 **안 만들어진다**(§14-G ⓔ) —
+            #   그 게임은 지울 것이 없으므로 plan에서 빠진다(중복이면 빈 목록이 돌아온다).
+            rows = restore.evict_preview(appid, [(store.KIND_DISK, state.get("sha1"))])
         except Exception:                     # noqa: BLE001 — 게임별 격리(엔진 외곽 try와 동형)
             continue                          # 그 게임은 세지 않는다(모르면 약속하지 않는다)
         if rows:

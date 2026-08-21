@@ -47,6 +47,10 @@ APPID = "850"
 DOCK = b"quality=dock\nshadows=high\nsource=DOCK-PROFILE\n"
 INTERNAL = b"quality=intl\nshadows=low_\nsource=INTL-PROFILE\n"
 EDITED = b"quality=edit\nshadows=mid_\nsource=USER-EDITED-\n"
+#: ⓑ 전용 — **링에 아직 없는 새 내용**. ⓑ는 *"복원이 예고한 그 파일을 실제로 지우는가"*를 재는
+#: 절이라 대피본이 실제로 만들어져야 한다. `EDITED`는 직전 ⓐ의 적용이 이미 `disk`로 담아 둔
+#: 내용이어서 그대로 쓰면 중복 무쓰기 갈래(§14-G ⓔ)로 빠진다 — 그 갈래는 아래 ⓑ-0이 따로 잰다.
+FRESH = b"quality=fres\nshadows=ultr\nsource=NEVER-BACKED\n"
 
 #: 같은 초에 충돌한 두 백업. **파일명을 갈라 둔다** — 표기 3칸으로 구별되게 하기 위해서다.
 #: 역사전순에서는 `-1-zebra`가 `-video`보다 작아 **뒤에** 오고(=사전순 prune이 먼저 지운다),
@@ -98,7 +102,7 @@ def main_test():                                                # noqa: C901  (�
 
         def as_item(backup_id, dup=0):
             """실제 파일 하나를 봉투 표기(`EvictedRow`)로 — 예고와 같은 모양으로 맞춘다."""
-            info = restore.parse_backup_id(backup_id)
+            info = store.parse_backup_id(backup_id)
             return {"backup_id": backup_id, "kind": info["kind"],
                     "stamp_label": info["stamp_label"], "filename": info["filename"],
                     "dup": dup}
@@ -186,13 +190,54 @@ def main_test():                                                # noqa: C901  (�
             P("ⓐ 링 크기가 %d다(BACKUP_KEEP=%d)" % (len(names()), store.BACKUP_KEEP))
 
         # ═══════════════════════════════════════════════════════════════════
+        # ⓑ-0 **같은 태그에 같은 내용이 이미 있으면 아무것도 안 쓰고, 그래서 아무것도 안 지운다**
+        #     (설계 §14-G ⓔ)
+        #
+        #   방금 ⓐ의 적용이 `EDITED`를 `disk` 대피본으로 담아 뒀다. 그 상태에서 복원이 또
+        #   `EDITED`를 대피시키려 하면 `store.make_backup`이 **아무것도 쓰지 않는다** — 그러면
+        #   축출도 0건이어야 한다. 여기서 1건을 예고하면 확인창이 이름을 대며 *일어나지 않을
+        #   삭제*를 약속하는 것이고, 「백업 한 칸을 씁니다」도 거짓말이 된다.
+        #   ★ ⓑ와 **갈래를 갈라서** 잰다 — 단언을 "1건 또는 0건"으로 넓히면 둘 다 못 잰다.
+        # ═══════════════════════════════════════════════════════════════════
+        cfg.write_bytes(EDITED)
+        ring_shas = {store.sha1_file(q) for q in store.list_backups(APPID)}
+        dup_row = None
+        for row in restore.backup_rows(store.load_registry(), APPID):
+            if row["target"] == "config" and not row["same_as_target"]:
+                dup_row = row
+                break
+        if dup_row is None or store.sha1_bytes(EDITED) not in ring_shas:
+            P("ⓑ-0 사전 조건 실패 — 지금 디스크 내용이 링에 없거나 되돌릴 행이 없다"
+              "(중복 갈래가 안 선다)")
+        else:
+            main._CONFIRM_TOKENS.clear()
+            env = rpc(main, "restore_backup", APPID, dup_row["backup_id"])
+            if env.get("code") != codes.CONFIRM_REQUIRED:
+                P("ⓑ-0 복원이 확인을 요구하지 않았다 — %s" % env)
+            if params_of(env).get("evicted"):
+                P("★ⓑ-0 대피본이 안 만들어지는 갈래인데(같은 내용이 이미 링에 있다) 축출을 "
+                  "예고했다 — %s" % params_of(env).get("evicted"))
+            if params_of(env).get("evacuates"):
+                P("★ⓑ-0 링을 한 칸도 안 쓰는데 확인창이 「백업 한 칸을 씁니다」를 참이라 한다")
+            before = names()
+            env = rpc(main, "restore_backup", APPID, dup_row["backup_id"],
+                      confirm_token=params_of(env).get("confirm_token"))
+            if not env.get("ok"):
+                P("ⓑ-0 복원이 실패했다 — %s" % env)
+            if names() != before:
+                P("★ⓑ-0 같은 내용을 다시 대피시켰다 — 추가=%s 축출=%s"
+                  % (sorted(names() - before), sorted(before - names())))
+
+        # ═══════════════════════════════════════════════════════════════════
         # ⓑ 복원 확인창도 **같은 함수**로 같은 답을 낸다
         # ═══════════════════════════════════════════════════════════════════
         prune_next = os.path.basename(store.list_backups(APPID)[-1])
         expected_next = [as_item(prune_next)]
         # ⚠️ 행을 고르기 **전에** 게임 설정 파일 상태를 확정한다 — `same_as_target`은 그 시점의
         #   사실이라, 고른 뒤에 파일을 바꾸면 고를 때 본 근거가 무효가 된다(실제로 한 번 그랬다).
-        cfg.write_bytes(EDITED)
+        # ★ **링에 아직 없는 내용**을 쓴다: 대피본이 실제로 만들어져야 축출이 일어나고, 그래야
+        #   이 절이 재려는 *"예고 == 실제로 지워진 파일"*이 성립한다(중복 갈래는 위 ⓑ-0이 잰다).
+        cfg.write_bytes(FRESH)
         target_row = None
         for row in restore.backup_rows(store.load_registry(), APPID):
             if row["target"] == "config" and not row["same_as_target"]:
@@ -270,8 +315,12 @@ def main_test():                                                # noqa: C901  (�
         real_clock = store.time
         try:
             store.time = _Stamp(real_clock, TWIN_STAMP)
-            for _ in range(2):                               # ★ 같은 초·같은 파일명 두 건
-                store.make_backup(TWIN_APPID, b"twin\n", "disk", "video.ini")
+            # ★ 같은 초·같은 파일명 두 건. **내용은 달라야 한다** — 같은 태그에 같은 내용이면
+            #   두 번째는 아예 안 만들어진다(§14-G ⓔ). 이 절이 재려는 것은 *표기의 모호성*
+            #   (stamp_label·filename 두 조각이 같아 화면에서 구별되지 않는 것)이지 내용이
+            #   아니므로, 내용을 갈라도 재는 대상은 그대로다.
+            for n in range(2):
+                store.make_backup(TWIN_APPID, b"twin-%d\n" % n, "disk", "video.ini")
             for i in range(store.BACKUP_KEEP - 2):           # 링을 정확히 채운다(쌍둥이가 최고령)
                 store.time = _Stamp(real_clock, "20250102-0000%02d" % i)
                 store.make_backup(TWIN_APPID, b"filler-%02d\n" % i, "disk", "fill%02d.ini" % i)
@@ -284,7 +333,7 @@ def main_test():                                                # noqa: C901  (�
 
         # ⓕ-0 **음성 대조군**: 표기 조각만으로는 두 파일이 실제로 구별되지 않는다.
         #     (이 단언이 깨지면 명명 규칙이 바뀐 것이고, 그때는 ⓕ가 아무것도 안 재는 절이 된다.)
-        seen = {(restore.parse_backup_id(n)["stamp_label"], restore.parse_backup_id(n)["filename"])
+        seen = {(store.parse_backup_id(n)["stamp_label"], store.parse_backup_id(n)["filename"])
                 for n in TWINS}
         if len(seen) != 1:
             P("ⓕ-0 계측기 무효 — 쌍둥이의 표기가 애초에 다르다(%s). 이 절이 재려는 모호성이 없다"

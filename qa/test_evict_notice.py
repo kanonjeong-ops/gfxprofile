@@ -82,7 +82,7 @@ def main_test():                                                # noqa: C901  (ì
             """
             out = []
             for name in filenames:
-                info = restore.parse_backup_id(name)
+                info = store.parse_backup_id(name)
                 out.append({"backup_id": name, "kind": info["kind"],
                             "stamp_label": info["stamp_label"], "filename": info["filename"],
                             "dup": 0})

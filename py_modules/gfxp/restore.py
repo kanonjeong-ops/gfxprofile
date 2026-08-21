@@ -25,67 +25,19 @@
 """
 import logging
 import os
-import re
 
 from . import codes, confirm, engine, remove, store
 
 _log = logging.getLogger("gfxp.restore")
 
-#: `store.make_backup`이 붙이는 tag 전량. 이 목록 밖은 `unknown`으로 접는다.
-#: (`profile_%s` 두 개 + 적용/복원 직전 대피본 `disk`.)
-KIND_DISK = "disk"
-KIND_UNKNOWN = "unknown"
-KINDS = (KIND_DISK, "profile_dock", "profile_internal")
-
-#: **stamp는 하이픈을 품는다**(`%Y%m%d-%H%M%S` = 8+1+6 = 15자). 첫 `-`로 자르면 깨진다 —
-#: 고정폭으로 떼고 형태를 정규식으로 확인한다(설계 §2-C 경고).
-_STAMP_LEN = 15
-_STAMP_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$")
-#: 같은 초 충돌 접미사 — `<stamp>-<tag>-<n>-<filename>`.
-_SEQ_RE = re.compile(r"^(\d+)-(.+)$")
-
 #: 안전하지 않은 경로에 쓰는 고정 지문. 어떤 실제 파일도 읽지 않고 만들어진다(P8 Codex #2 문법).
 _UNSAFE_FP = "unsafe"
 
-
-def parse_backup_id(backup_id):
-    """백업 파일명 하나를 표시용 조각으로. **파싱은 백엔드가 한다**(프론트는 문자열을 안 쪼갠다).
-
-    `<stamp>-<tag>[-<n>]-<filename>` → `kind` · `stamp` · `stamp_label` · `seq` · `filename`.
-    형태가 안 맞으면 `kind="unknown"`, `stamp=""`, `filename=원본 이름 그대로` —
-    화면은 kind 코드로 i18n 문구를 고르므로 미지 형식도 안전하게 그려진다.
-
-    ⚠️ 남는 모호성: 파일명 자체가 `12-video.ini`처럼 시작하면 그 `12`가 충돌 접미사로 읽힌다.
-      store의 명명 규칙에 내재된 모호성이라 여기서 해소할 수 없고, 영향은 **같은 초 안의
-      표시 순서**뿐이다(복원 대상은 `backup_id` 전체 문자열로 지정되므로 오동작은 없다).
-    """
-    name = str(backup_id)
-    unknown = {"kind": KIND_UNKNOWN, "stamp": "", "stamp_label": "", "seq": 0, "filename": name}
-    if len(name) <= _STAMP_LEN or name[_STAMP_LEN] != "-":
-        return unknown
-    m = _STAMP_RE.match(name[:_STAMP_LEN])
-    if not m:
-        return unknown
-    rest = name[_STAMP_LEN + 1:]
-    for kind in KINDS:
-        if not rest.startswith(kind + "-"):
-            continue
-        tail = rest[len(kind) + 1:]
-        seq = 0
-        seq_match = _SEQ_RE.match(tail)
-        if seq_match:
-            seq, tail = int(seq_match.group(1)), seq_match.group(2)
-        if not tail:
-            return unknown
-        return {
-            "kind": kind,
-            "stamp": name[:_STAMP_LEN],
-            "stamp_label": "%s-%s-%s %s:%s:%s" % m.groups(),
-            "seq": seq,
-            "filename": tail,
-        }
-    return unknown
-
+#: ★ **백업 파일명의 해석은 `store.parse_backup_id` 하나다**(15판 §14-G ⓔ). 예전에는 그 파서가
+#:   여기 살았고 `store.backup_order_key`는 같은 이름을 **자기 정규식**으로 따로 읽었다 —
+#:   이름을 **만드는** 곳(`store._backup_name`)과 **읽는** 곳이 갈려 있던 것이 「형식 불명」의
+#:   정의가 두 벌이 된 원인이다. 태그별 중복 판정(`store.backup_holds`)도 그 해석을 쓰므로
+#:   정의는 한 곳이어야 한다. 여기 남는 것은 **그 kind로 무엇을 하는가**(아래 되돌릴 곳)뿐이다.
 
 #: 행 `kind` → **되돌릴 곳**. 판정은 백엔드 한 곳이다(프론트가 kind로 재분류하지 않는다).
 #: `unknown`이 게임 설정 파일로 가는 것은 *출처를 모르기 때문*이다 — 더 놀랍지 않은 쪽을 고른다
@@ -101,7 +53,7 @@ def target_of(backup_id):
       써야 한다. 세 곳이 각자 kind를 해석하면 언젠가 하나가 어긋나고, 어긋난 순간
       *"확인한 곳과 다른 곳에 쓰기"*가 된다.
     """
-    return _TARGET_OF_KIND.get(parse_backup_id(backup_id)["kind"], TARGET_CONFIG)
+    return _TARGET_OF_KIND.get(store.parse_backup_id(backup_id)["kind"], TARGET_CONFIG)
 
 
 def _display_identity(row):
@@ -125,7 +77,7 @@ def _mark_duplicates(rows):
       받는데, 그 이름이 둘을 가리키면 사용자는 **무엇을 승인했는지 모른 채** 승인한다.
     ★ 원시 파일명을 그대로 노출하는 것은 답이 아니다 — 사용자는
       `20260815-120000-disk-1-video.ini`를 읽고 싶어 하지 않는다. 백엔드가 파싱해 사람이 읽는
-      조각으로 준다는 이 파일의 기존 원칙(`parse_backup_id`)을 뒤집는 일이기도 하다.
+      조각으로 준다는 기존 원칙(`store.parse_backup_id`)을 뒤집는 일이기도 하다.
     ★ **같을 때만** 붙인다: 늘 붙이면 대부분(유일한 표기)에 뜻 모를 번호가 달려 읽는 비용만
       늘고, 사용자는 그 번호가 무엇을 세는지 알 길이 없다. 번호는 *모호할 때의 해소 장치*다.
     ★ 번호의 뜻 = **그 표기를 공유하는 것들 중 먼저 만들어진 것이 1번**이다. 순서는
@@ -150,9 +102,15 @@ def _mark_duplicates(rows):
     return rows
 
 
-def ring_observe(appid, adding=1):
-    """백업 링을 **한 번 나열해** 축출 예고·링 지문·칸 수를 같이 낸다 —
-    `{"evicted": [...], "fingerprint": …, "count": N}`.
+def ring_observe(appid, items=()):
+    """백업 링을 **한 번 나열해** 축출 예고·링 지문·칸 수·실제로 쌓일 수를 같이 낸다 —
+    `{"evicted": [...], "fingerprint": …, "count": N, "adding": K}`.
+
+    `items`는 이 동작이 **만들려는 백업들**(`(tag, sha1)` 쌍)이다. 개수가 아니라 무엇을
+    만드는지를 받는 이유(§14-G ⓔ): 같은 태그에 같은 내용이 이미 있으면 `store.make_backup`이
+    아무것도 쓰지 않으므로 **지워지는 백업도 없다.** 그 판정은 링을 봐야 하는데, 그것을 부르는
+    쪽에서 따로 하면 **나열이 둘이 되어 위 ⓕ가 닫은 창이 그대로 다시 열린다.** 그래서 중복
+    판정도 이 한 번의 나열 안에서 한다 — `adding`이 그 결과다.
 
     ★★ **왜 한 번인가**(설계 §14-G ⓕ): 예전에는 고지(`evict_preview`)와 토큰 지문
       (`ring_fingerprint`)이 **각자 링을 나열**했다. 그 두 관측 사이에 링이 돌면 확인창은
@@ -170,16 +128,22 @@ def ring_observe(appid, adding=1):
     """
     appid = str(appid)
     if not remove._paths_in_position(appid):
-        return {"evicted": [], "fingerprint": _UNSAFE_FP, "count": 0}
-    names = [os.path.basename(p) for p in store.list_backups(appid)]
+        return {"evicted": [], "fingerprint": _UNSAFE_FP, "count": 0, "adding": 0}
+    entries = store.list_backups(appid)              # ★ 나열은 **여기 한 번**이다(ⓕ)
+    names = [os.path.basename(p) for p in entries]
     observed = {"evicted": [],
                 "fingerprint": store.sha1_bytes("\n".join(names).encode("utf-8")),
-                "count": len(names)}
-    if adding <= 0:
+                "count": len(names),
+                "adding": 0}
+    if not items:
         return observed                              # 백업을 안 만드는 갈래는 지울 것도 없다
+    adding = len(store.pending_backups(entries, items))
+    observed["adding"] = adding
+    if adding <= 0:
+        return observed                              # 전부 중복 — 한 칸도 안 쓰므로 축출도 없다
     rows = []
     for name in names:                               # ★ 먼저 **링 전체**를 만든다 (아래 이유)
-        info = parse_backup_id(name)
+        info = store.parse_backup_id(name)
         rows.append({"backup_id": name, "kind": info["kind"],
                      "stamp_label": info["stamp_label"], "filename": info["filename"],
                      "dup": 0})
@@ -190,8 +154,11 @@ def ring_observe(appid, adding=1):
     return observed
 
 
-def evict_preview(appid, adding=1):
-    """이 동작이 백업을 **`adding`건 만들 때 실제로 지워질** 파일들(설계 §5-E-3).
+def evict_preview(appid, items):
+    """이 동작이 **`items`를 백업하려 할 때 실제로 지워질** 파일들(설계 §5-E-3).
+
+    `items` = `(tag, sha1)` 쌍들 = 만들려는 백업. **개수가 아닌 이유는 위 `ring_observe`**에
+    있다(중복이면 안 만들고, 안 만들면 안 지운다 — §14-G ⓔ).
 
     ★★ **산출 함수는 하나다** — 적용·복원·저장·등록 해제·일괄 적용·전체 초기화가 전부 여기를
       부른다(R14 #1). 경로마다 따로 세면 어느 하나는 반드시 화면과 실제가 어긋난다.
@@ -206,12 +173,12 @@ def evict_preview(appid, adding=1):
     ★ 항목은 **고유 `backup_id`를 싣고** 거기에 화면이 그릴 조각을 얹는다(봉투 계약
       `EvictedRow`). id는 화면에 그리지 않는다 — 대상이 하나임을 **증명**하는 자리이고
       (토큰 지문·검사가 이 값으로 실제 삭제분과 대조한다), 사람이 읽는 것은 조각 쪽이다.
-    ★ `adding<=0`을 **여기서** 먼저 끊는다: 지문이 필요 없는 호출자(다게임 합산)가 지울 것도
+    ★ 빈 `items`를 **여기서** 먼저 끊는다: 지문이 필요 없는 호출자(다게임 합산)가 만들 것도
       없는 게임에서 링을 나열하지 않게 하려는 것이다(비용 단락 — 답은 어느 쪽이든 `[]`다).
     """
-    if adding <= 0:
+    if not items:
         return []
-    return ring_observe(appid, adding)["evicted"]
+    return ring_observe(appid, items)["evicted"]
 
 
 def evict_digest(plan):
@@ -244,7 +211,7 @@ def ring_fingerprint(appid):
       여기 남는 이유는 *"링만 재고 싶은"* 소비자(검사의 계측기)가 그 뜻을 이름으로 말할 수 있게
       하기 위해서다.
     """
-    return ring_observe(appid, 0)["fingerprint"]
+    return ring_observe(appid)["fingerprint"]
 
 
 def _entries(appid):
@@ -293,6 +260,9 @@ def _evacuation_source(appid, profile, meta):
       문자열이며 **그 이름의 본체가 실재할 때만** 대피가 일어난다(engine.py의 `old_name` /
       `old_file` 두 조건). 화면이 약속하는 것(*"백업 한 칸을 씁니다"*)과 엔진이 실제로 하는 일이
       **한 술어**에서 나와야 어긋날 자리가 없다.
+    ⚠️ 이 함수는 *"대피할 파일이 무엇인가"*까지만 답한다. 그 대피가 **링에 칸을 쓰는가**는
+      한 조건이 더 붙는다 — 같은 태그에 같은 내용이 이미 있으면 `store.make_backup`이 아무것도
+      쓰지 않는다(§14-G ⓔ). 부르는 쪽이 `store.pending_backups`로 그 한 조건을 마저 본다.
     ★★ 왜 함수로 빼는가(2026-08-15 QA R2): 이 조건은 4-B **9행과 10행에서 각각 다른 이유로**
       거짓이 되는데, 자리마다 조건을 다시 적었더니 9행에만 걸리고 **10행이 빠졌다** — 그 결과
       확인창이 *없는 프로필을 「…에 저장됨」*이라 하고 *쓰지도 않는 링을 「한 칸 씁니다」*라고
@@ -354,7 +324,7 @@ def backup_rows(reg, appid):
     out = []
     for path in _entries(appid):
         name = os.path.basename(path)
-        info = parse_backup_id(name)
+        info = store.parse_backup_id(name)
         target = _TARGET_OF_KIND.get(info["kind"], TARGET_CONFIG)
         if target not in targets:
             targets[target] = target_sha1(reg, appid, target)
@@ -445,7 +415,7 @@ def needs_confirm(reg, appid, backup_id):
     _assert_in_position(appid)                       # 0단계
     entry = engine.game_or_fail(reg, appid)          # 미등록 → GAME_NOT_REGISTERED
 
-    info = parse_backup_id(backup_id)
+    info = store.parse_backup_id(backup_id)
     target = _TARGET_OF_KIND.get(info["kind"], TARGET_CONFIG)
     if target == TARGET_CONFIG and engine.running_game(appid):    # 조기 거부 (§2-B-1)
         raise engine.Refused(
@@ -468,9 +438,12 @@ def needs_confirm(reg, appid, backup_id):
         # 게임 설정 파일이 지금 어떤 상태인가 — 저장 확인창과 **같은 4분류**를 쓴다.
         # (슬롯 복원에서도 싣는다: "게임 설정 파일은 바뀌지 않습니다"를 말하는 화면의 재료다.)
         "disk_state": confirm._classify(state),
-        # 이 복원이 **지금 그 자리의 내용을 백업으로 대피시키는가**(R2 — 화면의 「백업 한 칸을
-        # 씁니다」가 참인 조건). 기본은 **거짓**이다: 약속은 그것이 참인 갈래에서만 켠다 —
-        # 없는 대피를 말하면 사용자는 남아 있지도 않을 복구 지점을 믿는다.
+        # 이 복원이 **백업 링에 한 칸을 쓰는가**(R2 — 화면의 「백업 한 칸을 씁니다」가 참인 조건).
+        # 기본은 **거짓**이다: 약속은 그것이 참인 갈래에서만 켠다 — 없는 대피를 말하면 사용자는
+        # 남아 있지도 않을 복구 지점을 믿는다.
+        # ★ **같은 내용이 이미 그 태그의 링에 있으면 거짓이다**(§14-G ⓔ): 엔진이 아무것도 쓰지
+        #   않으므로 칸을 안 쓴다. 그 내용이 백업에 있다는 사실은 여전히 참이지만, 이 필드가
+        #   말하는 것은 *"이 동작이 칸을 태우는가"*다 — 안 태우면 축출도 없다(`evicted`도 빈다).
         # ⚠️ 이 값이 뜻을 갖는 것은 **`confirm` 갈래**다(화면이 그때만 읽는다 — 다른 상태에는
         #   확인창 자체가 없다). `already`는 아무것도 쓰지 않으므로 여기 실린 값을 근거로 삼지 말 것.
         "evacuates": False,
@@ -483,14 +456,19 @@ def needs_confirm(reg, appid, backup_id):
         config_path = entry.get("config_path") or ""
         if not os.path.exists(config_path):
             return "proceed", params, None           # 잃을 것이 없다(재생) — 대피도 없다
-        # 엔진은 설정 파일이 **있을 때만** 그것을 대피시킨다(engine.restore_backup 끝단).
-        params["evacuates"] = True
         # ★ 이 sha1이 곧 **되돌릴 곳의 지문**이다(`target_sha1(reg, appid, "config")`와 같은 값·
         #   같은 파일). 판정에 쓴 값을 그대로 토큰에 묶으므로 둘이 다른 시점을 볼 수 없다.
         disk_sha = store.sha1_file(config_path)
         if disk_sha and backup_sha and disk_sha == backup_sha:
             return "already", params, None
-        ring = ring_observe(appid)                   # ★ 고지와 지문이 **한 나열**을 공유한다(ⓕ)
+        # 엔진은 설정 파일이 **있을 때만** 그것을 대피시키고(engine.restore_backup 끝단), 같은
+        # 태그에 **같은 내용이 이미 있으면 아무것도 쓰지 않는다**(§14-G ⓔ). 화면의 「백업 한 칸을
+        # 씁니다」는 **칸을 쓸 때만** 참이므로 그때만 켠다 — 이미 링에 있는 내용이면 잃는 것도
+        # 새로 태우는 칸도 없다. 판정은 엔진의 무쓰기 갈래와 **같은 술어**(`store.backup_holds`)다.
+        ring = ring_observe(appid, [(store.KIND_DISK, disk_sha)])
+        # ★ 고지·지문·**대피 여부**가 전부 그 한 나열에서 나온다(ⓕ) — `adding`이 0이면 링에
+        #   한 칸도 안 쌓이므로 「백업 한 칸을 씁니다」도 거짓이고 지워질 것도 없다.
+        params["evacuates"] = bool(ring["adding"])
         params["evicted"] = ring["evicted"]
         return "confirm", params, _restore_fp(disk_sha, backup_sha, ring["fingerprint"])
 
@@ -504,7 +482,13 @@ def needs_confirm(reg, appid, backup_id):
     #   링을 쓰지 않고, 덮어쓸 내용도 그 자리에 없다. 그런데 9행에만 조건이 걸려 있어서
     #   10행 확인창이 두 문장을 그대로 그렸다.
     source = _evacuation_source(appid, target, meta)
-    params["evacuates"] = bool(source)
+    # ★ **본체 sha는 여기서 한 번만 잰다.** 이 값이 두 곳에 쓰인다 — 아래 `already` 판정의
+    #   「되돌릴 곳의 지금 내용」(= `target_sha1(reg, appid, target)`과 **같은 파일·같은 값**)과,
+    #   대피가 실제로 링을 쓰는지의 판정이다. 두 번 읽으면 그 사이의 변화로 두 답이 갈린다(ⓕ).
+    slot_sha = store.sha1_file(source) if source else None
+    # ★ 대피가 링을 쓰는 조건은 **본체가 있고** + 같은 태그에 같은 내용이 아직 없을 때다
+    #   (§14-G ⓔ). 앞의 조건은 여기서, 뒤의 조건은 아래 한 번의 링 나열이 함께 답한다 —
+    #   그 사이의 갈래들(9행·10행·2행)은 링을 쓰지 않으므로 기본값 **거짓** 그대로 나간다.
     # 저장 시각은 **그 기록이 가리키는 본체가 실재할 때만** 그 자리의 내용을 설명한다.
     params["saved_at"] = (meta.get("saved_at") or "") if source else ""
     if not isinstance(name, str) or not name:
@@ -515,7 +499,7 @@ def needs_confirm(reg, appid, backup_id):
             #   이름을 못 만들어 `None`을 낸다 — 그 값을 다시 재지 않고 그대로 쓴다.
             params["slot_unreadable"] = True
             return "confirm", params, _restore_fp(
-                None, backup_sha, ring_observe(appid, 0)["fingerprint"])
+                None, backup_sha, ring_observe(appid)["fingerprint"])
         return "proceed", params, None               # 3행 — 빈 슬롯. 잃을 것이 없다
     if not source:
         # 10행 — 기록만 있고 실물이 없다. **묻는 것은 유지한다**: 이 슬롯은 지금 깨져 있고,
@@ -524,17 +508,19 @@ def needs_confirm(reg, appid, backup_id):
         # 없는 저장 시각을 말하지 않는다.**
         # ★ `source`가 비었다 = 그 이름의 본체가 없다 = `target_sha1`도 `None`이다(같은 술어).
         return "confirm", params, _restore_fp(
-            None, backup_sha, ring_observe(appid, 0)["fingerprint"])
-    # ★ 판정은 **본문 실측**이다(R14 #5 — `target_sha1`과 같은 값·같은 함수). meta의 기록값으로
+            None, backup_sha, ring_observe(appid)["fingerprint"])
+    # ★ 판정은 **본문 실측**이다(R14 #5 — `target_sha1`과 같은 값·같은 파일). meta의 기록값으로
     #   판정하면 *"기록은 B인데 본문은 C"*인 손상 슬롯에서 `already`가 되어 **복구 버튼이 그
     #   자리에서 막힌다** — 복원은 바로 그 손상을 되돌리려는 경로다.
     # ★★ 이 값이 곧 **되돌릴 곳의 지문**이다 — 판정과 토큰이 같은 관측을 쓴다(ⓕ). 예전에는
     #   접착층이 `fingerprint()`를 다시 불러 이 본체를 **한 번 더 읽었고**, 그 사이의 변화가
-    #   토큰에 구워졌다.
-    slot_sha = target_sha1(reg, appid, target)
+    #   토큰에 구워졌다. 위에서 `slot_sha`를 이미 잰 것이 그 관측이다.
     if slot_sha and backup_sha and slot_sha == backup_sha:
         return "already", params, None               # 2행
-    ring = ring_observe(appid)                       # 4행 — 대피 1건이 링을 쓴다
+    ring = ring_observe(appid, [(store.profile_tag(target), slot_sha)])   # 4행
+    # ★ 중복이면 대피본이 안 생기므로(§14-G ⓔ) 「백업 한 칸을 씁니다」도 축출도 없다 —
+    #   그 판정과 축출 예고와 지문이 **한 나열**에서 같이 나온다(ⓕ).
+    params["evacuates"] = bool(ring["adding"])
     params["evicted"] = ring["evicted"]
     return "confirm", params, _restore_fp(slot_sha, backup_sha, ring["fingerprint"])
 
@@ -567,4 +553,4 @@ def fingerprint(reg, appid, backup_id):
     return _restore_fp(
         target_sha1(reg, appid, target_of(backup_id)),
         store.sha1_file(os.path.join(store.backups_dir(appid), str(backup_id))),
-        ring_observe(appid, 0)["fingerprint"])
+        ring_observe(appid)["fingerprint"])

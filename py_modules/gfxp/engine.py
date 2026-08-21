@@ -418,13 +418,16 @@ def save_profile(reg, appid, profile):
     #   meta를 못 믿는 상태가 이 갈래의 전제인데 그 meta로 파일 이름을 만들면 같은 거짓을
     #   한 번 더 믿는 것이 된다.
     # ★ 본체가 여럿이면 **여럿 다** 대피한다. 파일명이 바뀐 저장은 옛 본체를 슬롯에 남기므로
-    #   실제로 도달하는 상태다. 확인창의 축출 예고도 **같은 목록의 개수**로 산출된다
+    #   실제로 도달하는 상태다. 확인창의 축출 예고도 **같은 목록**에서 산출된다
     #   (`confirm.needs_confirm`) — 세는 쪽과 지우는 쪽이 같은 함수를 돌아야 예고와 실제가 맞는다.
+    # ★ 다만 **개수는 이 목록의 길이가 아니다**(설계 §14-G ⓔ): 같은 태그에 같은 내용이 이미
+    #   있으면 `store.make_backup`이 아무것도 쓰지 않는다. 대피 대상은 그대로 전부지만 링에
+    #   실제로 쌓이는 것은 그중 일부이고, 확인창은 `store.pending_backups`로 **그쪽**을 센다.
     directory = store.profile_dir(appid, profile)
     for name in store.evacuable_names(appid, profile):
         try:
             store.make_backup(appid, store.read_bytes(os.path.join(directory, name)),
-                              "profile_%s" % profile, name)
+                              store.profile_tag(profile), name)
         except OSError as exc:                             # G13 — 대피 실패면 아무것도 쓰지 않는다
             # ★ **백업 호출만 좁게 잡는다**(R14 #7). 넓게 잡으면 다른 실패까지 삼켜
             #   `BACKUP_FAILED`가 거짓 사유가 된다. 접착층이 이 예외를 `PROFILE_META_CORRUPT`로
@@ -496,7 +499,7 @@ def apply_profile(reg, appid, profile):
         disk_data = store.read_bytes(path)
         if not state["matches"] or store.sha1_bytes(disk_data) != state["sha1"]:
             try:
-                store.make_backup(appid, disk_data, "disk", os.path.basename(path))
+                store.make_backup(appid, disk_data, store.KIND_DISK, os.path.basename(path))
             except OSError as exc:                               # G13
                 raise Refused("거부: 백업에 실패해 적용을 중단했습니다 (%s). 원본은 그대로입니다." % exc, code=codes.BACKUP_FAILED)
 
@@ -648,7 +651,7 @@ def restore_backup(reg, appid, backup_path, target="config"):
             if old_file and os.path.exists(old_file):
                 try:
                     store.make_backup(appid, store.read_bytes(old_file),
-                                      "profile_%s" % target, old_name)
+                                      store.profile_tag(target), old_name)
                 except OSError as exc:                    # G13 — 대피 실패면 아무것도 쓰지 않는다
                     # 적용·저장·삭제와 **같은 코드**로 나간다(R14 #7). 예전에는 이 예외가 그대로
                     # 올라가 접착층에서 `UNEXPECTED`가 됐고, 같은 실패가 경로마다 다른 사유로
@@ -662,7 +665,7 @@ def restore_backup(reg, appid, backup_path, target="config"):
         return {"restored": backup_path}
     if os.path.exists(path):
         try:
-            store.make_backup(appid, store.read_bytes(path), "disk", os.path.basename(path))
+            store.make_backup(appid, store.read_bytes(path), store.KIND_DISK, os.path.basename(path))
         except OSError as exc:                            # G13 — 위 슬롯 갈래와 같은 문법
             raise Refused("거부: 백업에 실패해 복원을 중단했습니다 (%s). 원본은 그대로입니다."
                           % exc, code=codes.BACKUP_FAILED)

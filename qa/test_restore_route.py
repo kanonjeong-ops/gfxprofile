@@ -41,6 +41,10 @@ EDITED = b"quality=edit\nshadows=mid_\nsource=USER-EDITED-\n"
 #: 어느 슬롯과도 다른 제3의 상태. R13부터 **적용이 대피본을 만드는 유일한 조건**이 이것이다
 #: (디스크가 어느 슬롯과 같으면 그 내용은 이미 슬롯에 있으므로 링을 태우지 않는다 — §14-B).
 THIRD = b"quality=thrd\nshadows=mid_\nsource=THIRD-STATE-\n"
+#: **아직 어느 태그의 링에도 담긴 적이 없는** 내용. §14-G ⓔ 이후로 대피는 *새 내용일 때만*
+#: 링을 태우므로, "대피본이 1건 생긴다"를 재는 절은 이 내용을 써야 잴 것이 생긴다.
+#: (중복이라 안 생기는 갈래는 같은 절의 뒤쪽에서 따로 잰다 — 단언을 넓히지 않고 갈래를 가른다.)
+UNSEEN = b"quality=unsn\nshadows=off_\nsource=NEVER-IN-RING\n"
 
 LOG = []
 
@@ -397,7 +401,10 @@ def main_test():                                                # noqa: C901  (�
             P("①-g 복원 토큰이 두 번 소비됐다 ★1회용이 아니다")
 
         # ── ⑥′ 포화 링에서 복원 1회 = 정확히 1건 축출 ─────────────────────────
-        cfg100.write_bytes(EDITED)
+        #   ★ 디스크 내용은 **링에 없는 것**이어야 한다: 방금 ⑥이 `EDITED`를 `disk` 대피본으로
+        #     담아 뒀으므로 그대로 두면 중복 무쓰기 갈래(§14-G ⓔ)가 되어 이 절이 잴 것을 잃는다.
+        #     그 갈래는 바로 아래 ⑥″가 잰다.
+        cfg100.write_bytes(UNSEEN)
         while len(backup_ids("100")) < store.BACKUP_KEEP:
             store.make_backup("100", b"filler=%d\n" % len(backup_ids("100")), "disk", "video.ini")
         saturated = backup_ids("100")
@@ -414,6 +421,37 @@ def main_test():                                                # noqa: C901  (�
               % (len(after - saturated), len(saturated - after)))
         if len(after) != store.BACKUP_KEEP:
             P("⑥′ 포화 링 크기가 %d다(BACKUP_KEEP=%d)" % (len(after), store.BACKUP_KEEP))
+
+        # ── ⑥″ 같은 내용은 다시 담기지 않는다 → **포화 링에서도 축출 0건** (§14-G ⓔ) ──
+        #   ⑥′이 되돌린 내용은 곧 그 백업 파일의 내용이라, 지금 디스크 내용은 이미 `disk` 링에
+        #   있다. 그러면 대피가 아무것도 쓰지 않고, 쓰지 않으므로 지우지도 않는다.
+        #   ★ ⑥′와 **갈래를 갈라서** 잰다 — "1건 또는 0건"으로 넓히면 둘 다 못 잰다.
+        disk_shas = {store.sha1_file(q) for q in store.list_backups("100")}
+        if store.sha1_file(str(cfg100)) not in disk_shas:
+            P("⑥″ 사전 조건 실패 — 지금 디스크 내용이 링에 없다(중복 갈래가 안 선다)")
+        else:
+            target2 = pick("100", "disk")
+            if target2 is not None:
+                main._CONFIRM_TOKENS.clear()
+                ask = rpc(main, "restore_backup", "100", target2["backup_id"])
+                if not is_confirm(ask):
+                    P("⑥″ 사전 조건 실패 — 되돌릴 곳과 내용이 달라야 하는데 확인을 안 물었다 (%s)"
+                      % ask)
+                else:
+                    if params_of(ask).get("evicted"):
+                        P("★⑥″ 대피본이 안 만들어지는 갈래인데 축출을 예고했다 — %s"
+                          % params_of(ask).get("evicted"))
+                    if params_of(ask).get("evacuates"):
+                        P("★⑥″ 링을 한 칸도 안 쓰는데 「백업 한 칸을 씁니다」가 참이라 한다")
+                    before2 = backup_ids("100")
+                    env = rpc(main, "restore_backup", "100", target2["backup_id"],
+                              confirm_token=params_of(ask).get("confirm_token"))
+                    if not env.get("ok"):
+                        P("⑥″ 복원이 실패했다 — %s" % env)
+                    now2 = backup_ids("100")
+                    if now2 != before2:
+                        P("★⑥″ 같은 내용을 다시 대피시켰다 — 추가=%s 축출=%s"
+                          % (sorted(now2 - before2), sorted(before2 - now2)))
 
         # ═══════════════════════════════════════════════════════════════════
         # ② 3-상태 ②  `proceed` — 설정 파일이 없으면 **묻지 않고** 재생한다
@@ -547,7 +585,7 @@ def main_test():                                                # noqa: C901  (�
         naive = naive_parse("20260809-221530-disk-video.ini")
         if naive["stamp"] == "20260809-221530":
             P("⑤ 음성 대조군 무효 — 순진한 파서가 우연히 맞았다(픽스처가 이 결함을 못 잡는다)")
-        ours = restore.parse_backup_id("20260809-221530-disk-video.ini")
+        ours = store.parse_backup_id("20260809-221530-disk-video.ini")
         if ours["stamp"] != "20260809-221530" or ours["stamp_label"] != "2026-08-09 22:15:30":
             P("★⑤ stamp를 15자 고정폭으로 떼지 않았다 — %r / %r"
               % (ours["stamp"], ours["stamp_label"]))
@@ -622,17 +660,25 @@ def main_test():                                                # noqa: C901  (�
         # ═══════════════════════════════════════════════════════════════════
         cfg800 = mkgame(tmp, engine, store, "800", "SlotRestore")
         reg800 = store.load_registry()
-        cfg800.write_bytes(THIRD)
-        engine.save_profile(reg800, "800", "internal")   # 슬롯 = THIRD (옛 INTERNAL은 대피본으로)
+        cfg800.write_bytes(UNSEEN)
+        # ★ 슬롯을 **링에 없는 내용**으로 만든다: mkgame은 슬롯이 갔다 돌아오게 만들어 두 상태를
+        #   모두 대피본으로 담아 두므로, 그 두 상태 중 하나를 슬롯에 두면 이 절의 대피가 중복
+        #   무쓰기(§14-G ⓔ)가 되어 "대피본 1건"을 잴 수 없다. 중복 갈래는 아래 ⑨-e가 잰다.
+        engine.save_profile(reg800, "800", "internal")   # 슬롯 = UNSEEN (아직 어디에도 없는 내용)
         store.save_registry(reg800)
         cfg800.write_bytes(EDITED)                       # 게임 설정 파일은 여기서 **안 움직여야** 한다
         slot_row = None
         for row in rows("800"):
-            if row["kind"] == "profile_internal" and not row["same_as_target"]:
+            # ★ 행을 **성질로** 고른다(mkgame 주석의 규칙): 같은 kind의 행이 둘이라 순서에 기대면
+            #   무엇을 재는지 알 수 없다. 여기서 필요한 것은 *슬롯을 INTERNAL로 되돌릴 행*이다.
+            if row["kind"] != "profile_internal" or row["same_as_target"]:
+                continue
+            if store.sha1_file(os.path.join(store.backups_dir("800"), row["backup_id"])) \
+                    == store.sha1_bytes(INTERNAL):
                 slot_row = row
                 break
         if slot_row is None:
-            P("⑨ 사전 조건 실패 — 슬롯과 내용이 다른 profile_internal 행이 없다 (%s)"
+            P("⑨ 사전 조건 실패 — 슬롯과 내용이 다른 profile_internal(INTERNAL) 행이 없다 (%s)"
               % [(r["kind"], r["same_as_target"]) for r in rows("800")])
             return finish()
         before_ids = backup_ids("800")
@@ -668,12 +714,69 @@ def main_test():                                                # noqa: C901  (�
         added800 = backup_ids("800") - before_ids
         if len(added800) != 1:
             P("★⑨-c 슬롯 복원이 대피본을 %d건 만들었다(1건이어야 한다)" % len(added800))
-        if store.sha1_bytes(THIRD) not in {store.sha1_file(p) for p in store.list_backups("800")}:
+        if store.sha1_bytes(UNSEEN) not in {store.sha1_file(q) for q in store.list_backups("800")}:
             P("★⑨-c 덮어쓰기 직전 슬롯 내용이 백업에 없다 — 되돌릴 지점이 없다")
         # 같은 행을 한 번 더: 이제 슬롯 == 백업이므로 **already**(링 소모 0)
         env = rpc(main, "restore_backup", "800", slot_row["backup_id"])
         if data_of(env).get("outcome") != "already":
             P("⑨ 되돌린 직후 같은 행이 already가 아니다 — 기준이 목적지가 아니다 (%s)" % env)
+
+        # ── ⑨-e **슬롯 대피도 중복이면 한 칸도 안 쓴다** (§14-G ⓔ) ─────────────────
+        #   슬롯은 지금 INTERNAL이고, `profile_internal`(INTERNAL)은 이미 링에 있다(mkgame).
+        #   그러니 다른 `profile_internal` 행으로 되돌려도 대피가 새 파일을 만들지 않는다 —
+        #   **태그가 같고 내용이 같기 때문**이다. 태그가 다르면 얘기가 다르다(⑨-f).
+        other_row = None
+        for row in rows("800"):
+            if row["kind"] == "profile_internal" and not row["same_as_target"]:
+                other_row = row
+                break
+        if other_row is None:
+            P("⑨-e 사전 조건 실패 — 슬롯과 내용이 다른 profile_internal 행이 없다")
+        else:
+            main._CONFIRM_TOKENS.clear()
+            ask = rpc(main, "restore_backup", "800", other_row["backup_id"])
+            if not is_confirm(ask):
+                P("⑨-e 사전 조건 실패 — 확인을 안 물었다 (%s)" % ask)
+            else:
+                if params_of(ask).get("evacuates") or params_of(ask).get("evicted"):
+                    P("★⑨-e 슬롯 내용이 이미 같은 태그의 백업에 있는데 확인창이 대피·축출을 "
+                      "약속했다 — evacuates=%s evicted=%s"
+                      % (params_of(ask).get("evacuates"), params_of(ask).get("evicted")))
+                before_e = backup_ids("800")
+                env = rpc(main, "restore_backup", "800", other_row["backup_id"],
+                          confirm_token=params_of(ask).get("confirm_token"))
+                if not env.get("ok"):
+                    P("⑨-e 복원이 실패했다 — %s" % env)
+                if backup_ids("800") != before_e:
+                    P("★⑨-e 같은 태그·같은 내용인데 대피본이 생겼다 — 추가=%s"
+                      % sorted(backup_ids("800") - before_e))
+
+        # ── ⑨-f **태그가 다르면 내용이 같아도 쌓인다** — 중복 제거는 태그별이다 ────────
+        #   `profile_internal`에 있는 내용이라도 `disk` 대피본을 대신하지 못한다:
+        #   되돌릴 곳이 다른 두 행은 서로를 대신할 수 없다(§5-C ⓐ). 전역으로 걸렀다면 여기서
+        #   대피본이 안 생기고, 화면은 그 상태를 *"디스크 쪽에는 백업이 없다"*로 읽는다.
+        slot_now = store.profile_file_path("800", "internal")
+        same_as_slot = store.read_bytes(slot_now) if slot_now else b""
+        cfg800.write_bytes(same_as_slot)                 # 디스크 = 슬롯 내용(= 링의 profile_* 사본)
+        disk_row = pick("800", "disk")
+        if disk_row is not None and same_as_slot:
+            main._CONFIRM_TOKENS.clear()
+            ask = rpc(main, "restore_backup", "800", disk_row["backup_id"])
+            if not is_confirm(ask):
+                P("⑨-f 사전 조건 실패 — 확인을 안 물었다 (%s)" % ask)
+            elif not params_of(ask).get("evacuates"):
+                P("★⑨-f 태그가 다른데(그 내용은 `profile_internal`에만 있다) 대피를 안 한다고 "
+                  "한다 — 중복 제거가 전역으로 걸리고 있다(태그별이어야 한다)")
+            else:
+                before_f = backup_ids("800")
+                env = rpc(main, "restore_backup", "800", disk_row["backup_id"],
+                          confirm_token=params_of(ask).get("confirm_token"))
+                if not env.get("ok"):
+                    P("⑨-f 복원이 실패했다 — %s" % env)
+                added_f = backup_ids("800") - before_f
+                if len(added_f) != 1:
+                    P("★⑨-f 태그가 다른 같은 내용이 %d건 쌓였다(1건이어야 한다) — 중복 제거가 "
+                      "태그를 안 보고 있다" % len(added_f))
 
         # ═══════════════════════════════════════════════════════════════════
         # ⑧ 토큰의 **appid 칸**이 실제로 게임을 가른다 (4-B ③)

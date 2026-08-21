@@ -145,12 +145,25 @@ def _delete_fp(meta_digests, backups):
     return "|".join([(d or "absent") for d in meta_digests] + ["bk=%d" % backups])
 
 
-def _evacuable_total(appid):
-    """이 게임을 지울 때 링에 **밀어 넣을 본체 수** — 축출 예고의 `adding`이다.
+def _evacuable_items(appid):
+    """이 게임을 지울 때 **링에 넣으려 할 백업들** — `(tag, sha1)` 쌍이다(축출 예고의 재료).
 
     ★ 세는 쪽(`delete_preview`·`evict_on_delete`)과 지우는 쪽(`_evacuate`)이 **같은 목록**을
-      돈다(`store.evacuable_names`). 규칙을 자리마다 다시 적으면 예고와 실제가 갈린다."""
-    return sum(len(store.evacuable_names(appid, p)) for p in PROFILES)
+      돈다(`store.evacuable_names`). 규칙을 자리마다 다시 적으면 예고와 실제가 갈린다.
+    ★★ **개수가 아니라 목록을 돌려준다**(설계 §14-G ⓔ): 같은 태그에 같은 내용이 이미 있으면
+      `store.make_backup`이 아무것도 쓰지 않으므로 **지워지는 백업도 없다.** 그 판정은 링을
+      봐야 하는데 여기서 미리 세면 **링 나열이 둘이 되어** ⓕ가 닫은 창이 다시 열린다 — 그래서
+      *무엇을 만들려 하는지*만 모아 주고, 판정은 `restore.ring_observe`의 한 나열에 맡긴다.
+    ★ 대피 대상은 여전히 목록 전부다(그래서 `_evacuate`는 그대로 전부를 돈다). 두 슬롯은
+      **태그가 다르므로** 내용이 같아도 각각 쌓이고(되돌릴 곳이 다르다 — §5-C ⓐ), 한 슬롯 안에
+      내용이 같은 본체가 둘이면 그 둘은 한 건이 된다."""
+    items = []
+    for profile in PROFILES:
+        directory = store.profile_dir(appid, profile)
+        tag = store.profile_tag(profile)
+        for name in store.evacuable_names(appid, profile):
+            items.append((tag, store.sha1_file(os.path.join(directory, name))))
+    return items
 
 
 def delete_preview(reg, appid):
@@ -195,7 +208,7 @@ def delete_preview(reg, appid):
         metas[profile], digest = _meta_observe(appid, profile)
         digests.append(digest)
     # ★ 링도 **한 번**만 나열한다 — 축출 예고·"현재 백업 N건"·링 지문이 전부 이 한 관측이다.
-    ring = restore.ring_observe(appid, _evacuable_total(appid))
+    ring = restore.ring_observe(appid, _evacuable_items(appid))
     config_path = entry.get("config_path")
     params = {
         "appid": appid,
@@ -213,7 +226,7 @@ def delete_preview(reg, appid):
     # ★★ **축출 대상 자체를 토큰에 묶는다**(15판 §14-G ⓓ). `_delete_fp`의 링 신호는 **개수**
     #   (`bk=%d`)이고 `ring["fingerprint"]`는 링의 **이름**뿐이라, 그 둘이 하나도 안 움직이는데
     #   축출 대상만 바뀌는 자리가 남아 있었다 — **슬롯 본체가 하나 늘거나 줄면** 대피 개수
-    #   (`_evacuable_total`)가 달라져 링에서 잘리는 깊이가 바뀐다. 그때 확인창이 이름을 댄 것과
+    #   (`_evacuable_items`)가 달라져 링에서 잘리는 깊이가 바뀐다. 그때 확인창이 이름을 댄 것과
     #   **다른 백업**이 지워지는데도 낡은 토큰이 통과했다. `apply_all`·`reset_all`은 처음부터
     #   `restore.evict_digest`를 슬롯에 합성하고 있었다(§5-E-4 후단) — 같은 판단을 이 route에도
     #   적용하는 것이지 새 결정이 아니다.
@@ -242,7 +255,7 @@ def evict_on_delete(appid):
     if not _paths_in_position(appid):
         return []                              # 안전하지 않은 키는 조회하지 않는다(Codex #2)
     from . import restore
-    return restore.evict_preview(appid, adding=_evacuable_total(appid))
+    return restore.evict_preview(appid, _evacuable_items(appid))
 
 
 def reset_evict_preview(reg):
@@ -260,6 +273,9 @@ def reset_evict_preview(reg):
       순서**다. 못 재는 것은 ⓐ 실행 시점에만 나는 실패(대피 실패·경로 봉쇄)로 그 게임의 삭제가
       통째로 중단되는 갈래 — 예고보다 **덜** 지워지는 안전한 방향이다(§15-D E19와 같은 성질)
       ⓑ 게임별 예외로 건너뛴 게임 ⓒ 축출이 0건인 게임의 링 변화(약속한 것이 없다).
+      ⚠️ **중복이라 대피본을 안 만드는 갈래(§14-G ⓔ)는 여기 안 든다** — `_evacuable_items`가 준 목록을
+        `ring_observe`가 그 한 나열 안에서 이미 갈랐다. ⓐ와 섞어 읽지 말 것: ⓐ는 *실패*라 못 재는 것이고, 중복은 **정상 갈래**라
+        재는 것이다.
     """
     from . import restore                      # 순환 회피 — `evict_on_delete`와 같은 이유·같은 문법
     plan = []
@@ -356,6 +372,15 @@ def _evacuate(appid, profile):
     ★ 「본체 파일 전부」에서 빠지는 것은 **부산물뿐이다**(`store.is_byproduct` — `meta.json` ·
       `.applied` · 크래시 잔재 `.gfxprofile-tmp-*`). 예전에는 **점으로 시작하는 이름을 통째로**
       뺐고, 그래서 이 독스트링의 약속과 필터가 어긋나 있었다(설계 §14-G ⓑ).
+
+    ★★ **중복이라 새 파일이 안 만들어져도 그 이름은 목록에 싣는다 — 빼지 말 것**(설계 §14-G ⓔ).
+      `store.make_backup`은 같은 태그에 같은 내용이 이미 있으면 아무것도 쓰지 않고 `None`을
+      돌려주는데, 그때도 *"이 내용은 백업에 있다"*는 **참**이다. 이 목록이 실리는 곳은 삭제 결과
+      봉투의 `evacuated`이고 거기 실리는 것은 **백업 경로가 아니라 본체 파일명**이라, 뜻이
+      어긋나지 않는다.
+      ⚠️ 여기서 *"안 만들었으니 빼야 한다"*로 고치면 화면이 `evacuated: {}`가 되어 **진짜 소멸
+      (대피 없이 지워진 상태 = A-1)과 구별되지 않는다.** 사용자는 남아 있는 복구 지점을 없다고
+      읽고, 실제로 없어진 경우와 같은 화면을 본다.
     """
     directory = store.profile_dir(appid, profile)
     saved = []
@@ -384,14 +409,17 @@ def _evacuate(appid, profile):
                 code=codes.DELETE_FAILED, appid=str(appid), stage="escape")
 
     # ── 대피 — **세는 목록과 같은 함수**를 돈다(R14 #1) ─────────────────────────
-    #   확인창이 약속한 축출 수는 `store.evacuable_names`로 산출된다. 지우는 쪽이 다른 목록을
+    #   확인창이 약속한 축출 수는 `store.evacuable_names`에서 산출된다. 지우는 쪽이 다른 목록을
     #   돌면 약속과 실제가 갈린다 — 두 곳에서 판정하지 않는다.
+    #   ★ 목록은 **전부** 돈다. 그중 같은 태그에 같은 내용이 이미 있는 것은 `store.make_backup`이
+    #     아무것도 쓰지 않고 `None`을 돌려준다(§14-G ⓔ) — 링을 안 태우는 것이지 건너뛰는 것이
+    #     아니다. 확인창의 개수는 `_evacuable_items` → `ring_observe`가 같은 술어로 미리 갈라 둔다.
     for name in store.evacuable_names(appid, profile):
         path = os.path.join(directory, name)
         try:
             # 정상 저장이 덮어쓰기 전에 하는 대피와 **같은 문법**이다(engine.py:456-460).
             # 삭제 = "빈 내용으로 덮어쓰기"이므로 대피가 선행해야 대칭이다(설계 §2-A).
-            store.make_backup(appid, store.read_bytes(path), "profile_%s" % profile, name)
+            store.make_backup(appid, store.read_bytes(path), store.profile_tag(profile), name)
         except OSError as exc:
             _backup_failed(appid, exc, path)   # G13 — 원본을 하나도 건드리지 않고 중단
         saved.append(name)
