@@ -13,6 +13,11 @@
 M1 `_confirm_overwrite`는 `True` = *"저장을 진행하라"*였다. 여기는 `True` = *"물어야 한다"*다.
 M1이 `True`(진행)를 돌려주던 세 경우(meta 없음 · 내용 동일 · meta 읽기 실패)가 전부
 여기서는 `False`(안 물음)가 된다. **옮길 때 이 부호를 뒤집지 않으면 확인창이 정반대로 뜬다.**
+
+⚠️ 한 곳에서 **일부러 M1보다 좁다**(설계 §14-G ⓐ, 2026-08-22): *"meta 없음"*은 M1에서
+「빈 슬롯」과 같은 말이었지만 실물에서는 아니다 — **기록만 사라지고 본체가 남은 슬롯**이 있고,
+그때 M1의 「묻지 않고 진행」은 그 본체를 대피 없이 지웠다. 그래서 이 갈래의 판정은 기록이 아니라
+**본체**를 본다. 나머지 네 분기는 그대로 동치다(`qa/test_confirm_equivalence.py`).
 """
 import os
 
@@ -44,8 +49,21 @@ def needs_confirm(reg, appid, profile):
         #      **"프로필 정보가 손상되어 저장할 수 없습니다"**로 옮겨야 한다 — 결과와 어긋나면 오정보다.
         return False, {"note": "META_UNREADABLE"}
 
-    if not meta:
-        return False, {}                      # 빈 슬롯에 처음 저장 — 잃을 것이 없다
+    # ★★ 판정은 「기록이 있는가」가 **아니라** 「본체가 있는가」다(설계 §14-G ⓐ). 예전에는
+    #   `if not meta:`였다 — `meta.json`이 없거나 `{}`·`null`·`0`·`""`이면 **정상 본체가 바로
+    #   옆에 있어도** 빈 슬롯으로 접혀 **확인 없이** 덮였다. 엔진의 무대피와 한 쌍이라
+    #   그 프로필은 슬롯에도 백업 링에도 안 남았고, 화면은 그 상태를 「프로필 없음」으로 말해
+    #   **재저장이 곧 파괴 트리거**였다. 정책층만 고치면 *"묻기는 하는데 승인하면 여전히 무백업
+    #   삭제"*가 되므로 `engine.save_profile`과 **함께** 고쳐야 한 사건이 닫힌다.
+    # ★★ **이 목록이 곧 엔진이 대피시킬 목록이다**(같은 `store.evacuable_names`를 돈다).
+    #   예전에는 `_slot_backup_pending`이 엔진 조건을 **거울처럼 흉내 냈는데**, 흉내는 언젠가
+    #   어긋나고 어긋나는 순간 화면이 *일어나지 않을 삭제*를 말하거나 *일어날 삭제*를 침묵한다.
+    #   거울을 없애고 같은 술어를 직접 본다 — 축출 예고의 **개수**도 여기서 나온다(아래 `evicted`).
+    bodies = store.evacuable_names(appid, profile)
+    if not bodies:
+        return False, {}                      # 진짜 빈 슬롯 — 잃을 것이 없다(엔진도 대피하지 않는다)
+    if not isinstance(meta, dict):
+        meta = {}                             # 기록은 못 믿어도 본체는 있다 — 재료는 아래에서 실측한다
 
     try:
         state = engine.disk_state(reg, appid)
@@ -62,29 +80,43 @@ def needs_confirm(reg, appid, profile):
         "saved_at": meta.get("saved_at") or "",
         "disk_state": _classify(state),
         # ★ 이 저장이 **실제로 지울 백업**(R14 #1 — 적용·복원과 같은 필드·같은 문구).
-        #   저장은 슬롯을 덮기 전에 이전 본체를 대피시키고, 그 대피가 링을 한 칸 태운다.
-        #   대피가 없는 갈래(본체가 없어 대피할 대상이 없다)에는 **싣지 않는다** —
-        #   링을 안 쓰는 갈래에 고지를 실으면 화면이 *일어나지 않을 삭제*를 말한다.
-        "evicted": _evict_preview(appid) if _slot_backup_pending(appid, profile) else [],
+        #   저장은 슬롯을 덮기 전에 본체를 대피시키고, 그 대피가 링을 **본체 수만큼** 태운다.
+        #   ★★ 그래서 `adding`은 1이 아니라 **위에서 센 본체의 개수**다: 하드코딩된 1은 본체가
+        #     하나뿐일 때만 맞는 숫자였고, 본체가 둘 이상인 슬롯에서 화면이 **실제보다 적은
+        #     축출을 예고**한다 — 이 확인창은 지워질 백업을 *이름으로* 대는 자리라 예고한 목록과
+        #     실제 축출이 일치해야 한다(설계 §14-G ⓐ / 조사 §2-B).
+        #   대피가 없는 갈래(본체 0개)는 여기 오지 않는다 — 위에서 이미 「안 묻는다」로 돌아섰다.
+        "evicted": _evict_preview(appid, len(bodies)),
     }
+    if not meta:
+        # ★★ **기록을 못 믿는 것이 이 갈래의 전제이므로 재료도 본체에서 잰다**(설계 §14-G ⓐ).
+        #   위 세 줄은 전부 meta에서 나오는데, meta가 `{}`·`null`·`0`·`""`·비-dict라 여기 온
+        #   갈래에서는 그 값이 전부 비어 화면이 *"지금 저장돼 있는 것: 0 B"*라고 말한다 —
+        #   **바로 옆에 멀쩡한 본체가 있는데도.** 이 확인창은 「무엇을 잃는가」를 대는 자리라
+        #   그 숫자가 거짓이면 고지가 아니라 오정보다. 새 문구를 만들 필요는 없다: 실측값을
+        #   채우면 기존 `SAVE_CONFIRM_CURRENT`가 그대로 참이 된다.
+        #   ★ 재는 대상은 **엔진이 대피시킬 바로 그 목록**(`bodies`)이다 — 규칙을 여기 다시
+        #     적으면 언젠가 한쪽만 어긋나 화면과 실제가 갈린다.
+        #   ★ `saved_at`은 **빈 채로 둔다**: 기록이 없으니 저장 시각은 **모르는 것이 사실**이다.
+        #     파일 mtime은 저장 시각이 아니다(복사·복원·터치로도 바뀐다) — 지어내면 그 자체가 거짓이다.
+        #   ★ 실측이 실패해도(OSError) **저장을 막지 않는다**: 그 값만 0·빈 문자열로 두고 확인창은
+        #     그대로 뜬다. 이 갈래의 본질은 확인과 대피이지 표시값이 아니다.
+        directory = store.profile_dir(appid, profile)
+        total = 0
+        for name in bodies:
+            try:
+                total += os.path.getsize(os.path.join(directory, name))
+            except OSError:
+                pass                          # 그 파일만 안 세고 넘어간다
+        params["size"] = total
+        if len(bodies) == 1:
+            # ★ 해시는 **본체가 하나일 때만** 댄다. 여럿인데 하나를 고르면 화면이 *어느 것의
+            #   해시인지 말할 수 없는 값*을 사실처럼 내놓는다 — 그건 거짓말이다. 모르면 비운다.
+            #   (`store.sha1_file`은 읽기 실패 시 `None`이라 예외로 새지 않는다.)
+            params["sha1_short"] = (store.sha1_file(os.path.join(directory, bodies[0])) or "")[:10]
     if state is not None and state.get("matches"):
         params["matched_profile"] = state["matches"]
     return True, params
-
-
-def _slot_backup_pending(appid, profile):
-    """저장이 이 슬롯을 덮기 **전에 대피본을 만드는가** — `engine.save_profile`의 읽기 전용 미러.
-
-    엔진 조건은 *"meta가 있고 그 본체 파일이 실재한다"*이다(engine.py의 `if old:` 블록).
-    ⚠️ 미러라는 사실을 숨기지 않는다: 엔진에 dry-run이 없어(diff fence) 판정이 두 곳에 존재하고,
-      어긋나면 화면이 *일어나지 않을 삭제*를 말하거나 *일어날 삭제*를 침묵한다. 조건이 한 줄인
-      대신 **같은 부품**(`store.profile_file_path`)을 쓴다 — 판정의 재료가 갈리지 않게.
-    """
-    try:
-        body = store.profile_file_path(appid, profile)
-    except (OSError, ValueError, KeyError, TypeError):
-        return False                          # 엔진도 같은 자리에서 실패한다 = 대피는 없다
-    return bool(body and os.path.exists(body))
 
 
 #: 개별 적용 판정의 3-상태 (설계 §5-E-2). `restore.needs_confirm`과 **같은 문법**이다.
@@ -185,15 +217,18 @@ def apply_needs_confirm(reg, appid, profile):
     return "confirm", params
 
 
-def _evict_preview(appid):
+def _evict_preview(appid, adding=1):
     """§5-E-3의 산출 함수를 부른다 — **정본은 `restore.evict_preview` 하나**다(적용·복원 공용).
+
+    `adding`은 그 동작이 **만들 백업의 수**다. 적용은 1건이라 기본값을 쓰고, 저장은 슬롯의
+    본체 수만큼 만드므로 그 수를 넘긴다 — 개수가 틀리면 화면이 실제와 다른 목록을 이름으로 댄다.
 
     ⚠️ import를 함수 안에서 한다: `restore`가 이 모듈을 import하므로(restore.py:29) 최상단에서
       맞import하면 순환이 된다. 순환을 CPython의 부분초기화 동작에 기대는 것보다, **부르는
       자리에서 한 줄**로 끊는 편이 실패 모드가 없다(그 기대가 깨지면 플러그인이 통째로 안 뜬다).
     """
     from . import restore
-    return restore.evict_preview(appid)
+    return restore.evict_preview(appid, adding)
 
 
 def already_registered(reg, appid):

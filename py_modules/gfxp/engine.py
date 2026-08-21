@@ -368,6 +368,13 @@ def save_profile(reg, appid, profile):
         raise Refused("거부: 설정 파일이 없습니다 — %s" % path, code=codes.CONFIG_MISSING)
     data = store.read_bytes(path)
     old = store.load_meta(appid, profile)
+    if not isinstance(old, dict):
+        # ★ 기록이 dict가 아니어도(`[1,2]`·`"str"`·`42`) **본체는 있을 수 있다**. 여기서 접지
+        #   않으면 아래 `old.get(...)`이 AttributeError를 내고, 확인창을 띄워 승인까지 받은
+        #   저장이 `UNEXPECTED`로 죽는다 — 묻기는 하고 못 고치는 상태다. 판정은 이미 meta가
+        #   아니라 본체(`store.evacuable_names`)가 하므로, 못 믿는 기록은 **비운 것과 같이**
+        #   다루면 된다(`confirm.needs_confirm`의 같은 줄과 같은 모양·같은 이유).
+        old = {}
     # 같은 슬롯의 이전 캡처와 크기만 대조한다. 줄 수까지 묶으면 게임 업데이트로
     # 옵션 항목이 늘어난 정상 캡처가 거부된다.
     check_sanity(data, old.get("size") if old else None, None,
@@ -399,18 +406,31 @@ def save_profile(reg, appid, profile):
         #   영어 화면에 한국어가 그대로 붙는다(실제로 붙어 있었다 — `GamesPopup`이 성공 문구
         #   뒤에 이 값을 이어 그렸다). 문장은 화면이 현재 언어로 고른다.
         warning = codes.WARN_SAVE_WHILE_RUNNING
-    if old:                                                # 덮어쓰기 전 프로필도 대피
-        old_file = store.profile_file_path(appid, profile)
-        if old_file and os.path.exists(old_file):
-            try:
-                store.make_backup(appid, store.read_bytes(old_file),
-                                  "profile_%s" % profile, old["filename"])
-            except OSError as exc:                         # G13 — 대피 실패면 아무것도 쓰지 않는다
-                # ★ **백업 호출만 좁게 잡는다**(R14 #7). 넓게 잡으면 다른 실패까지 삼켜
-                #   `BACKUP_FAILED`가 거짓 사유가 된다. 접착층이 이 예외를 `PROFILE_META_CORRUPT`로
-                #   오인하던 자리이기도 하다 — 사용자가 **원인과 다른 복구 안내**를 받았다.
-                raise Refused("거부: 백업에 실패해 저장을 중단했습니다 (%s). 프로필은 그대로입니다."
-                              % exc, code=codes.BACKUP_FAILED)
+    # ---- 덮어쓰기 전, 슬롯의 **본체를 전부** 대피시킨다 (설계 §14-G ⓐ)
+    #
+    # ★★ 조건은 「기록이 있는가」가 **아니라** 「본체가 있는가」다. 예전에는 `if old:`였다 —
+    #   슬롯의 `meta.json`이 없거나 `{}`·`null`·`0`·`""`이면 **정상 본체가 바로 옆에 있어도**
+    #   *"빈 슬롯이라 잃을 것이 없다"*로 접어 **확인 없이·대피 없이** 덮었고, 그 프로필은
+    #   슬롯에도 백업 링에도 안 남았다. 앱이 스스로 그 상태를 만드는 경로가 둘 실증됐다
+    #   (새 슬롯 저장 중 meta 쓰기 실패 → 본체만 남음 / 삭제가 `rmtree`에서 중단).
+    #   그 상태에서 화면은 「프로필 없음」이라 **사용자의 자연스러운 재저장이 곧 파괴 트리거**였다.
+    # ★ 그래서 대피 대상은 meta가 아니라 **디렉터리 열거**로 얻는다(`store.evacuable_names`) —
+    #   meta를 못 믿는 상태가 이 갈래의 전제인데 그 meta로 파일 이름을 만들면 같은 거짓을
+    #   한 번 더 믿는 것이 된다.
+    # ★ 본체가 여럿이면 **여럿 다** 대피한다. 파일명이 바뀐 저장은 옛 본체를 슬롯에 남기므로
+    #   실제로 도달하는 상태다. 확인창의 축출 예고도 **같은 목록의 개수**로 산출된다
+    #   (`confirm.needs_confirm`) — 세는 쪽과 지우는 쪽이 같은 함수를 돌아야 예고와 실제가 맞는다.
+    directory = store.profile_dir(appid, profile)
+    for name in store.evacuable_names(appid, profile):
+        try:
+            store.make_backup(appid, store.read_bytes(os.path.join(directory, name)),
+                              "profile_%s" % profile, name)
+        except OSError as exc:                             # G13 — 대피 실패면 아무것도 쓰지 않는다
+            # ★ **백업 호출만 좁게 잡는다**(R14 #7). 넓게 잡으면 다른 실패까지 삼켜
+            #   `BACKUP_FAILED`가 거짓 사유가 된다. 접착층이 이 예외를 `PROFILE_META_CORRUPT`로
+            #   오인하던 자리이기도 하다 — 사용자가 **원인과 다른 복구 안내**를 받았다.
+            raise Refused("거부: 백업에 실패해 저장을 중단했습니다 (%s). 프로필은 그대로입니다."
+                          % exc, code=codes.BACKUP_FAILED)
     meta = store.write_profile(appid, profile, os.path.basename(path), data, src=path)
     return {"meta": meta, "warning": warning, "outcome": "saved"}
 

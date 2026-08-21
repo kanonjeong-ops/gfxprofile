@@ -137,24 +137,28 @@ def main_test():                                                # noqa: C901  (�
             P("★ⓐ 저장에서 실제로 지워진 파일이 %s다(예고는 %s)"
               % (before - names("900"), gone_expected))
 
-        # ⓐ′ 대피가 없는 갈래에는 고지가 없다 — 슬롯 본체가 없으면 저장은 백업을 안 만든다.
+        # ⓐ′ 대피가 없는 갈래는 **묻지도 않는다** — 슬롯에 본체가 없으면 잃을 것이 없다.
+        #
+        # ⚠️ 2026-08-22(설계 §14-G ⓐ)에 기대값이 바뀐 절이다. 예전에는 이 픽스처(기록만 남고
+        #    본체가 사라진 슬롯)가 **묻되 고지는 비우는** 갈래였는데, 판정이 「기록이 있는가」에서
+        #    **「본체가 있는가」**로 옮겨 오면서 「안 묻는다」가 됐다. 느슨해진 것이 아니라
+        #    **거짓이 하나 사라진 것이다**: 그 확인창은 *"지금 저장돼 있는 것: {size}B {sha1}"*로
+        #    **이미 없는 내용**을 설명하고 있었다. 이 절이 지키는 것은 그대로다 —
+        #    **대피가 없으면 아무것도 지워지지 않는다.**
         cfg950 = mkgame("950", "NoEvacuate")
         fill_ring("950")
         os.unlink(store.profile_file_path("950", "dock"))   # 본체만 사라진 슬롯(부분 rmtree 잔재)
         cfg950.write_bytes(EDITED)
         main._CONFIRM_TOKENS.clear()
+        before = names("950")
         env = rpc(main, "save_profile", "950", "dock")
-        if env.get("code") != codes.CONFIRM_REQUIRED:
-            P("ⓐ′ 사전 조건 실패 — 확인을 요구하지 않았다 (%s)" % env)
-        elif params_of(env).get("evicted"):
-            P("★ⓐ′ 대피가 없는 저장인데 축출 고지가 실렸다 — 일어나지 않을 삭제를 말한다 (%s)"
-              % params_of(env).get("evicted"))
-        else:
-            before = names("950")
-            rpc(main, "save_profile", "950", "dock",
-                confirm_token=params_of(env).get("confirm_token"))
-            if before - names("950"):
-                P("★ⓐ′ 고지가 없었는데 백업이 지워졌다 — %s" % (before - names("950")))
+        if env.get("code") == codes.CONFIRM_REQUIRED:
+            P("★ⓐ′ 본체가 없는 슬롯인데 확인을 요구했다 — 없는 내용의 손실을 말한다 (%s)"
+              % params_of(env))
+        elif not env.get("ok"):
+            P("ⓐ′ 저장이 실패했다 — %s" % env)
+        if before - names("950"):
+            P("★ⓐ′ 대피가 없는 저장인데 백업이 지워졌다 — %s" % (before - names("950")))
 
         # ═══════════════════════════════════════════════════════════════════
         # ⓑ 등록 해제 — 대피 파일 **수만큼** 링이 밀린다
