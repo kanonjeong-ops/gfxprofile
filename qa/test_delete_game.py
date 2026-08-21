@@ -102,7 +102,8 @@ def main_test():                                                # noqa: C901  (�
             print("개별 삭제 계약 — 순서 3단계 주입 · 중간 상태 소비자 전수 · 토큰 6종 · "
                   "가드 6종(경로 봉쇄 4) · last_appid 2종 · 손상 meta 대피  (데이터: %s)" % tmp)
             print("  음성 대조군: 「본체 없음·meta 잔존」 합성 주입 → hazardous 검출 + "
-                  "apply_all=already 확인")
+                  "apply_all=already 확인 · 무변조 세계에서 삭제 토큰 통과(⑧-d-4)")
+            print("  토큰 지문 축 4종(⑧-d): meta 파일 · 백업 개수 · 링 이름 순서 · 축출 대상")
             print("  로그 배선: decky.logger로 흘러간 줄 %d개" % len(LOG))
             if problems:
                 print("\nFAIL")
@@ -646,6 +647,48 @@ def main_test():                                                # noqa: C901  (�
         if not is_confirm(env) or not registered("850"):
             P("★⑧-d-3 포화 링이 한 칸 돈 뒤 낡은 삭제 토큰이 통과했다 — 확인창이 이름을 댄 "
               "백업과 **다른 백업**이 지워진다 (%s)" % env)
+        if not registered("850"):
+            return finish()          # 토큰이 통과해 게임이 사라졌다 — 다음 갈래는 잴 대상이 없다
+
+        # -4 **축출 대상 축만** 움직인다: 슬롯에 본체가 하나 늘면 대피 개수가 커져 **링에서
+        #    잘리는 깊이**가 달라진다. meta 파일도, 백업 개수(10)도, 링의 이름 순서도 하나도
+        #    안 움직이므로 -1·-2·-3이 잠근 세 신호는 전부 눈감는다 — 여기가 §14-G ⓓ가 말한
+        #    자리이고, 승인 목록에 **없던 백업이 지워지는** 방향이다.
+        #    (앱 자기 경로로는 본체를 쓰면 meta도 같이 쓰므로 도달하지 않는다 = 외부 쓰기 전제.
+        #     그래도 잠그는 이유는 `apply_all`·`reset_all`이 이미 같은 것을 묶고 있어서다.)
+        tok = token("850")
+        fp_before, metas_before, ring_before = (main.remove.delete_fingerprint("850"),
+                                                metas850(), ring850())
+        ids_before = [row["backup_id"] for row in main.remove.evict_on_delete("850")]
+        extra_body = os.path.join(store.profile_dir("850", "dock"), "extra.ini")
+        with open(extra_body, "wb") as fh:                     # 외부가 슬롯에 본체를 하나 넣는다
+            fh.write(b"source=EXTRA-BODY\nquality=x___\n")
+        ids_after = [row["backup_id"] for row in main.remove.evict_on_delete("850")]
+        if metas850() != metas_before or nbackups("850") != store.BACKUP_KEEP:
+            P("⑧-d-4 계측기 무효 — 본체 추가가 meta나 백업 개수(%d)를 움직였다. 그러면 이 갈래가 "
+              "축출 대상 축을 혼자 재지 못한다" % nbackups("850"))
+        if ring850() != ring_before or main.remove.delete_fingerprint("850") != fp_before:
+            P("⑧-d-4 계측기 무효 — 링 이름이나 meta·개수 지문이 함께 움직였다. 이 갈래는 **그 셋이 "
+              "눈감는** 자리를 재는 것이라, 움직이면 축출 대상 신호가 없어도 통과해 버린다")
+        if ids_after == ids_before:
+            P("⑧-d-4 계측기 무효 — 본체가 하나 늘었는데 축출 대상이 그대로다(%s). 대피가 링을 더 "
+              "깊이 밀어내지 않으면 잴 것이 없다" % ids_before)
+        env = rpc(main, "delete_game", "850", confirm_token=tok)
+        if not is_confirm(env) or not registered("850"):
+            P("★⑧-d-4 축출 대상이 바뀐 뒤 낡은 삭제 토큰이 통과했다 — 확인창이 이름을 대며 "
+              "승인받은 목록에 **없던 백업**(%s)이 지워진다 (%s)"
+              % ([i for i in ids_after if i not in ids_before], env))
+        if not registered("850"):
+            return finish()          # 토큰이 통과해 게임이 사라졌다 — 음성 대조군은 잴 대상이 없다
+
+        # -4 **음성 대조군** — 없으면 "항상 거부"도 초록이 된다. 아무것도 안 바꾼 세계에서는
+        #    방금 발급한 토큰이 **통과해야** 하고(같은 상태를 두 번 관측해도 지문이 같아야 한다),
+        #    그때 삭제는 끝까지 간다. 이 게임은 여기서 사라진다 — 마지막 갈래인 이유다.
+        env = rpc(main, "delete_game", "850", confirm_token=token("850"))
+        if env.get("ok") is not True or registered("850"):
+            P("★⑧-d-4 음성 대조군 실패 — 아무 변조도 없는데 삭제 토큰이 거부됐다. 지문이 관측마다 "
+              "달라지면 삭제는 영영 못 하고, 위 단언들은 「항상 거부」로 통과하는 항진식이 된다 (%s)"
+              % env)
 
         return finish()
     finally:

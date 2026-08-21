@@ -210,7 +210,25 @@ def delete_preview(reg, appid):
         #   *"현재 백업 N건"*만 말하던 자리가 **무엇이 사라지는지는 말하지 않았다.**
         "evicted": ring["evicted"],
     }
-    return params, (_delete_fp(digests, ring["count"]), ring["fingerprint"])
+    # ★★ **축출 대상 자체를 토큰에 묶는다**(15판 §14-G ⓓ). `_delete_fp`의 링 신호는 **개수**
+    #   (`bk=%d`)이고 `ring["fingerprint"]`는 링의 **이름**뿐이라, 그 둘이 하나도 안 움직이는데
+    #   축출 대상만 바뀌는 자리가 남아 있었다 — **슬롯 본체가 하나 늘거나 줄면** 대피 개수
+    #   (`_evacuable_total`)가 달라져 링에서 잘리는 깊이가 바뀐다. 그때 확인창이 이름을 댄 것과
+    #   **다른 백업**이 지워지는데도 낡은 토큰이 통과했다. `apply_all`·`reset_all`은 처음부터
+    #   `restore.evict_digest`를 슬롯에 합성하고 있었다(§5-E-4 후단) — 같은 판단을 이 route에도
+    #   적용하는 것이지 새 결정이 아니다.
+    # ★ digest는 **위 한 번의 관측**(`ring["evicted"]`)에서 나온다 — 여기서 링을 다시 나열하면
+    #   ⓕ가 닫은 창이 그대로 다시 열린다(고지와 지문이 서로 다른 시각의 링을 가리킨다).
+    # ★ 축출 0건이면 **싣지 않는다**: 약속하지 않은 것은 재지 않는다(`evict_digest` 주석과 같은
+    #   규칙 — 다게임 `reset_evict_preview`도 빈 게임을 plan에서 뺀다).
+    # ⚠️ 합성은 **이 자리에서만** 한다. `_delete_fp`에 넣으면 `delete_fingerprint`를 타고
+    #   `reset_fingerprint` → `apply_all`·`reset_all` 토큰까지 번지는데, 그 둘은 이미 `|evict=`를
+    #   슬롯에 따로 합성하므로 **이중 결박**이 되고 다게임 지문이 게임별 본체 개수에까지 묶인다.
+    evicted_ids = [row["backup_id"] for row in ring["evicted"]]
+    fingerprint = "%s|evict=%s" % (
+        _delete_fp(digests, ring["count"]),
+        restore.evict_digest([(appid, evicted_ids)] if evicted_ids else []))
+    return params, (fingerprint, ring["fingerprint"])
 
 
 def evict_on_delete(appid):
@@ -283,6 +301,10 @@ def delete_fingerprint(appid):
       둘로 갈려 그 사이의 변화가 토큰에 구워진다. 여기 남는 소비자는 **다게임**
       `reset_fingerprint`(게임마다 새로 관측한다)와 검사의 계측기다.
       조립 규칙은 `_delete_fp` **한 곳**이라 두 자리가 규칙으로 갈릴 수는 없다.
+    ⚠️ **삭제 route의 지문은 여기에 `|evict=…`가 더 붙는다**(§14-G ⓓ) — 이 함수의 값과 **같지
+      않다.** 그 합성은 `delete_preview`에서만 하고 여기로 내리지 않는다: 이 함수는
+      `reset_fingerprint`의 산출부라 여기 얹으면 다게임 토큰까지 번져 이중 결박이 된다
+      (`reset_all`·`apply_all`은 이미 자기 슬롯에 `|evict=`를 따로 합성한다).
     """
     appid = str(appid)
     if not _paths_in_position(appid):
