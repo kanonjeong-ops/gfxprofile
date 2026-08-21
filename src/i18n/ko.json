@@ -69,6 +69,7 @@
   "SAV_REFUSED": "확장자가 「.sav」인 파일과 이름이 「savegames」인 폴더 안의 파일은 등록할 수 없습니다(대소문자 구분 없음).",
   "STALE_COPY_REFUSED": "백업·구버전 폴더 안의 옛 사본입니다",
   "ENGINE_BOILERPLATE_REFUSED": "설정 파일이 아니라 게임 엔진 내부 파일입니다",
+  "RESERVED_NAME_REFUSED": "이 파일 이름은 플러그인이 프로필 폴더 안에서 쓰는 이름이라 등록할 수 없습니다 — 다른 파일을 골라 주세요.",
   "BACKUP_OUT_OF_ROOT": "이 게임의 프로필 또는 백업 데이터 경로가 제자리에 있지 않습니다.",
   "DELETE_FAILED": "등록 해제를 완료하지 못했습니다. 프로필 데이터가 이미 일부 또는 전부 지워졌을 수 있습니다.",
   "BACKUP_ID_INVALID": "백업 식별자가 올바르지 않습니다",

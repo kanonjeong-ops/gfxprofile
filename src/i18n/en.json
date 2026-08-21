@@ -69,6 +69,7 @@
   "SAV_REFUSED": "Files with a “.sav” extension and files inside a folder named “savegames” cannot be registered (case-insensitive).",
   "STALE_COPY_REFUSED": "That file is an old copy inside a backup folder",
   "ENGINE_BOILERPLATE_REFUSED": "That is a game engine's internal file, not a settings file",
+  "RESERVED_NAME_REFUSED": "This file name is one the plugin already uses inside its profile folder, so it cannot be registered — please pick a different file.",
   "BACKUP_OUT_OF_ROOT": "This game's profile or backup data path is not in its expected location.",
   "DELETE_FAILED": "Unregistering could not be completed. Some or all profile data may already have been deleted.",
   "BACKUP_ID_INVALID": "That backup id is not valid",

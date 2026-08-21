@@ -41,6 +41,9 @@ REGISTRY_NEWER = "REGISTRY_NEWER"
 SAV_REFUSED = "SAV_REFUSED"                          # .sav 및 savegames 폴더
 STALE_COPY_REFUSED = "STALE_COPY_REFUSED"            # *.bak / *backup 폴더의 옛 사본
 ENGINE_BOILERPLATE_REFUSED = "ENGINE_BOILERPLATE_REFUSED"
+# 프로필 슬롯이 이미 쓰는 이름(`store.is_byproduct`). 이 이름으로 등록하면 저장은 성공을
+# 보고하면서 슬롯이 손상되고, 삭제는 그 파일을 부산물로 걸러 대피 없이 지운다(설계 §14-G ⓒ).
+RESERVED_NAME_REFUSED = "RESERVED_NAME_REFUSED"
 BACKUP_OUT_OF_ROOT = "BACKUP_OUT_OF_ROOT"            # G15 — 그 게임의 백업 폴더 밖
 
 # ── 삭제 (remove.py — M2에서 추가) ───────────────────────────────────────────

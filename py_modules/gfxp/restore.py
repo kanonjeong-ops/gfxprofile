@@ -255,26 +255,6 @@ def _slot_meta(appid, profile):
     return meta if isinstance(meta, dict) else None
 
 
-def _slot_body_exists(appid, profile):
-    """meta 없이 **그 슬롯에 실물이 남아 있는가**만 본다 (4-B 9행 판정용).
-
-    meta가 손상되면 본체의 이름을 알 수 없으므로(`store.profile_file_path`가 meta의 filename으로
-    경로를 만든다) *"무엇이 있는지"*는 못 말한다. 그러나 *"무언가 있다"*는 말할 수 있고, 그 차이가
-    「빈 슬롯(묻지 않음)」과 「대피 불가(묻는다)」를 가른다.
-    """
-    directory = store.profile_dir(appid, profile)
-    try:
-        names = os.listdir(directory)
-    except OSError:
-        return False
-    for name in names:
-        if name in ("meta.json", ".applied"):     # 기록과 엔진 마커는 본체가 아니다
-            continue
-        if os.path.isfile(os.path.join(directory, name)):
-            return True
-    return False
-
-
 def _evacuation_source(appid, profile, meta):
     """복원이 **대피시킬 바로 그 파일**의 경로 — 없으면 `""`. 대피 판정의 정본은 여기 하나다.
 
@@ -471,7 +451,7 @@ def needs_confirm(reg, appid, backup_id):
     # 저장 시각은 **그 기록이 가리키는 본체가 실재할 때만** 그 자리의 내용을 설명한다.
     params["saved_at"] = (meta.get("saved_at") or "") if source else ""
     if not isinstance(name, str) or not name:
-        if _slot_body_exists(appid, target):
+        if store.slot_body_exists(appid, target):
             # 9행 — 기록이 손상됐고 실물은 남아 있다. **대피할 대상을 특정할 수 없으므로**
             # 확인창이 그 사실을 말하고 묻는다(A12 = 고지하고 묻기이지 모르면 막기가 아니다).
             params["slot_unreadable"] = True

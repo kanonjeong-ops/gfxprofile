@@ -222,6 +222,16 @@ def assert_config_candidate(appid, path):
     if low in discover._EXCLUDE_NAMES:                       # ④ 엔진 보일러플레이트
         raise Refused("거부: 게임 엔진 내부 설정 파일입니다 — %s" % base,
                       code=codes.ENGINE_BOILERPLATE_REFUSED, path=path)
+    # ⑤ 프로필 슬롯이 이미 쓰는 이름 — 목록은 `store.is_byproduct` **하나**다(설계 §14-G ⓒ).
+    #   목록을 여기 다시 적으면 언젠가 한쪽만 늘어나고, "거르기는 하는데 등록은 되는" 이름이
+    #   생긴다 — 그 교집합이 곧 ⓑ가 고친 결함이다(대피 없이 사라지는 프로필).
+    # ★ 「무엇이 아닌가」 원칙 그대로다: *"설정 파일처럼 보이는가"*가 아니라
+    #   *"우리가 그 자리에 이미 쓰는 이름인가"*다. 점으로 시작하는 이름을 막는 것이 아니라서
+    #   `.gamerc` 같은 리눅스 게임의 정상 설정 파일은 그대로 등록된다.
+    if store.is_byproduct(base):
+        raise Refused("거부: 이 플러그인이 프로필 폴더에서 쓰는 이름이라 등록할 수 없습니다 — %s"
+                      % base,
+                      code=codes.RESERVED_NAME_REFUSED, path=path)
 
 
 def config_candidate_warnings(appid, path):

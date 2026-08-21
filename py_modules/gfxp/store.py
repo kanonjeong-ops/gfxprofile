@@ -18,6 +18,28 @@ BACKUP_KEEP = 10
 REGISTRY_VERSION = 1
 DESKTOP_UID = 1000          # 핸드헬드의 주 사용자(SteamOS에서는 deck)
 
+#: 프로필 슬롯 안에서 **우리가 만드는 부산물**의 이름. 그 밖의 파일은 전부 **본체**다.
+#:   · `meta.json`         — 그 슬롯의 기록
+#:   · `.applied`          — 옛 버전이 남긴 엔진 마커(지금은 아무도 쓰지 않지만 실물에 남아 있다)
+#:   · `.gfxprofile-tmp-*` — `atomic_write`가 쓰다 죽었을 때의 잔재
+META_NAME = "meta.json"
+APPLIED_NAME = ".applied"
+TMP_PREFIX = ".gfxprofile-tmp-"
+
+
+def is_byproduct(name):
+    """그 이름이 **부산물**인가 = 「본체가 아닌가」. 같은 질문을 하는 곳은 전부 여기를 지난다.
+
+    ★ 왜 목록이 아니라 술어 하나인가(설계 §14-G ⓑ·ⓒ): 이 질문을 하는 자리가 넷인데
+      (대피 목록 · 대피 전 링크 게이트 · 본체 실측 · 등록 가드 G14) 전에는 **각자 다른 목록**을
+      들고 있었다. 거르는 집합과 등록 가능한 집합이 어긋나면 **그 교집합이 곧 결함이다** —
+      대피에서는 부산물로 걸러지고 등록은 되는 이름이 있으면, 사용자는 성공 통지를 받고
+      프로필 한 벌을 잃는다. 목록을 두 벌 적으면 언젠가 한쪽만 늘어난다.
+    ⚠️ **점으로 시작하는 이름을 막는 것이 아니다.** 리눅스 게임의 `.gamerc` 같은 본체 이름은
+      여기 안 걸린다 — 걸리는 것은 *"우리가 그 자리에 이미 쓰는 이름인가"*뿐이다.
+    """
+    return name in (META_NAME, APPLIED_NAME) or name.startswith(TMP_PREFIX)
+
 
 def user_home():
     """**실제 사용자**의 홈. `os.path.expanduser("~")`를 직접 쓰지 말 것.
@@ -114,7 +136,7 @@ def atomic_write(path, data, mode=None, owner=None):
     """
     directory = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(directory, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".gfxprofile-tmp-")
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=TMP_PREFIX)
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
@@ -230,7 +252,7 @@ def list_profiles(appid):
 
 
 def profile_meta_path(appid, profile):
-    return os.path.join(profile_dir(appid, profile), "meta.json")
+    return os.path.join(profile_dir(appid, profile), META_NAME)
 
 
 def load_meta(appid, profile):
@@ -298,6 +320,62 @@ def slot_holds(appid, profile, sha1, filename=None):
         return False                          # 본체를 가리킬 수 없다
     body = os.path.join(profile_dir(appid, profile), name)
     return os.path.exists(body) and sha1_file(body) == sha1
+
+
+def evacuable_names(appid, profile):
+    """그 슬롯에서 **대피 대상이 되는 본체 파일 이름들**(이름순). 조회 전용이다.
+
+    ★ 세는 쪽과 지우는 쪽이 **같은 함수**를 돈다(R14 #1): 하나는 세고 하나는 지우는데 기준이
+      갈리면 확인창이 약속한 축출 수와 실제가 어긋난다. 그래서 규칙을 여기 한 곳에 둔다 —
+      부산물(`is_byproduct`)·**링크**·비일반 파일 제외, 그 밖은 전부 본체다.
+    ★ 예전에는 **점으로 시작하는 이름을 통째로** 뺐다. 리눅스 게임의 `.gamerc` 같은 본체가
+      그래서 대피에서 빠졌고, 삭제는 `ok: true` · `evacuated: {}`로 끝났다(설계 §14-G ⓑ).
+    ⚠️ 링크 취급은 그대로다 — `remove._evacuate`가 슬롯 안의 링크를 **거부**하므로 대피도
+      축출도 일어나지 않는다(링크를 따라가면 외부 파일이 백업에 복사된다 = `.sav` 경계).
+    ★ 왜 `store`에 사는가: 소비자가 `remove`와 `engine` 양쪽인데 `remove`가 `engine`을
+      import하는 방향이라(remove.py 상단) `remove`에 두면 엔진에서 못 부른다. 이 파일은
+      `codes` 말고는 아무것도 import하지 않는 맨 아래층이라 어느 쪽에서든 부를 수 있다.
+    """
+    directory = profile_dir(appid, profile)
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        if is_byproduct(name):
+            continue
+        path = os.path.join(directory, name)
+        if os.path.islink(path) or not os.path.isfile(path):
+            continue
+        out.append(name)
+    return out
+
+
+def slot_body_exists(appid, profile):
+    """meta 없이 **그 슬롯에 실물이 남아 있는가**만 본다.
+
+    meta가 손상되면 본체의 이름을 알 수 없으므로(`profile_file_path`가 meta의 filename으로
+    경로를 만든다) *"무엇이 있는지"*는 못 말한다. 그러나 *"무언가 있다"*는 말할 수 있고, 그 차이가
+    「빈 슬롯(묻지 않음)」과 「대피 불가(묻는다)」를 가른다.
+
+    ★ 부산물 판정은 `is_byproduct` 하나를 지난다 — 예전에는 `meta.json`과 `.applied` **둘만**
+      뺐고, 그래서 `.gfxprofile-tmp-*` 잔재 하나 때문에 **빈 슬롯이 「대피 불가」로 읽혔다**
+      (설계 §14-G ⓐ).
+    ⚠️ `os.path.isfile`은 **링크를 따라간다** — 슬롯 안의 링크는 여기서 「본체 있음」으로 세어지고
+      `evacuable_names`에서는 빠진다. 이 불일치는 알려진 것이고 여기서 바꾸지 않는다.
+    """
+    directory = profile_dir(appid, profile)
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return False
+    for name in names:
+        if is_byproduct(name):
+            continue
+        if os.path.isfile(os.path.join(directory, name)):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------- 백업
@@ -379,7 +457,7 @@ def list_backups(appid):
     entries = [
         os.path.join(directory, name)
         for name in os.listdir(directory)
-        if not name.startswith(".gfxprofile-tmp-")
+        if not name.startswith(TMP_PREFIX)
     ]
     return sorted(entries, key=lambda p: backup_order_key(os.path.basename(p)), reverse=True)
 

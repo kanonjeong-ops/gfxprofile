@@ -45,6 +45,22 @@ CASES = [
     ("이름에 backup이 들어간 **파일**(폴더가 아님)",
      "/home/deck/x/pfx/drive_c/users/steamuser/Documents/G/settings.backup.ini",
      None),
+    # ★ 예약 이름(설계 §14-G ⓒ) — 슬롯이 이미 쓰는 이름은 등록도 막는다.
+    #   거르는 집합과 등록 가능한 집합이 겹치면 그 교집합이 곧 ⓑ가 고친 결함이다.
+    ("슬롯 기록 이름 meta.json",
+     "/home/deck/x/pfx/drive_c/users/steamuser/Documents/G/meta.json",
+     codes.RESERVED_NAME_REFUSED),
+    ("옛 엔진 마커 이름 .applied",
+     "/home/deck/x/pfx/drive_c/users/steamuser/Documents/G/.applied",
+     codes.RESERVED_NAME_REFUSED),
+    ("쓰다 죽은 잔재 이름 .gfxprofile-tmp-*",
+     "/home/deck/x/pfx/drive_c/users/steamuser/Documents/G/.gfxprofile-tmp-ab12",
+     codes.RESERVED_NAME_REFUSED),
+    # ★ 봉쇄가 아니라는 증거 — 점으로 시작하는 **정상** 설정 파일은 그대로 등록된다.
+    #   여기서 막으면 리눅스 네이티브 게임이 통째로 막힌다(설계 2051-2053행).
+    ("점으로 시작하는 리눅스 게임 설정 .gamerc",
+     "/home/deck/x/pfx/drive_c/users/steamuser/Documents/G/.gamerc",
+     None),
 ]
 
 

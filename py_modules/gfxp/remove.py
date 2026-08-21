@@ -41,9 +41,6 @@ _log = logging.getLogger("gfxp.remove")
 #: 프로필은 2개 고정이다(M2-6). 자유 문자열을 받을 이유가 없다.
 PROFILES = ("dock", "internal")
 
-#: 대피 대상에서 빼는 이름. `.applied`·`.gfxprofile-tmp-*`는 전부 점으로 시작한다.
-_META = "meta.json"
-
 #: 안전하지 않은 키(경로 탈출)에 쓰는 **고정 지문**. 이 값은 어떤 실제 파일도 읽지 않고
 #: 만들어지므로, `"../../X"`·절대경로 키의 meta·backups를 조회하지 않는다(Codex #2).
 _UNSAFE_FP = "unsafe"
@@ -160,30 +157,6 @@ def delete_preview(reg, appid):
     }
 
 
-def evacuable_names(appid, profile):
-    """그 슬롯에서 **대피 대상이 되는 본체 파일 이름들**. 조회 전용이다.
-
-    ★ `_evacuate`와 **같은 목록**이어야 한다(R14 #1): 하나는 세고 하나는 지우는데 기준이 갈리면
-      확인창이 약속한 축출 수와 실제가 어긋난다. 그래서 걸러내는 규칙을 여기 한 곳에 둔다 —
-      점으로 시작하는 이름(`.applied`·크래시 잔재)·`meta.json`·**링크**·비일반 파일은 제외.
-      (링크는 `_evacuate`가 거부하는 대상이라 대피도 축출도 일어나지 않는다.)
-    """
-    directory = store.profile_dir(appid, profile)
-    try:
-        names = sorted(os.listdir(directory))
-    except OSError:
-        return []
-    out = []
-    for name in names:
-        if name.startswith(".") or name == _META:
-            continue
-        path = os.path.join(directory, name)
-        if os.path.islink(path) or not os.path.isfile(path):
-            continue
-        out.append(name)
-    return out
-
-
 def evict_on_delete(appid):
     """이 게임을 등록 해제할 때 **실제로 지워질 백업**(대피가 링을 밀어내는 만큼).
 
@@ -195,7 +168,7 @@ def evict_on_delete(appid):
     if not _paths_in_position(appid):
         return []                              # 안전하지 않은 키는 조회하지 않는다(Codex #2)
     from . import restore
-    adding = sum(len(evacuable_names(appid, p)) for p in PROFILES)
+    adding = sum(len(store.evacuable_names(appid, p)) for p in PROFILES)
     return restore.evict_preview(appid, adding=adding)
 
 
@@ -298,7 +271,9 @@ def _evacuate(appid, profile):
     ★ meta의 `filename`이 아니라 **디렉터리를 열거**한다. meta가 손상돼 읽히지 않는 슬롯도
       본체는 멀쩡히 있을 수 있는데, meta를 통해서만 찾으면 그 본체가 대피 없이 rmtree된다 —
       예외 분기를 하나 더 만드는 대신 **본체를 찾는 방법 자체를 meta에서 떼어** 그 경우를 없앤다.
-      점으로 시작하는 이름(`.applied`·크래시 잔재 `.gfxprofile-tmp-*`)과 `meta.json`은 제외한다.
+    ★ 「본체 파일 전부」에서 빠지는 것은 **부산물뿐이다**(`store.is_byproduct` — `meta.json` ·
+      `.applied` · 크래시 잔재 `.gfxprofile-tmp-*`). 예전에는 **점으로 시작하는 이름을 통째로**
+      뺐고, 그래서 이 독스트링의 약속과 필터가 어긋나 있었다(설계 §14-G ⓑ).
     """
     directory = store.profile_dir(appid, profile)
     saved = []
@@ -315,7 +290,7 @@ def _evacuate(appid, profile):
     #     경계가 무너진다. `islink`는 lstat 기반이라 따라가지 않는다. 대피 전이라 원본은
     #     아직 무손실이므로 여기서 거부하면 아무것도 잃지 않는다.
     for name in names:
-        if name.startswith(".") or name == _META:
+        if store.is_byproduct(name):
             continue
         path = os.path.join(directory, name)
         if os.path.islink(path):
@@ -327,9 +302,9 @@ def _evacuate(appid, profile):
                 code=codes.DELETE_FAILED, appid=str(appid), stage="escape")
 
     # ── 대피 — **세는 목록과 같은 함수**를 돈다(R14 #1) ─────────────────────────
-    #   확인창이 약속한 축출 수는 `evacuable_names`로 산출된다. 지우는 쪽이 다른 목록을 돌면
-    #   약속과 실제가 갈린다 — 두 곳에서 판정하지 않는다.
-    for name in evacuable_names(appid, profile):
+    #   확인창이 약속한 축출 수는 `store.evacuable_names`로 산출된다. 지우는 쪽이 다른 목록을
+    #   돌면 약속과 실제가 갈린다 — 두 곳에서 판정하지 않는다.
+    for name in store.evacuable_names(appid, profile):
         path = os.path.join(directory, name)
         try:
             # 정상 저장이 덮어쓰기 전에 하는 대피와 **같은 문법**이다(engine.py:456-460).

@@ -123,8 +123,9 @@ def main_test():                                                # noqa: C901  (�
             directory = store.profile_dir(appid, profile)
             if not os.path.isdir(directory):
                 return False
-            return any(not n.startswith(".") and n != "meta.json"
-                       for n in os.listdir(directory))
+            # 부산물 판정은 **코드와 같은 문**을 지난다 — 검사가 규칙을 복제해 두면
+            # "목록이 하나"라는 전제가 검사 쪽에서 먼저 깨진다(설계 §14-G ⓑ).
+            return any(not store.is_byproduct(n) for n in os.listdir(directory))
 
         def hazardous(appid):
             """★ "meta 잔존 · 본체 없음" 슬롯. 이 상태가 생기면 소비자 판정이 갈린다."""
