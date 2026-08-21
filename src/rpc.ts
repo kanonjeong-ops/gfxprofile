@@ -166,6 +166,16 @@ export interface ApplyConfirmParams {
   disk_state: DiskState;
   matched_profile?: Profile;
   matches: Profile[];
+  /**
+   * 이번 적용이 **지금 게임 설정 파일의 내용을 백업으로 대피시키는가**(QA R1 D-3).
+   *
+   * ★ 화면의 *"지금 내용은 백업으로 보관합니다 — 백업 한 칸을 씁니다"*가 참인 조건이고,
+   *   **복원 확인창과 같은 필드·같은 술어**다(`confirm.apply_needs_confirm`의 `ring.adding`).
+   *   같은 태그의 링이 이미 그 내용을 담고 있으면 엔진이 아무것도 안 쓰므로 **거짓**이다 —
+   *   그때 이 줄을 그리면 사용자는 링 잔량을 아끼려고 적용을 미루는데 실제로는 한 칸도 안 쓴다.
+   * ⚠️ 값이 뜻을 갖는 것은 **확인을 묻는 갈래**다(그때만 화면이 읽는다).
+   */
+  evacuates: boolean;
   evicted: EvictedRow[];
 }
 

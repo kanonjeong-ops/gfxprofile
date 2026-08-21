@@ -25,6 +25,11 @@ route로 확인을 받고, 토큰으로 승인하고, **링에 그 내용이 실
   ⓔ **읽을 수 없는 meta**(잘린 JSON)는 예전처럼 **예외로 접힌다** — 안 묻고, 아무것도 쓰지 않고
      `PROFILE_META_CORRUPT`로 실패한다. 경계는 *"JSON을 읽을 수 있느냐"*이지 *"읽은 결과가
      참이냐"*가 아니다(전자를 넓히면 잘린 JSON에서 손상 슬롯에 덧쓰게 된다)
+  ⓕ **점으로 시작하는 본체**(`.gamerc`)도 본체다 — 저장 왕복에서 묻고 대피한다(설계 §14-G ⓑ).
+     등록 게이트는 점파일을 막지 않으므로(`.gamerc`는 리눅스 게임의 정상 설정 파일이다)
+     대피에서만 빼면 **정상 등록된 프로필이 확인도 대피도 없이 소멸**한다
+  ⓖ **비-UTF8 meta**도 ⓔ와 같은 갈래다 — `json.load`가 내는 것은 `UnicodeDecodeError`이고
+     예외 목록을 `json.JSONDecodeError`로 좁히면 이 갈래가 핸들러를 빠져나가 `UNEXPECTED`가 된다
 
 ★ 합성 데이터만 쓴다 — `DECKY_PLUGIN_RUNTIME_DIR`·`GFXPROFILE_HOME`이 tmp라 실사용 데이터에 닿을 수 없다.
 """
@@ -199,7 +204,11 @@ def main_test():                                                # noqa: C901  (�
 
         # ═══════════════════════════════════════════════════════════════════
         # ⓒ 본체가 **여럿**이면 대피도 그 수만큼이고, 예고와 실제가 이름까지 같다
-        #    (파일명이 바뀐 저장은 옛 본체를 슬롯에 남긴다 = 실제로 도달하는 상태)
+        #    ⚠️ **앱이 그 상태를 만들지는 않는다**(설계 §15-D E34 — 2026-08-22 확인): 같은 appid
+        #      재등록은 `confirm.already_registered`가 거부하고 슬롯 복원은 기존 이름을 유지하므로
+        #      「파일명이 바뀐 저장」은 도달하지 않는다. 그래도 재는 이유는 밖에서 들어온 파일·
+        #      중단된 삭제 잔재로 본체가 둘이 될 수 있고, 그때 **한 개만 대피시키면 나머지가
+        #      고지 없이 사라지기** 때문이다. 아래는 그 상태를 직접 놓아 만든다.
         # ═══════════════════════════════════════════════════════════════════
         cfg810 = mkgame("810", "TwoBodies")
         slot810 = pathlib.Path(store.profile_dir("810", "dock"))
@@ -298,8 +307,69 @@ def main_test():                                                # noqa: C901  (�
         if body830.read_bytes() != SAVED or names("830") != before830:
             P("★ⓔ 손상 meta 저장이 **무언가 썼다** — 본체 또는 링이 움직였다")
 
-        print("저장의 본체 실측 — 빈 기록 %d종 · 빈 슬롯 · 본체 2개 · 링크 · 잘린 JSON "
-              "(데이터: %s)" % (len(EMPTY_METAS), tmp))
+        # ═══════════════════════════════════════════════════════════════════
+        # ⓕ **점으로 시작하는 본체**(`.gamerc`)도 본체다 — 저장 왕복 (설계 §14-G ⓑ)
+        #    옛 규칙은 점파일을 통째로 대피에서 뺐다. 그런데 등록 게이트(G14)는 점파일을
+        #    **막지 않는다**(리눅스 게임의 `.gamerc`는 정상 설정 파일이다) — 그 교집합이
+        #    ⓑ가 고친 결함이다: 정상 등록된 프로필이 **확인도 대피도 없이 소멸**한다.
+        #    ★ 이 갈래가 없으면 `evacuable_names`에 `or name.startswith(".")` 한 줄을
+        #      되살려도 검사군 전체가 초록이다(QA R1 D-2).
+        # ═══════════════════════════════════════════════════════════════════
+        reg = store.load_registry()
+        cfg840 = tmp / "game840" / ".gamerc"
+        cfg840.parent.mkdir(parents=True, exist_ok=True)
+        cfg840.write_bytes(SAVED)
+        engine.add_game(reg, "840", str(cfg840), name="DotfileBody")   # G14를 정상 통과한다
+        engine.save_profile(reg, "840", "dock")                        # 빈 슬롯 → 그냥 저장
+        store.save_registry(reg)
+        if store.evacuable_names("840", "dock") != [".gamerc"]:
+            P("★ⓕ 점파일 본체가 **빈 슬롯**으로 읽힌다 — evacuable_names=%s "
+              "(앱이 자기가 저장한 프로필을 못 본다)" % store.evacuable_names("840", "dock"))
+        cfg840.write_bytes(EDITED)                                     # 내용이 달라졌다
+        main._CONFIRM_TOKENS.clear()
+        before840 = names("840")
+        env = rpc(main, "save_profile", "840", "dock")
+        if env.get("code") != codes.CONFIRM_REQUIRED:
+            P("★ⓕ 점파일 프로필을 **확인 없이** 덮었다 — 사용자가 저장해 둔 `.gamerc`가 "
+              "고지 없이 사라진다 (%s)" % (env.get("code") or env))
+        else:
+            if names("840") != before840:
+                P("★ⓕ 확인을 요구하면서 링이 이미 움직였다 — 묻기 전에 쓴 것이다")
+            env = rpc(main, "save_profile", "840", "dock",
+                      confirm_token=params_of(env).get("confirm_token"))
+            if not env.get("ok"):
+                P("ⓕ 승인 후 저장이 실패했다 — %s" % env)
+        if SAVED not in backup_bodies("840"):
+            P("★ⓕ 점파일 본체가 **대피되지 않았다** — 옛 내용이 링에 없다(되찾을 길이 없다)")
+        body840 = pathlib.Path(store.profile_dir("840", "dock")) / ".gamerc"
+        if body840.read_bytes() != EDITED:
+            P("ⓕ 저장이 새 내용을 슬롯에 안 썼다")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # ⓖ **읽을 수 없는 meta**는 잘린 JSON만이 아니다 — 비-UTF8 바이트도 같은 갈래다
+        #    `json.load`는 이때 `UnicodeDecodeError`를 낸다(= `ValueError`의 하위형).
+        #    예외 목록을 `json.JSONDecodeError`로 좁히면 이 갈래가 **핸들러를 빠져나가**
+        #    사용자는 원인과 다른 `UNEXPECTED`를 받는다(복구 안내가 통째로 어긋난다).
+        #    ⓔ와 **같은 결과**를 요구한다: 안 묻고, 아무것도 안 쓰고, 사유를 밝히며 실패.
+        # ═══════════════════════════════════════════════════════════════════
+        mkgame("850", "NonUtf8Meta")
+        with open(store.profile_meta_path("850", "dock"), "wb") as fh:
+            fh.write(b'{"filename": "video.ini", "sha1": "\xff\xfe not utf-8"}')
+        main._CONFIRM_TOKENS.clear()
+        before850 = names("850")
+        env = rpc(main, "save_profile", "850", "dock")
+        if env.get("code") == codes.CONFIRM_REQUIRED:
+            P("★ⓖ 비-UTF8 meta에서 확인창이 떴다 — 예외 갈래가 「본체 실측」으로 넓어졌다")
+        elif env.get("code") != codes.PROFILE_META_CORRUPT:
+            P("★ⓖ 비-UTF8 meta 저장의 실패 코드가 %r다 — %r여야 복구 안내가 맞는다 "
+              "(예외 목록을 JSON 구문 오류로 좁히면 여기가 UNEXPECTED로 샌다)"
+              % (env.get("code"), codes.PROFILE_META_CORRUPT))
+        body850 = pathlib.Path(store.profile_dir("850", "dock")) / "video.ini"
+        if body850.read_bytes() != SAVED or names("850") != before850:
+            P("★ⓖ 비-UTF8 meta 저장이 **무언가 썼다** — 본체 또는 링이 움직였다")
+
+        print("저장의 본체 실측 — 빈 기록 %d종 · 빈 슬롯 · 본체 2개 · 링크 · 잘린 JSON · "
+              "점파일 본체 · 비-UTF8 meta (데이터: %s)" % (len(EMPTY_METAS), tmp))
         if problems:
             print("\nFAIL")
             for x in problems:

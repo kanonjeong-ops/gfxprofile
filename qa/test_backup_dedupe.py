@@ -7,9 +7,12 @@ dock ↔ internal **두 내용 사이를 왕복**하므로 같은 내용이 계�
 *지금 어디에도 없어 백업이 있어야만 되찾을 수 있는* 내용은 **7종**뿐이었고, **세 게임은 10칸
 전부가 사본**이었다. 링을 마모시킨 주범은 실패가 아니라 **정상 동작**이다.
 
-### 이 파일이 잠그는 것 다섯
+### 이 파일이 잠그는 것 일곱
   ⓐ 같은 태그에 같은 내용이 있으면 **아무것도 쓰지 않는다** — 그리고 안 쓰므로 **안 지운다**.
     (음성 대조군: 내용이 새것이면 정확히 1건 쌓이고 1건 잘린다. 둘이 같이 서야 잰 것이 「중복」이다.)
+    ★ 적용 확인창의 `evacuates`도 여기서 잠근다(QA R1 D-3): *"백업 한 칸을 씁니다"*가 참인 조건이
+    **중복이면 거짓·새 내용이면 참**인가. 백엔드가 내는 값만 잰다 — 화면이 그 값으로 줄을 가리는가는
+    Gamepad UI에만 있어 **실기(F-1)** 몫이다.
   ⓑ **태그가 다르면 같은 내용도 담긴다.** 되돌릴 곳이 다른 두 행은 서로를 대신하지 못한다
     (§5-C ⓐ) — 전역으로 걸렀다면 한쪽 태그의 행이 통째로 사라지고 화면은 그것을
     *"이쪽은 백업이 없다"*로 읽는다.
@@ -19,6 +22,12 @@ dock ↔ internal **두 내용 사이를 왕복**하므로 같은 내용이 계�
     한 건이므로, 확인창도 한 건만 예고해야 한다(둘을 예고하면 *일어나지 않을 삭제*를 말한다).
   ⓔ **무쓰기여도 `evacuated` 봉투는 본체 이름을 그대로 싣는다.** 안 만들었다고 빼면 화면이
     `evacuated: {}`가 되어 **대피 없이 사라진 진짜 소멸과 구별되지 않는다.**
+  ⓕ **링크된 백업도 판정에 끼지 않는다.** 엔진 G15가 링크 복원을 거부하므로 그것으로는 못
+    되돌린다 — 그것과 같다는 이유로 대피를 건너뛰면 마지막 사본이 사라진다.
+    (이 픽스처는 정상 API로 못 만든다. 그래서 직접 놓는다 — QA R1 D-2가 지적한 공백이다.)
+  ⓖ **「형식 불명」의 정의는 `parse_backup_id` 하나다.** 순서 키가 자기 정규식을 따로 쓰면
+    *화면은 형식 불명이라는데 정렬은 정상 백업*인 이름이 생기고, prune이 자르는 파일과
+    화면이 대는 이름이 갈린다.
 
 ★ 합성 데이터만 쓴다 — `DECKY_PLUGIN_RUNTIME_DIR`·`GFXPROFILE_HOME`이 tmp라 실사용 데이터에 닿을 수 없다.
 """
@@ -39,6 +48,19 @@ E3 = b"quality=e3__\nshadows=mid_\nsource=USER-EDIT-3-\n"
 
 #: 앱이 만들지 않는 이름 = `parse_backup_id`가 `unknown`으로 접는 이름.
 STRANGE = "strange-name.ini"
+
+#: **정상 형식·정상 태그**의 백업 이름 — 단 실물이 링크다(정상 API로는 못 만드는 상태).
+LINKED = "20200102-030405-disk-linked.ini"
+
+#: 순서 키와 파서의 「형식 불명」 정의가 갈리면 답이 달라지는 이름들.
+#: ★ 첫 줄이 핵심이다 — stamp도 형식도 멀쩡한데 **tag만 우리 것이 아니다.** 순서 키가 자기
+#:   정규식으로 tag를 `[^-]+`로 받던 시절에는 이것만 정상 백업으로 읽혔다.
+ODD_NAMES = ("20260101-010101-bogus-video.ini",   # 앱이 쓰지 않는 tag
+             "20260101-010101-disk",              # 파일명 칸이 없다
+             "not-a-backup.ini")                  # stamp 자체가 없다
+
+#: 위와 같은 형식 불명인데 stamp만 **아주 미래**다 — 정의가 갈리면 이것이 살아남는다.
+FUTURE_ODD = "20991231-235959-bogus-video.ini"
 
 
 def boot(tmp):
@@ -143,6 +165,15 @@ def main_test():                                                # noqa: C901  (�
         cfg.write_bytes(E1)
         ask, (added, gone) = apply_once("860", "internal", "ⓐ-1")
         if ask is not None:
+            # ★★ 확인창의 *"지금 내용은 백업으로 보관합니다 — **백업 한 칸을 씁니다**"*가 참인
+            #   조건이다(QA R1 D-3). 중복이면 `make_backup`이 아무것도 안 쓰므로 **칸을 안 쓴다**
+            #   — 그런데 이 필드가 없거나 참으로 고정되면 가장 자주 뜨는 확인창이 사용자에게
+            #   정반대를 말하고, 사용자는 링 잔량을 아끼려고 적용을 미룬다.
+            #   ⚠️ 여기서 재는 것은 **백엔드가 내는 값**이다. 그 값을 화면이 실제로 가리는가는
+            #     Gamepad UI에만 있어 검사로 못 잰다(실기 F-1 — UI 검사는 만들지 않는다).
+            if ask.get("evacuates") is not False:
+                P("★ⓐ-1 중복이라 링에 한 칸도 안 쌓이는데 `evacuates`=%r다 — 확인창이 "
+                  "「백업 한 칸을 씁니다」를 그린다(거짓)" % ask.get("evacuates"))
             if ask.get("evicted"):
                 P("★ⓐ-1 대피본이 안 만들어지는 갈래인데 확인창이 축출을 예고했다 — %s"
                   % ask.get("evicted"))
@@ -158,6 +189,11 @@ def main_test():                                                # noqa: C901  (�
         cfg.write_bytes(E2)
         ask, (added, gone) = apply_once("860", "dock", "ⓐ-2")
         if ask is not None:
+            # ★ `evacuates`의 음성 대조군: 새 내용이면 **참**이어야 한다. 이것이 없으면 위
+            #   ⓐ-1은 *"이 필드가 언제나 거짓"*이어도 초록이다(잰 것이 「중복」이 아니게 된다).
+            if ask.get("evacuates") is not True:
+                P("★ⓐ-2 음성 대조군 무효 — 새 내용이라 대피본이 실제로 쌓이는데 `evacuates`=%r다 "
+                  "(화면이 「백업 한 칸을 씁니다」를 안 그린다)" % ask.get("evacuates"))
             if len(ask.get("evicted") or []) != 1:
                 P("★ⓐ-2 음성 대조군 무효 — 새 내용인데 축출 예고가 %d건이다(1건이어야 한다)"
                   % len(ask.get("evicted") or []))
@@ -219,9 +255,10 @@ def main_test():                                                # noqa: C901  (�
         engine.save_profile(reg, "863", "dock")
         store.save_registry(reg)
         slot = store.profile_dir("863", "dock")
-        # ★ 본체 둘은 **파일명이 바뀐 저장**이 실제로 만드는 상태다(옛 본체가 슬롯에 남는다).
-        #   여기서는 그 상태만 필요하므로 파일 하나를 슬롯에 그대로 놓는다 — 내용은 기존 본체와
-        #   **같게** 둔다. 그러면 대피 대상은 둘인데 링에 쌓일 것은 한 건이다.
+        # ★ 본체 둘은 **앱이 만드는 상태가 아니다**(설계 §15-D E34 — 2026-08-22 확인: 재등록은
+        #   `confirm.already_registered`가 거부하고 슬롯 복원은 기존 이름을 유지한다). 밖에서
+        #   들어온 파일이나 중단된 삭제의 잔재로만 생기므로 여기서는 **직접 놓아** 만든다 —
+        #   내용은 기존 본체와 **같게** 둔다. 그러면 대피 대상은 둘인데 링에 쌓일 것은 한 건이다.
         body = store.profile_file_path("863", "dock")
         store.atomic_write(os.path.join(slot, "video2.ini"), store.read_bytes(body))
         if len(store.evacuable_names("863", "dock")) != 2:
@@ -255,8 +292,69 @@ def main_test():                                                # noqa: C901  (�
                 P("★ⓔ `evacuated` 봉투가 %s다(본체 이름 둘 다여야 한다) — 「안 만들었으니 뺀다」로 "
                   "고치면 화면이 대피 없이 사라진 진짜 소멸과 구별되지 않는다" % sorted(saved))
 
+        # ═══════════════════════════════════════════════════════════════════
+        # ⓕ **링크된 백업은 판정에 끼지 않는다** — 그것으로는 못 되돌리기 때문이다
+        #    엔진 G15(`assert_backup_in_root`)가 `os.path.islink`를 그대로 거부하고
+        #    `restore._entries`도 목록에서 뺀다. 그런 행을 "이미 담고 있다"로 세면 대피가
+        #    **생략되는데 되돌릴 방법은 없다** — 마지막 사본이 사라진다.
+        # ★ 이 픽스처는 **정상 API로 못 만든다**(`make_backup`은 링크를 안 만든다). 그래서
+        #   직접 놓는다 — 사용자가 백업 폴더에 링크를 넣어 둔 상태다.
+        # ═══════════════════════════════════════════════════════════════════
+        cfg5 = build("864", "LinkedBackup")
+        outside = tmp / "outside-linked.ini"
+        outside.write_bytes(E1)
+        os.makedirs(store.backups_dir("864"), exist_ok=True)
+        linked = os.path.join(store.backups_dir("864"), LINKED)
+        os.symlink(str(outside), linked)
+        if store.parse_backup_id(LINKED)["kind"] != store.KIND_DISK:
+            P("ⓕ 계측기 무효 — %r가 `disk` 백업 이름으로 안 읽힌다(잴 것이 없다)" % LINKED)
+        if store.sha1_file(linked) != store.sha1_bytes(E1):
+            P("ⓕ 계측기 무효 — 링크를 따라간 내용이 기대와 다르다")
+        entries = store.list_backups("864")
+        if linked not in entries:
+            P("ⓕ 계측기 무효 — 링크가 링 목록에 안 들어갔다")
+        if store.backup_holds(entries, store.KIND_DISK, store.sha1_bytes(E1)):
+            P("★ⓕ 링크된 백업을 「이미 담고 있다」로 셌다 — 엔진 G15가 링크 복원을 **거부**하므로 "
+              "그것으로는 못 되돌린다. 그 이유로 대피를 건너뛰면 마지막 사본이 사라진다")
+        cfg5.write_bytes(E1)
+        apply_once("864", "dock", "ⓕ")
+        owned = [n for n in holding("864", store.KIND_DISK, E1)
+                 if not os.path.islink(os.path.join(store.backups_dir("864"), n))]
+        if len(owned) != 1:
+            P("★ⓕ 링크된 백업 때문에 대피가 생략됐다 — 앱이 만든 사본이 %d건이다(1건이어야 한다)"
+              % len(owned))
+        if not os.path.islink(linked) or outside.read_bytes() != E1:
+            P("★ⓕ 링크나 그것이 가리키던 바깥 파일이 바뀌었다 — 중복 판정이 링크를 건드렸다")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # ⓖ **「형식 불명」의 정의는 파서 하나다** — 순서 키가 따로 정하지 않는다
+        #    예전에는 순서 키에 자기 정규식이 있었고 tag를 `[^-]+`로 아무 문자열이나 받았다.
+        #    그래서 우리가 만들지 않는 tag를 단 파일이 **화면에서는 형식 불명인데 정렬에서는
+        #    정상 백업**이었다 — prune이 자르는 순서와 화면이 대는 이름이 갈린다.
+        # ═══════════════════════════════════════════════════════════════════
+        for name in ODD_NAMES:
+            if store.parse_backup_id(name)["kind"] != store.KIND_UNKNOWN:
+                P("ⓖ 계측기 무효 — 파서가 %r를 형식 불명으로 안 읽는다(잴 것이 없다)" % name)
+            if store.backup_order_key(name) != ("", -1, name):
+                P("★ⓖ 순서 키가 %r를 **정상 백업으로** 읽는다(%s) — 파서는 형식 불명이라는데 "
+                  "정렬만 다르게 답한다. 정의가 두 벌이면 prune이 자르는 파일과 화면이 대는 "
+                  "이름이 갈린다" % (name, store.backup_order_key(name)))
+        # ★ 정의가 갈리면 **무엇이 잘리는가**까지 본다: stamp가 아주 미래인 형식 불명 파일은
+        #   순서 키가 자기 정규식을 쓰면 **가장 새것**으로 읽혀 살아남고, 대신 앱이 만든 진짜
+        #   백업 하나가 잘려 나간다.
+        build("865", "OrderKey")
+        saturate("865")
+        fillers = names("865")
+        store.atomic_write(os.path.join(store.backups_dir("865"), FUTURE_ODD), E3)
+        store.prune_backups("865")
+        if FUTURE_ODD in names("865"):
+            P("★ⓖ 미래 stamp를 단 형식 불명 파일이 **가장 새것으로** 살아남았다 — 순서 키가 "
+              "파서와 다른 정의를 쓴다(%s)" % (store.backup_order_key(FUTURE_ODD),))
+        if fillers - names("865"):
+            P("★ⓖ 앱이 만든 백업이 대신 잘려 나갔다 — %s" % sorted(fillers - names("865")))
+
         print("백업 링 태그별 중복 제거 — ⓐ 무쓰기·음성 대조군 / ⓑ 태그별 / ⓒ 형식 불명 / "
-              "ⓓ 고지==실제 / ⓔ 봉투 (데이터: %s)" % tmp)
+              "ⓓ 고지==실제 / ⓔ 봉투 / ⓕ 링크 / ⓖ 순서 키 (데이터: %s)" % tmp)
         return finish(problems, tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

@@ -212,7 +212,13 @@ export function makeApplyConfirmSpec(
       <div style={COLUMN_STYLE}>
         <div>{t("APPLY_CONFIRM_BODY", { profile: label })}</div>
         <div>{t("APPLY_CONFIRM_CURRENT", { state: diskStateText(params) })}</div>
-        <div style={META_STYLE}>{t("APPLY_CONFIRM_KEEP")}</div>
+        {/* ★★ "백업 한 칸을 씁니다"는 **대피가 실제로 일어날 때만** 참이다(QA R1 D-3 —
+            복원 확인창과 **같은 술어·같은 가드**다). 예전에는 가드 없이 무조건 그렸는데,
+            같은 내용이 이미 링에 있으면 엔진은 한 칸도 안 쓴다(§14-G ⓔ) — 가장 자주 뜨는
+            확인창이 사용자에게 정반대를 말했고, 링 잔량을 아끼려고 적용을 미루게 했다.
+            판정을 **백엔드의 술어 하나**(`evacuates`)로 옮기면 갈래가 늘어도 이 줄이
+            따라 틀리지 않는다. */}
+        {params.evacuates ? <div style={META_STYLE}>{t("APPLY_CONFIRM_KEEP")}</div> : null}
         {evictNote(params.evicted)}
         <div style={META_STYLE}>{t("APPLY_CONFIRM_SAVE_HINT", { profile: label })}</div>
       </div>

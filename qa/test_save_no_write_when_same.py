@@ -21,6 +21,12 @@ R13 이전의 `engine.save_profile`은 디스크 내용 == 프로필 내용이�
 슬롯 본체가 깨졌거나 사라졌으면 기록상 sha1이 같아도 **실제로 쓴다.** meta만 믿고 넘어가면
 "다시 저장해서 고친다"는 유일한 자가 복구 경로가 사라진다.
 
+### 같이 잠그는 것 2 — **그 쓰기는 「고지 뒤에」 일어난다** (QA R1 D-1, 2026-08-22)
+본체가 깨진 슬롯의 재저장은 깨진 본체를 대피시키므로 **가득 찬 링의 최고령 복구 지점을 태운다.**
+그런데 판정층(`confirm.needs_confirm`)이 기록만 보면 *"이미 같다"*며 안 묻고, 엔진은 본체 실측으로
+다르다며 실행했다 — **확인창이 한 번도 안 뜬 채** 백업이 하나 사라지는 갈래였다. 아래 ④는
+「쓴다」와 「묻고 쓴다」를 **둘 다** 잰다(묻기 전에 링이 움직이지 않는 것까지).
+
 ★ 합성 데이터만 쓴다 — `GFXPROFILE_HOME`·`DECKY_PLUGIN_RUNTIME_DIR`이 tmp라 실사용 데이터에
   닿을 수 없다.
 """
@@ -189,16 +195,36 @@ def main_test():                                                # noqa: C901  (�
         if (store.load_meta(APPID, "dock") or {}).get("sha1") != store.sha1_bytes(OTHER):
             P("③ 저장 뒤 슬롯 내용이 디스크와 다르다")
 
-        # ── ④ 슬롯 본체가 **깨졌으면** 기록이 같아도 쓴다(자가 복구 경로) ───────
+        # ── ④ 슬롯 본체가 **깨졌으면** 기록이 같아도 쓴다 — 단 **묻고** 쓴다 ─────
+        #
+        # ★★ 여기가 정책층과 엔진의 술어가 갈리던 자리다(QA R1 D-1, 2026-08-22).
+        #   `meta.sha1`은 디스크와 같은데 본체가 다르면 — `write_profile`이 본체를 먼저 쓰고
+        #   meta를 나중에 쓰므로 그 사이에 죽으면 실제로 생기는 상태다 — 엔진은 `slot_holds`가
+        #   거짓이라 **대피·쓰기·축출을 실행하는데** 정책층은 기록만 보고 *"이미 같다"*며
+        #   **안 물었다.** 확인창이 한 번도 안 뜬 채 포화 링의 최고령 백업이 사라졌다.
+        #   그래서 이 갈래가 잠그는 것은 **둘**이다: ⓐ 자가 복구 경로가 살아 있다(쓴다)
+        #   ⓑ 그 쓰기가 **고지 뒤에** 일어난다(대피가 링을 태우므로).
         body = store.profile_file_path(APPID, "dock")
         with open(body, "wb") as fh:
             fh.write(b"corrupted-body\n")                     # meta의 sha1과 어긋난다
+        broken_sha1 = store.sha1_file(body)
+        ring_before = ring_state(store, APPID)
         env = rpc(main, "save_profile", APPID, "dock")
+        token = (env.get("params") or {}).get("confirm_token")
+        if env.get("code") != "CONFIRM_REQUIRED" or not token:
+            P("★④ 본체가 깨진 슬롯을 **묻지 않고** 처리했다 — 대피가 링을 태우는데 고지가 없다 "
+              "(%s)" % env)
+        else:
+            if ring_state(store, APPID) != ring_before:
+                P("★④ 확인을 요구하면서 링이 이미 움직였다 — 묻기 전에 쓴 것이다")
+            env = rpc(main, "save_profile", APPID, "dock", confirm_token=token)
         if (env.get("data") or {}).get("outcome") != "saved":
             P("★④ 슬롯 본체가 깨졌는데 already로 넘어갔다 — 재저장으로 고칠 길이 사라진다 (%s)"
               % env)
         if store.sha1_file(body) != store.sha1_bytes(OTHER):
             P("★④ 깨진 슬롯이 복구되지 않았다")
+        if broken_sha1 not in [sha for _name, sha in ring_state(store, APPID)]:
+            P("★④ 깨진 본체가 대피되지 않았다 — 확인창은 잃을 것을 말하는데 실제로는 버렸다")
 
         # ── ⑤ 슬롯 본체가 **사라졌으면** 다시 만든다 ──────────────────────────
         os.unlink(body)

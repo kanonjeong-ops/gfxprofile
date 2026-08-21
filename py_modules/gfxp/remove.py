@@ -245,7 +245,12 @@ def delete_preview(reg, appid):
 
 
 def evict_on_delete(appid):
-    """이 게임을 등록 해제할 때 **실제로 지워질 백업**(대피가 링을 밀어내는 만큼).
+    """이 게임의 슬롯을 대피시킬 때 **실제로 지워질 백업**(대피가 링을 밀어내는 만큼).
+
+    ⚠️ **이름이 가리키는 것보다 좁게 쓰인다**(15판 ⓕ 이후): 개별 등록 해제 route는 지문이
+      함께 필요해서 위 `delete_preview`가 `restore.ring_observe`를 **직접** 부른다. 지금 이
+      함수를 부르는 곳은 **전체 초기화(`reset_evict_preview`)와 검사뿐**이다 — 이름은 옛
+      소비자를 가리키고 있으니 여기를 근거로 "등록 해제가 이 함수를 지난다"고 읽지 말 것.
 
     ⚠️ import를 함수 안에서 한다: `restore`가 이 모듈을 import하므로(restore.py) 최상단에서
       맞import하면 순환이 된다. `confirm._evict_preview`가 세운 문법 그대로다 — 부르는 자리에서

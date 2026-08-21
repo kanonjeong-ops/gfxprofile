@@ -22,8 +22,13 @@
 "거부되면 합격"은 **토큰이 언제나 거부돼도** 초록이다. 그래서 route마다 **주입 없는 세계**를
 하나 더 세워 *"그때는 통과한다"*를 같이 잰다. 둘이 같이 서야 잰 것이 「주입」이다.
 
-### 부수로 잠그는 것 둘
+### 부수로 잠그는 것 셋
   · **관측 횟수 자체** — 확인 단계의 `list_backups` 호출이 route당 **1회**인가(정면 계측).
+  · **meta·대상 파일의 관측 예산** — 위 계측기는 링만 센다. 그래서 *"링은 한 번만 나열하되
+    **meta와 대상 파일만** 확인 뒤에 다시 읽는다"*는 변이가 그대로 살아남았다(QA R1 D-2):
+    지문의 첫 칸이 슬롯 meta의 sha1, 둘째 칸이 대상 파일의 sha1이므로 **그 둘만 재관측해도**
+    고지와 지문이 다른 시점을 보는 상태가 똑같이 만들어진다. 이 둘은 한 확인 단계에서 여러 번
+    읽히는 것이 정상이라 "1회"로는 못 잰다 — 그래서 route별 **예산 표**(`BUDGET`)로 잠근다.
   · **지문이 봉투로 새지 않는가** — 판정 함수가 지문을 함께 돌려주게 되면서, 접착층이 통째로
     splat하는 순간 화면 계약에 없는 필드가 화면까지 샌다(main.py:840-842가 다게임 경로에
     이미 못박아 둔 규칙). 프론트가 `fingerprint`를 읽는 곳은 0건이므로 **봉투에 있으면 그
@@ -49,6 +54,20 @@ DISK = b"quality=disk\nshadows=low_\nsource=ONLY-ON-DISK-\n"     # 어느 슬롯
 INJECT = "20200101-010101-disk-injected.ini"
 
 ROUTES = ("apply_profile", "save_profile", "delete_game", "restore_backup")
+
+#: **확인 단계 한 번**이 슬롯 기록(`store.load_meta`)과 대상 파일(`store.sha1_file`)을 읽는 수.
+#: 아래 세계(게임 1개 · 슬롯 dock 1개 · 링 10칸 포화)에서 잰 값이고 결정적이다.
+#: ★ 이 표가 있는 이유(QA R1 D-2): 위 주입 계측기는 `list_backups`만 센다. *"링은 한 번만
+#:   나열하되 **meta와 대상 파일만** 확인 뒤에 다시 읽는다"*는 변이는 그래서 살아남았다 —
+#:   지문의 두 칸이 바로 그 둘이므로 그것만 재관측해도 ⓕ가 닫은 창이 다시 열린다.
+#: ⚠️ 계약이 아니라 **예산**이다. 숫자가 움직이면 그 자체가 결함이라는 뜻이 아니라,
+#:   **무엇이 하나 더 읽혔는지 말하고 지나가라**는 뜻이다.
+BUDGET = {
+    "apply_profile":  (4, 11),
+    "save_profile":   (3, 2),
+    "delete_game":    (0, 1),
+    "restore_backup": (1, 13),
+}
 
 
 def boot(tmp):
@@ -104,6 +123,8 @@ def main_test():                                                # noqa: C901  (�
         def ring(appid):
             return [os.path.basename(p) for p in real_list(appid)]
 
+        budgets = []
+
         # ── 세계 하나: **네 route가 전부 `confirm` 갈래에 서 있고 링은 포화다** ─────────
         def build(appid, label):
             reg = store.load_registry()
@@ -128,6 +149,40 @@ def main_test():                                                # noqa: C901  (�
             if route == "delete_game":
                 return rpc(main, route, appid, confirm_token=token)
             return rpc(main, route, appid, "dock", confirm_token=token)
+
+        # ── 계측기 ②: **meta·대상 파일을 몇 번 읽는가** (QA R1 D-2) ──────────────────
+        #
+        # 위 계측기는 `store.list_backups`만 센다. 그래서 *"링은 한 번 나열하되 **meta와 대상
+        # 파일만** 확인 뒤에 다시 읽는다"*는 변이가 그대로 살아남았다 — 지문의 첫 칸이 슬롯
+        # meta의 sha1이고 둘째 칸이 디스크 sha1이므로, **그 둘만 재관측해도** 고지와 지문이
+        # 다른 시점을 보는 상태가 똑같이 만들어진다.
+        # ★ 재는 방식은 **주입이 아니라 예산**이다: 이 셋은 한 확인 단계에서 여러 번 읽히는 것이
+        #   정상이다(디스크 sha1 1회 + 슬롯마다 `slot_holds` + 링 중복 판정 …). 그래서 "1회"가
+        #   아니라 **그 route가 지금 쓰는 수**를 표로 못박는다 — 관측이 하나라도 늘면 여기서
+        #   걸리고, 그 관측이 고지와 지문 **사이**에 끼는지를 사람이 판정한다.
+        # ⚠️ 이 숫자는 계약이 아니라 **예산**이다. 늘었다고 무조건 결함은 아니지만, 늘어난 관측이
+        #   무엇인지 말하지 않고 지나가면 ⓕ가 닫은 창이 조용히 다시 열린다. 표를 갱신할 때는
+        #   **무엇이 늘었는지 아래 실패 메시지의 내역으로 확인하고** 갱신하라.
+        watch = {"on": False, "meta": {}, "file": {}}
+        real_meta, real_sha = store.load_meta, store.sha1_file
+
+        def watched_meta(appid, profile):
+            if watch["on"]:
+                key = (str(appid), profile)
+                watch["meta"][key] = watch["meta"].get(key, 0) + 1
+            return real_meta(appid, profile)
+
+        def watched_sha(path):
+            if watch["on"]:
+                watch["file"][path] = watch["file"].get(path, 0) + 1
+            return real_sha(path)
+
+        def budget_report():
+            # ★ 파일은 **끝 두 칸**으로 적는다 — basename만 쓰면 게임 설정 파일과 슬롯 본체가
+            #   둘 다 `video.ini`라 어느 쪽이 늘었는지 못 읽는다(내역이 내역 구실을 못 한다).
+            metas = sorted(("meta[%s/%s]" % k, v) for k, v in watch["meta"].items())
+            files = sorted(("/".join(k.split(os.sep)[-2:]), v) for k, v in watch["file"].items())
+            return "meta=%s / file=%s" % (metas, files)
 
         # ── 계측기: **첫 호출이 값을 돌려준 직후** 링을 한 칸 민다 ─────────────────────
         state = {"armed": None, "calls": 0}
@@ -155,7 +210,25 @@ def main_test():                                                # noqa: C901  (�
                 main._CONFIRM_TOKENS.clear()
 
                 # ── 음성 대조군: 주입이 없으면 그 토큰은 **통과해야 한다** ──────────────
-                env = call(route, ctl)
+                #    (같은 호출에서 meta·대상 파일의 관측 수도 잰다 — 주입이 없는 세계라야
+                #     예산이 route 자체의 것이다)
+                store.load_meta, store.sha1_file = watched_meta, watched_sha
+                watch["on"], watch["meta"], watch["file"] = True, {}, {}
+                try:
+                    env = call(route, ctl)
+                finally:
+                    watch["on"] = False
+                    store.load_meta, store.sha1_file = real_meta, real_sha
+                seen = (sum(watch["meta"].values()), sum(watch["file"].values()))
+                budgets.append((route, seen))
+                if seen != BUDGET[route]:
+                    P("★[%s] meta·대상 파일의 관측 수가 예산과 다르다 — 지금=(load_meta=%d, "
+                      "sha1_file=%d) / 예산=(load_meta=%d, sha1_file=%d)\n"
+                      "      내역: %s\n"
+                      "      ★늘었다면 **그 관측이 고지와 지문 사이에 끼는지** 먼저 보라(§14-G ⓕ) — "
+                      "지문의 첫 칸은 슬롯 meta의 sha1이고 둘째 칸은 대상 파일의 sha1이라, 링을 한 번만 "
+                      "나열해도 이 둘만 다시 읽으면 같은 창이 열린다. 정당한 증감이면 표를 갱신하라"
+                      % ((route,) + seen + BUDGET[route] + (budget_report(),)))
                 if not is_confirm(env):
                     P("[%s] 사전 조건 실패 — 대조군 1차 호출이 확인을 요구하지 않았다 (%s)"
                       % (route, env))
@@ -210,6 +283,8 @@ def main_test():                                                # noqa: C901  (�
             store.list_backups = real_list
 
         print("관측 1회화 — route %d종 × (주입 · 음성 대조군) (데이터: %s)" % (len(ROUTES), tmp))
+        print("  meta·대상 관측 예산: "
+              + " / ".join("%s=(%d,%d)" % (r, m, f) for r, (m, f) in budgets))
         if problems:
             print("\nFAIL")
             for x in problems:

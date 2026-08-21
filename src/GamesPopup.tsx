@@ -161,7 +161,7 @@ function kindText(row: BackupRow): string {
  * **되돌릴 곳** 한 줄 — 판정은 백엔드의 `target`이고 화면은 문구만 고른다(§5-C ⓐ).
  *
  * ⚠️ `kind`로 고르지 않는다: 파일명이 바뀐 프로필 대피본은 `unknown`으로 접히고 그때 목적지는
- *   게임 설정 파일이다(`restore.parse_backup_id`). 두 값의 파생 규칙이 갈리는 날 화면이
+ *   게임 설정 파일이다(`store.parse_backup_id`). 두 값의 파생 규칙이 갈리는 날 화면이
  *   **실제로 쓰이는 곳과 다른 곳**을 가리킨다.
  */
 function targetText(row: BackupRow): string {

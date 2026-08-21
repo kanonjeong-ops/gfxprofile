@@ -14,10 +14,12 @@ M1 `_confirm_overwrite`는 `True` = *"저장을 진행하라"*였다. 여기는 
 M1이 `True`(진행)를 돌려주던 세 경우(meta 없음 · 내용 동일 · meta 읽기 실패)가 전부
 여기서는 `False`(안 물음)가 된다. **옮길 때 이 부호를 뒤집지 않으면 확인창이 정반대로 뜬다.**
 
-⚠️ 한 곳에서 **일부러 M1보다 좁다**(설계 §14-G ⓐ, 2026-08-22): *"meta 없음"*은 M1에서
-「빈 슬롯」과 같은 말이었지만 실물에서는 아니다 — **기록만 사라지고 본체가 남은 슬롯**이 있고,
-그때 M1의 「묻지 않고 진행」은 그 본체를 대피 없이 지웠다. 그래서 이 갈래의 판정은 기록이 아니라
-**본체**를 본다. 나머지 네 분기는 그대로 동치다(`qa/test_confirm_equivalence.py`).
+⚠️ 두 곳에서 **일부러 M1보다 좁다**(설계 §14-G ⓐ, 2026-08-22): *"meta 없음"*과 *"내용 동일"*이다.
+둘 다 M1이 **기록**으로 판정하던 자리인데 실물에서는 기록과 본체가 갈릴 수 있다 — 기록만 사라지고
+본체가 남은 슬롯이 있고, 기록은 A라는데 본체는 B인 슬롯도 있다(`write_profile`의 half-write).
+M1의 「묻지 않고 진행」은 앞에서 본체를 대피 없이 지웠고, 뒤에서는 확인창 없이 대피·축출을 실행했다.
+그래서 두 갈래 모두 판정이 **본체**를 본다 — 뒤쪽은 엔진과 **같은 술어**(`store.slot_holds`)를
+같은 인자로 부른다. 나머지 세 분기는 그대로 동치다(`qa/test_confirm_equivalence.py`).
 """
 import os
 
@@ -130,7 +132,25 @@ def needs_confirm(reg, appid, profile):
                                               #   「파일 없음」을 갈라야 하기 때문이다
     disk_sha1 = state.get("sha1") if state else None
 
-    if state is not None and disk_sha1 and disk_sha1 == meta.get("sha1"):
+    # ★★ 「이미 같다」도 **기록이 아니라 본체**로 판정한다(설계 §14-G ⓐ / QA R1 D-1, 2026-08-22).
+    #   예전에는 `disk_sha1 == meta.get("sha1")`이었다 — **기록만** 보는 판정이다. 그런데 같은
+    #   질문에 엔진(`engine.save_profile`)은 `store.slot_holds`로 **본체 실측**을 했고, 두 술어가
+    #   갈리는 상태가 실재한다: `write_profile`이 본체를 먼저 쓰고 meta를 나중에 쓰므로 그 사이에
+    #   죽으면 **본체 B · meta.sha1 A**가 남는다(`qa/test_slot_body_truth.py`가 정상 도달 경로로
+    #   적어 둔 그 상태다). 디스크가 A면 정책층은 *"이미 같다"*며 **안 묻고**, 엔진은 다르다며
+    #   **대피·쓰기·축출을 실행했다** — 확인창이 한 번도 안 뜬 채 포화 링의 최고령 백업이
+    #   고지 없이 사라진다. 확인창의 계약(*"무엇을 잃는지 이름으로 말한다"*)이 통째로 깨지는 갈래다.
+    # ★★ 그래서 **같은 함수를 같은 인자로** 부른다 — 값 비교를 두 벌 적으면 그것이 또 하나의
+    #   거울이고(§14-G ⓐ가 `_slot_backup_pending`을 없앤 이유), 거울은 언젠가 어긋난다.
+    #   엔진은 `store.slot_holds(appid, profile, store.sha1_bytes(data), os.path.basename(path))`를
+    #   부르는데 그 `path`가 곧 `entry["config_path"]`이고 `data`가 그 파일의 바이트다 —
+    #   여기 `disk_sha1`(= `store.sha1_file(entry["config_path"])`)과 아래 `config_name`이
+    #   **같은 두 값**이다(engine.py:365-368·399).
+    # ★ `state`가 `None`(조회 실패)이면 `disk_sha1`도 `None`이라 `slot_holds`가 곧바로 거짓이다 —
+    #   옛 `state is not None` 가드가 하던 일을 술어가 이미 한다(모르면 묻는 쪽으로 접힌다).
+    entry = store.game(reg, appid) or {}
+    config_name = os.path.basename(entry.get("config_path") or "")
+    if store.slot_holds(appid, profile, disk_sha1, config_name):
         return False, {}, None                # 내용이 이미 같다 — 덮어써도 달라지는 것이 없다
 
     # ★★ 표시 재료는 **필드 단위로** 기록과 실측을 가른다(설계 §14-G ⓐ / 2026-08-22 보강).
@@ -280,6 +300,15 @@ def apply_needs_confirm(reg, appid, profile):
         # 덮어쓸 대상(=게임 설정 파일)이 지금 어떤 상태인가 — 저장·복원 확인창과 **같은 4분류**다.
         "disk_state": _classify(state),
         "matches": matches,
+        # 이 적용이 **백업 링에 한 칸을 쓰는가**(QA R1 D-3 — 화면의 「백업 한 칸을 씁니다」가
+        # 참인 조건). **복원과 같은 필드·같은 기본값·같은 술어다**(restore.needs_confirm).
+        # 기본은 **거짓**이다: 약속은 그것이 참인 갈래에서만 켠다 — 없는 대피를 말하면 사용자는
+        # 남아 있지도 않을 복구 지점을 믿고, 링 잔량을 아끼려고 적용을 미룬다.
+        # ★ **같은 내용이 이미 `disk` 태그의 링에 있으면 거짓이다**(§14-G ⓔ): `make_backup`이
+        #   아무것도 쓰지 않으므로 칸을 안 태우고, 안 태우니 축출도 없다(`evicted`도 빈다).
+        #   판정을 여기 다시 적지 않는다 — 아래 한 번의 링 나열이 `adding`으로 답한다(ⓕ).
+        # ⚠️ 이 값이 뜻을 갖는 것은 **`confirm` 갈래**다(화면이 그때만 읽는다).
+        "evacuates": False,
         # 이 동작이 백업을 1건 만들 때 **실제로 지워질** 파일들(설계 §5-E-3). 적용·복원 공용이다.
         # ★ **`confirm` 갈래에서만 채운다**(복원과 대칭 — §5-C ⓖ): `already`는 무쓰기이고,
         #   `proceed`는 잃을 것이 없는 갈래라 **대피본을 만들지 않는다**(§14-B). 링을 안 쓰는
@@ -312,6 +341,10 @@ def apply_needs_confirm(reg, appid, profile):
     #   만들어지지 않으므로**(§14-G ⓔ) 지워질 백업도 없다 — 엔진의 무쓰기 갈래와 같은 술어를
     #   본다(`store.backup_holds`). 디스크 sha1은 위에서 이미 잰 그 값이다(관측을 늘리지 않는다).
     ring = _ring_observe(appid, [(store.KIND_DISK, disk_sha1)])
+    # ★ 고지·지문·**대피 여부**가 전부 그 한 나열에서 나온다(ⓕ) — 링을 **다시 관측하지 않는다.**
+    #   `adding`이 0이면 링에 한 칸도 안 쌓이므로 「백업 한 칸을 씁니다」도 거짓이고 지워질
+    #   것도 없다(복원 확인창과 **같은 모양**이다 — restore.py의 같은 두 줄).
+    params["evacuates"] = bool(ring["adding"])
     params["evicted"] = ring["evicted"]
     return "confirm", params, _state_fp(target_sha1, disk_sha1, ring["fingerprint"])
 
