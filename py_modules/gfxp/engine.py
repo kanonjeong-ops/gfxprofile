@@ -427,12 +427,21 @@ def save_profile(reg, appid, profile):
     #   (`confirm.needs_confirm`) — 세는 쪽과 지우는 쪽이 같은 함수를 돌아야 예고와 실제가 맞는다.
     # ★ 다만 **개수는 이 목록의 길이가 아니다**(설계 §14-G ⓔ): 같은 태그에 같은 내용이 이미
     #   있으면 `store.make_backup`이 아무것도 쓰지 않는다. 대피 대상은 그대로 전부지만 링에
-    #   실제로 쌓이는 것은 그중 일부이고, 확인창은 `store.pending_backups`로 **그쪽**을 센다.
+    #   실제로 쌓이는 것은 그중 일부이고, 확인창은 `store.plan_backups`로 **그쪽**을 센다.
+    #   ★ 단 **그 「이미 있는 사본」이 이번 동작에서 어차피 축출될 자리이면** `plan_backups`가
+    #     쓰기를 허가한다(D1) — 그때는 중복이어도 새로 담긴다. 대피 대상은 어느 쪽이든 전부다.
+    # ★ 그 판정을 **여기서 한 번** 내려 루프에 넘긴다(사용자 결정 D1). 호출마다 다시 재면 먼저
+    #   쓴 대피본이 밀어낸 칸을 뒤 항목이 계속 근거로 믿어 **그 내용이 통째로 사라진다.**
+    #   목록을 먼저 잡는 이유도 같다 — 세는 쪽과 도는 쪽이 다른 나열을 보면 계획이 어긋난다.
     directory = store.profile_dir(appid, profile)
-    for name in store.evacuable_names(appid, profile):
+    names = store.evacuable_names(appid, profile)
+    plan = set(store.plan_backups(
+        store.list_backups(appid),
+        [(store.profile_tag(profile), store.sha1_file(os.path.join(directory, n))) for n in names]))
+    for name in names:
         try:
             store.make_backup(appid, store.read_bytes(os.path.join(directory, name)),
-                              store.profile_tag(profile), name)
+                              store.profile_tag(profile), name, plan=plan)
         except OSError as exc:                             # G13 — 대피 실패면 아무것도 쓰지 않는다
             # ★ **백업 호출만 좁게 잡는다**(R14 #7). 넓게 잡으면 다른 실패까지 삼켜
             #   `BACKUP_FAILED`가 거짓 사유가 된다. 접착층이 이 예외를 `PROFILE_META_CORRUPT`로

@@ -368,8 +368,11 @@ def _backup_failed(appid, exc, path):
         code=codes.BACKUP_FAILED, appid=appid, stage="backup") from exc
 
 
-def _evacuate(appid, profile):
+def _evacuate(appid, profile, plan=None):
     """그 슬롯의 **본체 파일 전부**를 백업 링으로 대피시킨다. 대피한 파일명 목록을 돌려준다.
+
+    ★ `plan`은 **두 슬롯이 공유하는 하나**다(아래 `delete_game_data`가 만든다) — 중복 판정을
+      슬롯마다 다시 내리면 먼저 대피한 쪽이 밀어낸 칸을 뒤 슬롯이 근거로 믿는다(사용자 결정 D1).
 
     ★ meta의 `filename`이 아니라 **디렉터리를 열거**한다. meta가 손상돼 읽히지 않는 슬롯도
       본체는 멀쩡히 있을 수 있는데, meta를 통해서만 찾으면 그 본체가 대피 없이 rmtree된다 —
@@ -419,12 +422,15 @@ def _evacuate(appid, profile):
     #   ★ 목록은 **전부** 돈다. 그중 같은 태그에 같은 내용이 이미 있는 것은 `store.make_backup`이
     #     아무것도 쓰지 않고 `None`을 돌려준다(§14-G ⓔ) — 링을 안 태우는 것이지 건너뛰는 것이
     #     아니다. 확인창의 개수는 `_evacuable_items` → `ring_observe`가 같은 술어로 미리 갈라 둔다.
+    #     ★ 단 **그 「이미 있는 것」이 이번 동작에서 어차피 축출될 자리이면** `plan_backups`가
+    #       쓰기를 허가한다(D1) — 그때는 중복이어도 새로 담기고 `None`이 아닌 경로가 돌아온다.
     for name in store.evacuable_names(appid, profile):
         path = os.path.join(directory, name)
         try:
             # 정상 저장이 덮어쓰기 전에 하는 대피와 **같은 문법**이다(engine.py:456-460).
             # 삭제 = "빈 내용으로 덮어쓰기"이므로 대피가 선행해야 대칭이다(설계 §2-A).
-            store.make_backup(appid, store.read_bytes(path), store.profile_tag(profile), name)
+            store.make_backup(appid, store.read_bytes(path), store.profile_tag(profile), name,
+                              plan=plan)
         except OSError as exc:
             _backup_failed(appid, exc, path)   # G13 — 원본을 하나도 건드리지 않고 중단
         saved.append(name)
@@ -466,8 +472,11 @@ def delete_game_data(reg, appid):
 
     # ── 1. 대피 (실패 → BACKUP_FAILED, 전체 중단 · 원본 무손실) ──────────────────
     evacuated = {}
+    # ★ 중복 판정은 **여기서 한 번**이고 두 슬롯이 같은 계획을 쓴다(사용자 결정 D1). 고지층
+    #   (`delete_preview` → `restore.ring_observe`)이 세는 것과 **같은 목록·같은 함수**다.
+    plan = set(store.plan_backups(store.list_backups(appid), _evacuable_items(appid)))
     for profile in PROFILES:
-        saved = _evacuate(appid, profile)
+        saved = _evacuate(appid, profile, plan)
         if saved:
             evacuated[profile] = saved
 

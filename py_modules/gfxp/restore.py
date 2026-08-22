@@ -137,7 +137,8 @@ def ring_observe(appid, items=()):
                 "adding": 0}
     if not items:
         return observed                              # 백업을 안 만드는 갈래는 지울 것도 없다
-    adding = len(store.pending_backups(entries, items))
+    # ★ 고지가 보는 판정과 엔진이 집행하는 판정이 **같은 함수**여야 화면과 실제가 갈리지 않는다.
+    adding = len(store.plan_backups(entries, items))
     observed["adding"] = adding
     if adding <= 0:
         return observed                              # 전부 중복 — 한 칸도 안 쓰므로 축출도 없다
@@ -264,7 +265,7 @@ def _evacuation_source(appid, profile, meta):
       **한 술어**에서 나와야 어긋날 자리가 없다.
     ⚠️ 이 함수는 *"대피할 파일이 무엇인가"*까지만 답한다. 그 대피가 **링에 칸을 쓰는가**는
       한 조건이 더 붙는다 — 같은 태그에 같은 내용이 이미 있으면 `store.make_backup`이 아무것도
-      쓰지 않는다(§14-G ⓔ). 부르는 쪽이 `store.pending_backups`로 그 한 조건을 마저 본다.
+      쓰지 않는다(§14-G ⓔ). 부르는 쪽이 `store.plan_backups`로 그 한 조건을 마저 본다.
     ★★ 왜 함수로 빼는가(2026-08-15 QA R2): 이 조건은 4-B **9행과 10행에서 각각 다른 이유로**
       거짓이 되는데, 자리마다 조건을 다시 적었더니 9행에만 걸리고 **10행이 빠졌다** — 그 결과
       확인창이 *없는 프로필을 「…에 저장됨」*이라 하고 *쓰지도 않는 링을 「한 칸 씁니다」*라고
