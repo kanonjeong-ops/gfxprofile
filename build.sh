@@ -442,8 +442,14 @@ if installed.is_file():
 digest = hashlib.sha256(out.read_bytes()).hexdigest()
 (proj / 'pkg' / f'{IDENT}.zip.sha256').write_text(digest + '\n')
 
-# 설치 스크립트를 해시를 박아 생성한다. 로더가 이 해시를 검증하므로,
-# 손상되거나 낡은 ZIP이 기존 설치를 지운 뒤 실패하는 경로가 닫힌다.
+# 설치 스크립트를 해시를 박아 생성한다. 로더가 이 해시를 검증하므로 **손상되거나 낡은 ZIP이
+# 그대로 풀리는 것**은 막힌다.
+# ⚠️ **「기존 설치를 지운 뒤 실패하는 경로」는 닫히지 않는다**(2026-08-23 상류 소스로 실증 —
+#   예전 주석이 그렇다고 적었는데 거짓이었다). Decky Loader v3.2.6 `backend/decky_loader/browser.py`의
+#   `_install`은 **기존 플러그인을 먼저 `uninstall_plugin`**(→ `rmtree`) 한 **뒤에야**
+#   `_unzip_to_plugin_dir`를 부르고, sha256 비교는 **그 함수의 첫 두 줄**이다. 즉 해시가 걸러 주는
+#   시점에는 **이미 지워진 뒤**다. 해시를 박는 값은 *"엉뚱한 것이 설치되지 않는다"*이지
+#   *"설치가 원자적이다"*가 아니다.
 # ★ NAME·VERSION도 코드젠한다 — 로더는 **표시명**으로 설치 프롬프트를 매칭하므로(E19),
 #   손으로 맞추면 표시명을 바꿀 때마다 어긋나 설치가 죽는다. 드리프트를 구조로 없앤다.
 tmpl = (proj / 'install.tmpl.js').read_text()

@@ -25,8 +25,11 @@
   };
   B.addEventListener("loader/add_plugin_install_prompt", onPrompt);
   try {
-    // hash를 문자열로 넘기면 로더가 검증한다. 검증을 끄면(false) 손상·낡은 ZIP이
-    // **기존 설치를 먼저 지운 뒤** 실패할 수 있다(browser.py: 삭제 → 추출 순서).
+    // hash를 문자열로 넘기면 로더가 검증한다 — 손상·낡은 ZIP이 **그대로 풀리는 것**을 막는다.
+    // ⚠️ 검증을 켜도 **기존 설치를 먼저 지운 뒤 실패하는 갈래는 그대로 있다**(browser.py:
+    //    삭제 → 추출 순서, 해시 비교는 추출 함수 안이다). 검증을 끄면 거기서 더 나아가
+    //    **깨진 것이 풀린다.** 즉 이 인자가 가르는 것은 「지워지는가」가 아니라
+    //    「지워진 자리에 무엇이 들어가는가」다. (2026-08-23 상류 소스로 실증)
     await B.call("utilities/install_plugin", "file://" + ZIP, NAME, VERSION, SHA256);
     for (let i = 0; i < 60 && rid === null; i++) await new Promise((r) => setTimeout(r, 100));
     if (rid === null) return "우리 설치 프롬프트(request_id)를 못 받음";

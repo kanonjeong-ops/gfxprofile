@@ -196,7 +196,9 @@ def assert_config_candidate(appid, path):
     강제 코드가 0줄이었다 — discover가 후보로 안 내놓았을 뿐이고, v2는 파일 선택기를 붙여
     임의 경로가 도달한다.
 
-    거부 사유는 넷이고 **전부 '그 파일이 무엇인가'가 아니라 '무엇이 아닌가'로만 판정한다.**
+    거부 사유는 **다섯**이고(아래 ①~⑤) **전부 '그 파일이 무엇인가'가 아니라 '무엇이 아닌가'로만
+    판정한다.** ⚠️ **에러 코드로 세면 넷이다** — ①과 ②가 `SAV_REFUSED`를 공유한다. 여기서 세는
+    것은 **갈래**이고, 코드를 세어 「넷」이라 읽으면 아래 번호와 어긋난다.
     '설정 파일처럼 보이는가'는 거부가 아니라 경고 사유다(config_candidate_warnings).
     그 구분이 없으면 이 기기 밖의 정상 게임이 막힌다.
 
@@ -661,8 +663,13 @@ def restore_backup(reg, appid, backup_path, target="config"):
     data = store.read_bytes(backup_path)
     check_sanity(data, what="백업 파일")
     if target in ("dock", "internal"):
-        # 대피 조건은 `save_profile`(:456-460)과 **같은 문법·같은 조건**이다 — meta가 dict이고
-        # 본체가 실재할 때만 대피한다. 아니면 대피할 대상 자체를 특정할 수 없다(설계 §5-C ⓗ·E11).
+        # 대피 조건: **meta가 dict이고 그 `filename`의 본체가 실재할 때만** 대피한다.
+        # 아니면 대피할 대상 자체를 특정할 수 없다(설계 §5-C ⓗ·E11).
+        # ⚠️ 예전에는 이 줄이 *"`save_profile`과 같은 문법·같은 조건"*이라 적었는데 **거짓이었다**:
+        #   저장의 대피는 meta를 조건에 넣지 않고 **디렉터리를 열거**한다(`save_profile`의
+        #   `for name in store.evacuable_names(...)` 루프 — 지금 `:450-464`). meta를 못 믿는
+        #   상태가 그쪽 갈래의 전제라서 일부러 갈라 둔 것이다(`:425` 주석이 그 근거의 정본).
+        #   **복원이 meta를 쓰는 이유는 다르다** — 되돌릴 슬롯의 *이름*을 유지해야 하기 때문이다.
         try:
             old = store.load_meta(appid, target)
         except (OSError, ValueError):

@@ -444,7 +444,9 @@ def _evacuate(appid, profile, plan=None):
     for name in store.evacuable_names(appid, profile):
         path = os.path.join(directory, name)
         try:
-            # 정상 저장이 덮어쓰기 전에 하는 대피와 **같은 문법**이다(engine.py:456-460).
+            # 정상 저장이 덮어쓰기 전에 하는 대피와 **같은 문법**이다
+            # (`engine.save_profile`의 `for name in store.evacuable_names(...)` 루프 — 지금
+            #  `engine.py:450-464`. 행번호는 밀리니 **함수와 루프 이름**을 앵커로 같이 적는다).
             # 삭제 = "빈 내용으로 덮어쓰기"이므로 대피가 선행해야 대칭이다(설계 §2-A).
             store.make_backup(appid, store.read_bytes(path), store.profile_tag(profile), name,
                               plan=plan)
