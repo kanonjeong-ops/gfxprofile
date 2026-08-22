@@ -57,6 +57,12 @@ DELETE_FAILED = "DELETE_FAILED"
 BACKUP_ID_INVALID = "BACKUP_ID_INVALID"
 BAD_IDENTIFIER = "BAD_IDENTIFIER"        # appid/profile/backup_id가 경로 조각으로 부적격
 PROFILE_META_CORRUPT = "PROFILE_META_CORRUPT"
+# 프로필을 저장하다 **파일 입출력 자체가 실패했다** — 저장 공간 부족(`ENOSPC`)·권한·읽기 전용.
+# ★ 위 `PROFILE_META_CORRUPT`를 **하나에서 둘로 가른 것**이지 새 사건을 만든 것이 아니다(§14-E′
+#   16판): 그 코드가 *"기록이 깨졌다"*와 *"쓰지 못했다"* 두 사건을 함께 가리켰고, **둘 중 하나만
+#   맞는 복구 안내**를 했다. 기록 손상의 안내는 「다시 저장」인데 기기 상태 문제는 공간을 비우거나
+#   권한을 고쳐야 한다 — 뭉개면 사용자가 엉뚱한 복구를 시도한다.
+PROFILE_WRITE_FAILED = "PROFILE_WRITE_FAILED"
 CONFIRM_REQUIRED = "CONFIRM_REQUIRED"
 # 이미 등록된 appid를 다시 등록하려 했다 (2026-08-07 QA R2).
 # 엔진 `add_game`은 `entry.update(config_path=...)`로 기존 경로를 **조용히 갈아치우고**,

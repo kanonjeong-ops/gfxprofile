@@ -75,6 +75,7 @@
   "BACKUP_ID_INVALID": "That backup id is not valid",
   "BAD_IDENTIFIER": "An invalid identifier was sent",
   "PROFILE_META_CORRUPT": "The profile information could not be read",
+  "PROFILE_WRITE_FAILED": "Could not save the profile — check free space and file permissions",
   "CONFIRM_REQUIRED": "Confirmation required",
   "ALREADY_REGISTERED": "This game is already registered — remove it first if you need to point it at a different file",
   "UNEXPECTED": "Unexpected error — please try again. If it persists, the cause is recorded in the plugin log under Decky settings.",

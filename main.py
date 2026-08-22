@@ -892,12 +892,27 @@ class Plugin:
                              **params)
         try:
             result = engine.save_profile(reg, appid, profile)
-        except (OSError, ValueError) as exc:
+        except ValueError as exc:
             # 손상된 `meta.json`은 도달 가능한 실제 상태다(쓰는 중 전원 차단 등).
             # 일반 `UNEXPECTED`로 뭉개면 복구 안내를 할 수 없다 — 사유를 밝힌다.
             # **동작은 M1과 같다: 아무것도 쓰지 않고 실패한다.**
+            # ★ **기록을 읽다 나는 것만 여기 온다**(§14-E′ 16판): 잘린 JSON은 `JSONDecodeError`,
+            #   인코딩이 깨진 기록은 `UnicodeDecodeError`이고 **둘 다 `ValueError` 하위이며
+            #   `OSError`가 아니다.** 그 읽기는 `store.load_meta`이고 **어떤 쓰기보다 앞**이라
+            #   위의 *"아무것도 쓰지 않고 실패한다"*가 이 갈래에서는 참이다.
             raise engine.Refused("거부: 프로필 정보가 손상되어 저장할 수 없습니다 — %s" % exc,
                                  code=codes.PROFILE_META_CORRUPT) from exc
+        except OSError as exc:
+            # ★ **기기 상태 문제는 「손상」이 아니다**(§14-E′ 16판). 디스크 가득참(`ENOSPC`)·슬롯
+            #   폴더 권한·그 밖의 입출력 실패가 예전에는 위 코드로 나가, 화면이 *"프로필 정보가
+            #   손상되어"*라 말하고 사용자는 **엉뚱한 복구**(재저장·백업 복원)를 시도했다 —
+            #   정작 해야 할 일은 공간을 비우거나 권한을 고치는 것이다.
+            # ⚠️ 여기서는 *"아무것도 쓰지 않고 실패한다"*가 **참이 아니다**: `store.write_profile`이
+            #   본체를 먼저 쓰고 기록을 나중에 쓰므로 **반쪽 상태가 남을 수 있다.** 그래서 이 갈래는
+            #   그 문장을 데려오지 않는다.
+            raise engine.Refused(
+                "거부: 프로필을 저장하지 못했습니다 (저장 공간이나 파일 권한을 확인해 주세요) — %s"
+                % exc, code=codes.PROFILE_WRITE_FAILED) from exc
         # ★ 덮어쓰기는 되돌리기 어려운 동작이다. **`save_registry`보다 먼저** 남긴다
         #   (QA R4 — 저장이 실패해도 프로필 파일은 이미 바뀐 뒤다).
         # ★ `outcome`을 같이 남긴다(R13): `already`는 **한 바이트도 안 쓴** 갈래라, 이 줄이

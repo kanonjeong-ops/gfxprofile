@@ -75,6 +75,7 @@
   "BACKUP_ID_INVALID": "백업 식별자가 올바르지 않습니다",
   "BAD_IDENTIFIER": "올바르지 않은 식별자가 전달되었습니다",
   "PROFILE_META_CORRUPT": "프로필 정보를 읽지 못했습니다",
+  "PROFILE_WRITE_FAILED": "프로필을 저장하지 못했습니다 — 저장 공간이나 파일 권한을 확인해 주세요",
   "CONFIRM_REQUIRED": "확인이 필요합니다",
   "ALREADY_REGISTERED": "이미 등록된 게임입니다 — 다른 파일로 바꾸려면 먼저 등록을 해제해야 합니다",
   "UNEXPECTED": "예기치 못한 오류가 발생했습니다 — 다시 시도해 보십시오. 반복되면 Decky 설정의 플러그인 로그에 원인이 남아 있습니다.",
