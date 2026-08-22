@@ -172,9 +172,21 @@ def delete_preview(reg, appid):
 
     미등록이면 여기서 `GAME_NOT_REGISTERED`가 난다(문은 `engine.game_or_fail` 하나).
 
-    판정 기준은 **meta 존재**다. `main._profile_ready`(meta ∧ 본체)와 일부러 다르다 —
-    저쪽은 *"적용할 수 있는가"*를 재고 여기는 *"지울 것이 있는가"*를 잰다. 본체가 없어도
-    meta가 있으면 지울 것이 있다.
+    판정 기준은 **본체 존재**다(`store.slot_body_exists` — 사용자 결정 D5, 2026-08-22).
+    ★★ **세는 쪽과 대피·삭제하는 쪽이 같은 목록을 돈다**: 그 술어는 `store.evacuable_names`를
+      그대로 부르고, 아래 `_evacuate`가 실제로 옮기는 것도 그 목록이다. 예전에는 여기만
+      **meta 존재**로 쟀다 — 그래서 **기록만 없고 본체는 멀쩡한 슬롯**에서 화면이
+      *"저장된 것 없음"*이라 말하고, 승인하면 실제로는 대피와 삭제가 일어났다.
+      손실은 없고 **화면만 사실과 달랐다.** 그 상태는 앱이 만든다(기록 쓰기 실패 · 삭제의
+      `rmtree` 중단 — 설계 §14-G ⓐ가 근거로 든 그 두 자리다).
+    ★ `main._profile_ready`(meta ∧ 본체)와는 **여전히 다르다**: 저쪽은 *"적용할 수 있는가"*라
+      기록까지 요구한다. 여기가 재는 것은 *"되찾을 내용이 있는가"*다.
+    ⚠️ 그래서 **기록만 남은 슬롯은 「없음」으로 뜬다.** 삭제가 그 `meta.json`을 지우기는 하지만
+      사용자가 잃는 **프로필 내용은 없다** — 이 줄이 말하는 것은 *"지울 파일이 하나라도 있는가"*가
+      아니라 *"되찾을 내용이 있는가"*다.
+    ⚠️ `saved_at`은 **그대로 기록에서 온다** — 「있는가」와 「언제인가」는 다른 축이고, 기록이
+      없으면 시각은 정말 모른다. 기록 없는 본체는 「있음」 + 빈 시각이 되어 화면이 그 자리를
+      *"저장 시각 미상"*으로 그린다(프론트에 이미 있는 갈래다).
 
     ★ `config_path`(§9-②)는 확인창의 *"설정 파일: {path}"* 한 줄이 쓴다 — **표시 전용**이다.
       대피본에는 meta가 없어(설계 §1-6) 원본 경로를 아는 곳이 삭제 **전**의 registry뿐이라,
@@ -207,14 +219,19 @@ def delete_preview(reg, appid):
     for profile in PROFILES:                    # ★ 슬롯 meta는 **슬롯당 한 번**만 읽는다
         metas[profile], digest = _meta_observe(appid, profile)
         digests.append(digest)
+    # ★ 「저장돼 있나」는 **본체 기준**이다(D5 — 위 독스트링이 정본). 술어를 여기 다시 적지 않고
+    #   `store.slot_body_exists`를 그대로 부른다: 그것이 곧 대피가 도는 목록(`evacuable_names`)이다.
+    #   바로 아래 `_evacuable_items`도 같은 목록을 도므로 **두 나열을 붙여 둔다** — 사이가 벌어지면
+    #   화면이 「있다」고 한 슬롯과 축출 예고가 센 슬롯이 갈릴 창이 생긴다.
+    bodies = {p: store.slot_body_exists(appid, p) for p in PROFILES}
     # ★ 링도 **한 번**만 나열한다 — 축출 예고·"현재 백업 N건"·링 지문이 전부 이 한 관측이다.
     ring = restore.ring_observe(appid, _evacuable_items(appid))
     config_path = entry.get("config_path")
     params = {
         "appid": appid,
         "name": name,
-        "has_dock": bool(metas["dock"]),
-        "has_internal": bool(metas["internal"]),
+        "has_dock": bodies["dock"],
+        "has_internal": bodies["internal"],
         "saved_at": {p: (metas[p] or {}).get("saved_at") or "" for p in PROFILES},
         "backups": ring["count"],
         "config_path": config_path if isinstance(config_path, str) else "",

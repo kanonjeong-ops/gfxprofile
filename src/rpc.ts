@@ -482,7 +482,7 @@ export const addGame = rpc<
  *
  * ⚠️ 이 값들은 확인창 전용이다 — 목록(`get_overview`)의 `has_dock`/`has_internal`과
  *   **섞어 쓰지 마라.** 저쪽은 *"적용할 수 있는가"*(meta ∧ 본체)를, 이쪽은
- *   *"지울 것이 있는가"*(meta)를 재서 판정 기준이 다르다.
+ *   *"지울 것이 있는가"*(본체)를 재서 판정 기준이 다르다.
  */
 export interface DeleteConfirmParams {
   confirm_token: string;

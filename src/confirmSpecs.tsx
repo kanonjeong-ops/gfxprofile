@@ -98,7 +98,7 @@ export function makeSaveConfirmSpec(
  * 개별 등록 해제 확인 — 무엇을 잃는지 말하고 확정을 받는다.
  *
  * 값은 전부 `delete_preview`가 준 `params`에서 온다. **`get_overview`의 값과 섞지 않는다** —
- * 저쪽은 *"적용할 수 있는가"*(meta ∧ 본체), 이쪽은 *"지울 것이 있는가"*(meta)라 기준이 다르고,
+ * 저쪽은 *"적용할 수 있는가"*(meta ∧ 본체), 이쪽은 *"지울 것이 있는가"*(본체)라 기준이 다르고,
  * 섞으면 확인창이 실제로 지워질 것과 다른 것을 말하게 된다.
  */
 export function makeDeleteConfirmSpec(
