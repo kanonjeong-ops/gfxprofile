@@ -6,6 +6,7 @@
 
 import hashlib
 import json
+import logging
 import os
 import pwd
 import re
@@ -13,6 +14,10 @@ import tempfile
 import time
 
 from . import codes
+
+#: 이 층의 로거. 판단은 안 하지만 **비치명으로 접은 실패**는 남겨야 한다
+#: (`atomic_write`의 디렉터리 fsync — 아래 D4). 이름 문법은 `gfxp.<모듈>`로 통일돼 있다.
+_log = logging.getLogger("gfxp.store")
 
 BACKUP_KEEP = 10
 REGISTRY_VERSION = 1
@@ -126,7 +131,18 @@ def count_lines(data):
 def atomic_write(path, data, mode=None, owner=None):
     """같은 디렉터리 tmp -> fsync -> os.replace. 도중에 죽어도 반쪽 파일이 남지 않는다 (G9).
 
-    디렉터리 자체도 fsync해서 rename이 메타데이터까지 내려가게 한다.
+    디렉터리도 fsync한다 — rename을 메타데이터까지 내리려는 것이다. ⚠️ **다만 그 fsync의 실패는
+    치명이 아니다**(사용자 결정 D4, 2026-08-23): 새 이름이 제자리에 있으면 로그만 남기고 넘어간다.
+    `os.replace`는 위 `try` 안이고 이 fsync는 **밖**이라, 예전에는 **본체를 덮은 뒤에** 예외가 났다 —
+    폴더를 열거하지 못하는 슬롯에 저장하면 화면은 *"프로필 정보가 손상되어 저장할 수 없습니다"*라
+    말하는데 본체는 이미 덮였고 기록만 옛 내용을 가리켜 **그 프로필은 적용도 안 됐다**(실측:
+    저장 `PROFILE_META_CORRUPT` → 적용 `PROFILE_CORRUPT`). 계약을 *"덮어쓰기 전에 반드시 대피한다"*에서
+    **"대피는 할 수 있을 때 한다"**로 낮춘 것이 그 처분이다.
+    ⚠️ **잃는 것의 범위를 알고 하는 것이다**: 이 함수는 공용이고 호출부가 **일곱**이다
+    (등록 정보 2 · 프로필 본체·기록 2 · 백업 1 · 적용 1 · 복원 1). 즉 앱이 파일을 쓰는 **모든**
+    자리의 내구성이 같이 낮아진다. 다만 **잃는 것은 「이름의 지속」이지 내용의 온전성이 아니다** —
+    파일 내용 자체는 위에서 이미 fsync하므로 깨진 파일이 남지는 않는다.
+    ★ **`durable=` 같은 인자로 범위를 좁히지 않는다**(D4) — 접착층이 끌 수 있는 가드가 되기 때문이다.
 
     `owner=(uid, gid)`를 주면 쓰기 후 소유자를 되돌린다.
     ⚠️ M1 주석은 이것을 *"Decky 백엔드가 root로 돌기 때문"*이라 적었는데 **틀린 전제였다**
@@ -156,11 +172,22 @@ def atomic_write(path, data, mode=None, owner=None):
         except OSError:
             pass
         raise
-    dir_fd = os.open(directory, os.O_RDONLY)
     try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
+        dir_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError as exc:
+        # ★ **새 이름이 제자리에 있을 때만** 접는다(D4). 없으면 쓰기가 성립하지 않은 것이므로
+        #   종전대로 올린다 — 안 쓴 것을 썼다고 말하지 않는다.
+        #   (열거가 막힌 폴더에서도 `exists`는 답한다: 실측상 `0300`은 `listdir`만 막히고
+        #    이름으로 여는 것은 된다.)
+        if not os.path.exists(path):
+            raise
+        # 좁게 잡는다 — `OSError`뿐이다. 넓게 잡으면 이 자리가 다른 실패까지 삼킨다.
+        _log.warning("atomic_write: 디렉터리 fsync 실패(비치명) path=%s dir=%s: %s: %s",
+                     path, directory, type(exc).__name__, exc)
 
 
 # ---------------------------------------------------------------- 레지스트리
