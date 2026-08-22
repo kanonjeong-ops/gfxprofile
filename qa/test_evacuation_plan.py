@@ -33,6 +33,16 @@
      구멍이 들어 있는 사본(`sbx-inv1-B2`)에서 FAIL한다. 미래의 재도입을 막는 자리다.
   ⓔ **링 상한은 그대로다** — 승격이 늘어도 `BACKUP_KEEP`칸을 넘지 않는다(기각된 보호집합 안이
      11·13칸으로 깨뜨렸던 자리다).
+  ⓖ **★ 계획 밖 키의 자체 판정도 「축출될 사본」을 근거로 삼지 않는다**(D-01, 2026-08-23).
+     ⓓ와 같은 「계획 뒤 본체가 바뀐다」인데 **링이 포화**이고 **최고령 칸이 바뀐 내용의 유일한
+     사본**이다. 자체 판정이 *호출 시점의 링*을 보면 그 최고령을 근거로 무쓰기가 되고,
+     **뒤 슬롯의 계획된 쓰기가 바로 그 칸을 축출**한다 — 내용이 슬롯에도 링에도 없다(**전손**).
+     **D1이 계획 경로에서 고친 병이 fallback 경로에 남아 있던 자리**이고 `c590d3c`에도 있었다.
+     ⚠️ 저장 갈래로는 재현되지 않는다 — 저장은 대피가 한 슬롯뿐이라 **뒤따르는 쓰기가 없어**
+     근거 사본이 축출되지 않는다. 두 슬롯을 차례로 옮기는 삭제라야 도달한다.
+  ⓗ **판정은 「동작 경계에서 한 번」이다 — 횟수로 잰다.** 승인 1회는 `plan_backups`를
+     **정확히 두 번**(고지 1 + 실행 1) 부른다. `>= 1`로만 재면 **계획 호출을 하나 더 넣은
+     구현이 그대로 통과한다**(실측 — 이종 검토 지적). 그래서 등식으로 잠근다.
   ⓕ **대피는 「할 수 있을 때」 한다**(사용자 결정 D4) — 슬롯 폴더를 **열거하지 못해도** 저장은
      성립한다. `store.atomic_write`는 `os.replace`가 `try` 안이고 디렉터리 fsync는 **밖**이라,
      예전에는 **본체를 덮은 뒤에** 예외가 났다: 화면은 *"프로필 정보가 손상되어 저장할 수
@@ -62,7 +72,7 @@ INTL = b"quality=intl\nshadows=low_\nsource=INTL-PROFILE\n"
 MOVED = b"quality=mvd_\nshadows=mid_\nsource=CHANGED-BEHIND-PLAN\n"
 
 #: 승격/무쓰기 계측. 세계마다 `reset()`하고 그 세계의 동작만 센다.
-COUNT = {"call": 0, "wrote": 0, "skipped": 0,
+COUNT = {"call": 0, "wrote": 0, "skipped": 0, "plan_calls": 0, "off_plan": 0,
          "promoted_write": 0, "promoted_plan": 0, "plan_fallback": 0}
 
 
@@ -102,6 +112,8 @@ def instrument(store):
         held = bool(store.backup_holds(store.list_backups(appid), safe, sha))
         plan = kw.get("plan")
         in_plan = plan is not None and (safe, sha) in plan
+        if plan is not None and not in_plan:
+            COUNT["off_plan"] += 1          # ★ 계획 밖 갈래에 **닿았다**(썼는지와 별개)
         out = real(appid, data, tag, filename, **kw)
         COUNT["call"] += 1
         if out:
@@ -132,6 +144,7 @@ def instrument_plan(store):
         return None
 
     def wrapped(entries, items):
+        COUNT["plan_calls"] += 1        # ★ **몇 번 판정했는가** — "한 번"이 계약의 절반이다
         out = real(entries, items)
         for tag, sha1 in out:
             if sha1 and store.backup_holds(entries, tag, sha1):
@@ -252,9 +265,13 @@ def main_test():                                                # noqa: C901  (�
             elif COUNT["promoted_plan"] < 1:
                 P("%s 승격이 0회다 — 축출될 사본을 여전히 근거로 믿었다 (계측: %s)"
                   % (tag, dict(COUNT)))
-            notes.append("%s 승격(판정시점) %d · 승격(쓸때도 중복) %d · 쓰기 %d · 무쓰기 %d"
-                         % (tag, COUNT["promoted_plan"], COUNT["promoted_write"],
-                            COUNT["wrote"], COUNT["skipped"]))
+            if COUNT["plan_calls"] != 2:
+                P("%s 계획 산출이 %d회다 — 승인 1회는 **고지 1 + 실행 1 = 정확히 2회**여야 한다. "
+                  "늘면 「동작 경계에서 한 번」이 깨진 것이고(관측이 갈린다), 줄면 고지나 실행이 "
+                  "계획을 안 본 것이다" % (tag, COUNT["plan_calls"]))
+            notes.append("%s 계획산출 %d회 · 승격(판정시점) %d · 승격(쓸때도 중복) %d · 쓰기 %d · 무쓰기 %d"
+                         % (tag, COUNT["plan_calls"], COUNT["promoted_plan"],
+                            COUNT["promoted_write"], COUNT["wrote"], COUNT["skipped"]))
             check_ring_cap(appid, tag)
 
         # ── ⓒ 음성 대조군 — 근거가 축출 꼬리 **밖**이면 승격하지 않는다 ──────
@@ -317,6 +334,59 @@ def main_test():                                                # noqa: C901  (�
                          % (extra, store.BACKUP_KEEP, len(names(appid)), store.BACKUP_KEEP,
                             len(promised), len(gone)))
 
+        real_read = store.read_bytes
+
+        # ── ⓖ 계획 밖 키의 판정도 **축출될 사본을 근거로 삼지 않는다** (D-01) ────
+        #    ⓓ와 같은 「계획 뒤 본체가 바뀐다」이지만 **링이 포화**이고 **최고령 칸이 바뀐 내용의
+        #    유일한 사본**이다. 계획 밖 판정이 「호출 시점의 링」을 보면 그 최고령을 근거로 삼아
+        #    무쓰기가 되고, **뒤 슬롯의 계획된 쓰기가 바로 그 칸을 축출**한다 — 내용이 슬롯에도
+        #    링에도 없다(전손). D1이 계획 경로에서 고친 병이 **fallback 경로에 남아 있던 자리**다.
+        #    ⚠️ 저장 갈래로는 재현되지 않는다: 저장은 대피가 한 슬롯뿐이라 **뒤따르는 쓰기가 없어**
+        #      근거 사본이 축출되지 않는다. 두 슬롯을 차례로 옮기는 삭제라야 도달한다.
+        appid = "9108"
+        build(appid)
+        witness(appid, "dock", MOVED)                 # 최고령 = 바뀐 뒤 내용의 **유일한** 사본
+        for i in range(store.BACKUP_KEEP - 1):
+            filler(appid, 200 + i)
+        only = holds(appid, store.profile_tag("dock"), MOVED)
+        if len(names(appid)) != store.BACKUP_KEEP or len(only) != 1 or names(appid)[-1] != only[0]:
+            P("ⓖ 계측기 무효 — 링 %d칸 · 근거 %d개 · 최고령 일치=%s"
+              % (len(names(appid)), len(only), only[:1] == names(appid)[-1:]))
+        else:
+            reset()
+            dockdir = store.profile_dir(appid, "dock")
+
+            def dock_moves(path):                     # **dock 본체만** 계획 뒤에 바뀐다
+                if str(path).startswith(dockdir):
+                    with open(path, "wb") as fh:
+                        fh.write(MOVED)
+                    return MOVED
+                return real_read(path)
+
+            store.read_bytes = dock_moves
+            try:
+                reg = store.load_registry()
+                remove.delete_game_data(reg, appid)
+                store.save_registry(reg)
+                gerr = None
+            except Exception as exc:                  # noqa: BLE001
+                gerr = "%s: %s" % (type(exc).__name__, exc)
+            finally:
+                store.read_bytes = real_read
+            alive = holds(appid, store.profile_tag("dock"), MOVED)
+            if gerr:
+                P("ⓖ 등록 해제가 실패했다 — %s" % gerr)
+            elif not alive:
+                P("ⓖ **전손** — 계획 밖 키가 「축출될 사본」을 근거로 무쓰기가 됐고, 뒤 슬롯의 "
+                  "쓰기가 그 사본을 축출했다. 그 내용이 슬롯에도 링에도 없다")
+            if COUNT["off_plan"] < 1:
+                P("ⓖ 계측기 무효 — 계획 밖 갈래에 한 번도 **닿지** 않았다 (계측: %s)" % dict(COUNT))
+            check_ring_cap(appid, "ⓖ")
+            notes.append("ⓖ 포화 링·최고령이 유일 근거: 생존 %d(≥1이어야 정상) · 계획밖 도달 %d · "
+                         "그중 쓰기 %d · 무쓰기 %d"
+                         % (len(alive), COUNT["off_plan"], COUNT["plan_fallback"],
+                            COUNT["skipped"]))
+
         # ── ⓕ 대피는 **할 수 있을 때** 한다 (D4) — 열거 못 해도 저장이 성립한다 ──
         #    `0300` = 쓰기·통과는 되고 **열거만 막힌다**(실측). 그래서 `evacuable_names`가
         #    조용히 빈 목록이 되어 대피가 0건이 되고, 그 다음 디렉터리 fsync가 실패한다.
@@ -360,8 +430,6 @@ def main_test():                                                # noqa: C901  (�
 
         # ── ⓓ D6 — 계획을 만든 뒤 본체가 바뀌면 **백업이 만들어진다** ─────────
         #    계획(`sha1_file`)과 쓰기(`read_bytes`) 사이의 창을 실제로 벌린다.
-        real_read = store.read_bytes
-
         def moving_read(path):
             if "%sprofiles%s" % (os.sep, os.sep) in str(path):
                 with open(path, "wb") as fh:              # 계획이 잡은 지문을 무효로 만든다
@@ -413,7 +481,8 @@ def main_test():                                                # noqa: C901  (�
                      % (COUNT["wrote"], COUNT["skipped"], COUNT["plan_fallback"]))
 
         print("대피 계획은 동작 경계에서 한 번 — ⓐ앞 / ⓑ뒤 / ⓒ음성 대조군(승격 0) / "
-              "ⓓD6 계획↔쓰기 창(저장·삭제) / ⓔ링 상한 / ⓕ열거 불가에도 저장 성립  "
+              "ⓓD6 계획↔쓰기 창(저장·삭제) / ⓔ링 상한 / ⓕ열거 불가에도 저장 성립 / "
+              "ⓖ계획 밖 판정도 축출될 사본을 안 믿는다  "
               "(데이터: %s)" % tmp)
         for n in notes:
             print("  계측: " + n)

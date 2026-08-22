@@ -132,7 +132,11 @@ export function makeDeleteConfirmSpec(
         {evictNote(params.evicted)}
         {/* ★ §9-② 설정 파일 경로 — 대피본에는 meta가 없어(§1-6) 원본 경로를 아는 곳이
             **삭제 전의 registry뿐**이다. 지우기 직전이 그 경로를 보여줄 마지막 기회다.
-            ⚠️ 빈 문자열이 올 수 있다(unsafe-key 분기는 entry를 읽지 않는다 — `remove.py:118-123`).
+            ⚠️ 빈 문자열이 올 수 있다 — unsafe-key 분기(`remove.delete_preview`에서
+              `_paths_in_position`이 거짓일 때)가 **경로를 신뢰할 수 없어 `config_path`를 싣지
+              않기** 때문이다. *"entry를 읽지 않는다"*가 아니다 — 그 분기도 `entry.get("name")`은
+              읽는다. **안 읽는 것은 외부(파일시스템)다.** (설계 §1-7·§9-② 형제와 같은 정정 —
+              한쪽을 고칠 때 다른 쪽을 함께 본다.)
               **빈 값이면 줄 자체를 그리지 않는다**(R-11 — 기존 "0이면 안 그림" 문법). */}
         {params.config_path ? <div style={PATH_STYLE}>{t("DELETE_CONFIRM_PATH", { path: params.config_path })}</div> : null}
         {/* ★ §9-① 재등록·복원 경로 예고 — "삭제 = 등록 해제 + 감지 제외"(A9)라 이 게임은
