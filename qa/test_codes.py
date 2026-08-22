@@ -98,7 +98,16 @@ def main():
     # 접착층 전용·경고 코드는 엔진에서 안 쓰는 것이 정상이므로 미사용을 실패로 보지 않는다.
     # (4집합 항등 중 **en/ko json 대조는 `test_i18n_sets.py` 5항의 소관**이다 — P5에서 그리로
     #  일원화했다. 여기서 또 만들면 같은 불변식이 두 곳에서 갈라진다.)
+    # ⚠️ **이 집합은 지금 합격/불합격에 관여하지 않는다**(2026-08-23 실측 — 늘리기 전에 읽을 것):
+    #   ① 쓰임은 바로 아래 `unused` 한 줄뿐이고 그 결과는 `problems`에 안 들어간다 — **print만 한다.**
+    #   ② `targets`(:74)가 **`main.py`를 포함**하므로 접착층 전용 코드도 어차피 `used`에 잡힌다.
+    #      → 그래서 `PROFILE_META_CORRUPT`는 **이미 무효항**이다(있으나 없으나 출력이 같다).
+    #   목록의 선언적 의도(*"엔진에서 안 쓰는 것이 정상인 코드"*)는 살아 있어 유지하되,
+    #   **무효한 목록을 말없이 키우면 다음 사람이 그것을 유효한 가드로 읽는다**(E27과 같은 성격).
+    #   가드로 만들려면 `unused`를 실패로 올려야 하는데, 그건 *"예비 코드를 남긴다"*는 기존 결정
+    #   (DESIGN-F6-F8 §5-2)과 정면으로 부딪친다 — 위 독스트링이 그 범위를 이미 적어 두었다.
     glue_only = {codes.BACKUP_ID_INVALID, codes.PROFILE_META_CORRUPT,
+                 codes.PROFILE_WRITE_FAILED,
                  codes.CONFIRM_REQUIRED, codes.UNEXPECTED,
                  codes.WARN_OUTSIDE_SCAN_ROOTS, codes.WARN_NOT_DISCOVER_CANDIDATE}
     unused = known - used - glue_only
