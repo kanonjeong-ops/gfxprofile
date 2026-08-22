@@ -14,6 +14,13 @@
 재현은 `store.read_bytes`가 **그 파일에 대해 한 번만** 다른 내용을 돌려주게 해서 만든다 —
 엔진이 판정 뒤에 다시 읽는 바로 그 지점이다. 재검증이 없으면 백업이 **안 생긴다**(=FAIL).
 
+### 3′·3″행 — `already`는 **기록이 아니라 본체**를 본다 (2026-08-22 · QA R2 N-1)
+슬롯 **본체만** 깨지고 meta는 멀쩡한 상태에서 게임 설정 파일이 마침 그 내용과 같으면, 기록
+기반 판정은 *"이미 적용됨"*이라 답한다 — 화면은 성공인데 프로필은 적용되지 않았다. 판정을
+`profile in matches`(본체 실측)로 하면 **묻고**, 승인하면 엔진이 `PROFILE_CORRUPT`로 거부한다
+(조기 거부는 하지 않는다 — 설계 §15-D E10). 3″행은 **본체 온전성 하나만** 되돌린 음성
+대조군이라, `already`를 통째로 없애는 변이가 3′행을 초록으로 통과하지 못한다.
+
 ### 거짓 검사 방지
 `already`(+0)와 `applied`(+1)를 같은 계측기로 재므로, 계측기가 고장 나(항상 0 또는 항상 1)
 있으면 둘 중 하나가 반드시 FAIL한다.
@@ -37,6 +44,7 @@ DOCK = b"quality=dock\nshadows=high\nsource=DOCK-PROFILE\n"
 INTERNAL = b"quality=intl\nshadows=low_\nsource=INTL-PROFILE\n"
 EDITED = b"quality=edit\nshadows=mid_\nsource=USER-EDITED-\n"
 EXTERNAL = b"quality=extn\nshadows=race\nsource=OUTSIDE-RACE\n"
+CORRUPT = b"quality=????\nshadows=????\nsource=CORRUPTED-BODY\n"
 
 
 def boot(tmp):
@@ -92,8 +100,11 @@ def main_test():                                                # noqa: C901  (�
         def backup_n():
             return len(store.list_backups(APPID))
 
+        rows = []                     # 갈래 수는 **세지 않고 잰다** — 손으로 적으면 어긋난다
+
         def measure(label, call, engine_called, backup_delta, outcome=None, code=None,
                     file_changes=None):
+            rows.append(label)
             before_n, before_sha = backup_n(), store.sha1_file(str(cfg))
             calls.clear()
             env = call()
@@ -134,6 +145,54 @@ def main_test():                                                # noqa: C901  (�
         cfg.write_bytes(DOCK)
         measure("3행 already", lambda: rpc(main, "apply_profile", APPID, "dock"),
                 engine_called=False, backup_delta=0, outcome="already", file_changes=False)
+
+        # ── 3′행 ★ 슬롯 **본체만** 깨졌다(meta는 멀쩡) → **`already`가 아니다** ─────
+        #
+        # 판정을 기록(`meta.sha1 == 디스크 sha1`)으로 하면 여기서 "이미 적용됨"이 나온다 —
+        # 화면은 성공이라 말하는데 dock 프로필은 **적용되지 않았다**(QA R2 N-1). 판정이 본체
+        # 실측(`profile in matches`)이면 「두 슬롯 모두와 다름」으로 떨어져 **묻고**, 승인하면
+        # 엔진이 `PROFILE_CORRUPT`로 정직하게 거부한다 — 조기 거부는 하지 않는다(설계 §15-D E10).
+        # ★ 이 갈래가 중요한 이유는 **타이밍**이다: 디스크에 그 내용이 그대로 있는 지금이
+        #   [저장] 한 번으로 슬롯을 되살릴 수 있는 유일하게 쉬운 순간인데, 거짓 성공이
+        #   그 사실을 가린다.
+        cfg.write_bytes(DOCK)
+        dock_body = pathlib.Path(store.profile_file_path(APPID, "dock"))
+        dock_meta = pathlib.Path(store.profile_meta_path(APPID, "dock"))
+        intact_body, intact_meta = dock_body.read_bytes(), dock_meta.read_bytes()
+        dock_body.write_bytes(CORRUPT)                    # meta는 손대지 않는다 — 본체만 깬다
+        main._CONFIRM_TOKENS.clear()
+        env = measure("3′행 본체 손상 → 묻는다", lambda: rpc(main, "apply_profile", APPID, "dock"),
+                      engine_called=False, backup_delta=0, code=codes.CONFIRM_REQUIRED,
+                      file_changes=False)
+        if env.get("ok") or (env.get("data") or {}).get("outcome") == "already":
+            P("★3′행 본체가 깨진 슬롯에 대고 봉투가 성공(`already`)이라 답한다 — 판정이 "
+              "본체가 아니라 **기록**을 보고 있다(QA R2 N-1)")
+        measure("3′행 승인 → 엔진이 거부",
+                lambda: rpc(main, "apply_profile", APPID, "dock",
+                            confirm_token=(env.get("params") or {}).get("confirm_token")),
+                engine_called=True, backup_delta=0, code=codes.PROFILE_CORRUPT,
+                file_changes=False)
+        if dock_body.read_bytes() != CORRUPT or dock_meta.read_bytes() != intact_meta:
+            P("3′행: 거부 갈래가 슬롯을 건드렸다")
+
+        # ── 3″행 음성 대조군 — 본체를 되살리면 **다시 `already`**이고 아무것도 안 바뀐다 ──
+        #
+        # 3′행과 **딱 하나(본체 온전성)만** 다르다. 이 대조가 없으면 `already`를 통째로
+        # 없애는 변이가 3′행을 초록으로 통과시킨다.
+        dock_body.write_bytes(intact_body)
+        ring_before = sorted(store.list_backups(APPID))
+        slots_before = {p: store.sha1_file(store.profile_file_path(APPID, p))
+                        for p in ("dock", "internal")}
+        main._CONFIRM_TOKENS.clear()
+        measure("3″행 정상 → 여전히 already", lambda: rpc(main, "apply_profile", APPID, "dock"),
+                engine_called=False, backup_delta=0, outcome="already", file_changes=False)
+        if sorted(store.list_backups(APPID)) != ring_before:
+            P("★3″행 무쓰기 갈래가 링을 건드렸다")
+        if {p: store.sha1_file(store.profile_file_path(APPID, p))
+                for p in ("dock", "internal")} != slots_before:
+            P("★3″행 무쓰기 갈래가 슬롯 본체를 건드렸다")
+        if dock_meta.read_bytes() != intact_meta:
+            P("★3″행 무쓰기 갈래가 meta를 건드렸다")
 
         # ── 4행 디스크 == 다른 슬롯 → 즉시 적용, **백업 없음** ───────────────
         cfg.write_bytes(INTERNAL)
@@ -208,7 +267,8 @@ def main_test():                                                # noqa: C901  (�
         finally:
             store.make_backup = real_backup
 
-        print("적용 상태표 4-A — 갈래 8종(4′ 재검증 포함) (데이터: %s)" % tmp)
+        print("적용 상태표 4-A — 갈래 %d종(4′ 재검증 · 3′ 본체 손상 포함) (데이터: %s)"
+              % (len(rows), tmp))
         if problems:
             print("\nFAIL")
             for p in problems:

@@ -331,9 +331,19 @@ def apply_needs_confirm(reg, appid, profile):
         meta = store.load_meta(appid, profile)
     except (OSError, ValueError):
         meta = None
-    # ★ 이 값이 곧 지문의 meta 칸이다 — 판정과 토큰이 **같은 한 번의 읽기**를 쓴다(§14-G ⓕ).
+    # ★ 이 값은 **지문의 meta 칸**이다(§14-G ⓕ) — 아래 판정은 이 값을 쓰지 않지만, 토큰은
+    #   여기서 **한 번만** 읽은 그 값을 쓴다(관측을 늘리지 않는다).
     target_sha1 = meta.get("sha1") if isinstance(meta, dict) else None
-    if target_sha1 and disk_sha1 and target_sha1 == disk_sha1:
+    # ★★ 「이미 같다」는 **기록이 아니라 본체 실측**이다(2026-08-22 — QA R2 N-1, 사용자 결정).
+    #   `target_sha1 == disk_sha1`로 판정하면 **본체만 깨진 슬롯**에 대고 화면이 *"이미
+    #   적용됨"*이라 답한다. 그 순간이 고치기 가장 쉬운 자리인데(디스크에 그 내용이 그대로
+    #   있어 [저장] 한 번이면 슬롯이 되살아난다) 앱이 침묵하고, 다른 프로필을 한 번 거치고 나면
+    #   같은 버튼이 `PROFILE_CORRUPT`로 막힌다 — 고칠 수 있던 시점을 놓치게 만든다.
+    #   복원의 `already`가 R14 #5에서 **같은 이유로** 이미 본체 실측이다 — 같은 문법이다.
+    # ⚠️ **추가 IO는 0이다**: `matches`는 두 줄 위(`_matching_profiles`)에서 이미 두 슬롯 양쪽에
+    #   `store.slot_holds`를 돌려 놓았다. 이 한 자리에서만 §15-D E18의 비용 근거가 성립하지
+    #   않는 이유이고, 그것이 여기만 고치는 근거다(나머지 셋은 게임 수만큼 비용이 붙는다).
+    if profile in matches:
         return "already", params, None
     if matches:
         return "proceed", params, None               # 다른 슬롯과 같다 — 그 내용은 보존돼 있다
