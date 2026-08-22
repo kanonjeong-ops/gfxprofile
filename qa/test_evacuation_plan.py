@@ -33,6 +33,12 @@
      구멍이 들어 있는 사본(`sbx-inv1-B2`)에서 FAIL한다. 미래의 재도입을 막는 자리다.
   ⓔ **링 상한은 그대로다** — 승격이 늘어도 `BACKUP_KEEP`칸을 넘지 않는다(기각된 보호집합 안이
      11·13칸으로 깨뜨렸던 자리다).
+  ⓘ **★ 비포화 링에서는 아무도 안 밀려난다 — 그때 증인은 믿어야 한다**(N-01, 2026-08-23).
+     ⓒ의 형제이고 **경계를 재는 쪽**이다: ⓒ는 근거 사본을 링 **한가운데**에 두어 *"살아남는 꼬리의
+     경계"*를 안 잰다. 여기서는 링이 **`BACKUP_KEEP`보다 한 칸 적고** 근거가 **최고령**이라,
+     꼬리를 한 칸이라도 과대평가하면 곧바로 증인을 불신한다. 그러면 정상 중복이 쓰이고
+     **확인창이 예고하지 않은 백업이 삭제된다**(실측 — 우리가 D-01을 고치며 만든 결함이다).
+     ⚠️ 판정을 `BACKUP_KEEP - len(plan)` 꼴로 쓰면 **링이 가득 찼다고 가정**하는 것이라 여기서 깨진다.
   ⓖ **★ 계획 밖 키의 자체 판정도 「축출될 사본」을 근거로 삼지 않는다**(D-01, 2026-08-23).
      ⓓ와 같은 「계획 뒤 본체가 바뀐다」인데 **링이 포화**이고 **최고령 칸이 바뀐 내용의 유일한
      사본**이다. 자체 판정이 *호출 시점의 링*을 보면 그 최고령을 근거로 무쓰기가 되고,
@@ -336,6 +342,41 @@ def main_test():                                                # noqa: C901  (�
 
         real_read = store.read_bytes
 
+        # ── ⓘ 비포화 링 + 근거가 최고령 → **무쓰기 · 축출 0** (N-01) ──────────
+        #    링이 `BACKUP_KEEP`보다 적으면 이 동작이 써도 **아무도 안 밀려난다.** 그러면 최고령
+        #    사본도 살아남으므로 **믿어야 한다.** 여기서 불신하면 정상 중복이 쓰이고, 확인창은
+        #    축출 0건이라 아무 이름도 대지 않았는데 **백업이 하나 사라진다.**
+        appid = "9109"
+        build(appid)
+        witness(appid, "dock", DOCK)                  # 최고령 = dock 내용의 근거 사본
+        for i in range(store.BACKUP_KEEP - 2):        # 링 = KEEP - 1 (비포화)
+            filler(appid, 300 + i)
+        seat = holds(appid, store.profile_tag("dock"), DOCK)
+        if (len(names(appid)) != store.BACKUP_KEEP - 1 or len(seat) != 1
+                or names(appid)[-1] != seat[0]):
+            P("ⓘ 계측기 무효 — 링 %d칸(%d이어야 한다) · 근거 %d개 · 최고령 일치=%s"
+              % (len(names(appid)), store.BACKUP_KEEP - 1, len(seat),
+                 seat[:1] == names(appid)[-1:]))
+        else:
+            promised, rows, gone, done, ask = delete_via_route(appid)
+            if not done.get("ok"):
+                P("ⓘ 등록 해제가 실패했다 — code=%s" % done.get("code"))
+            else:
+                if gone:
+                    P("ⓘ **예고에 없던 백업이 사라졌다** — 예고=%s / 실제 사라짐=%s. 링이 가득 차지 "
+                      "않아 아무도 안 밀려나는데 정상 중복을 썼다" % (promised, gone))
+                if seat[0] not in names(appid):
+                    P("ⓘ 최고령 근거 사본이 사라졌다 — %s (살아남을 자리인데 축출됐다)" % seat[0])
+                if COUNT["skipped"] < 1:
+                    P("ⓘ 정상 중복이 무쓰기로 접히지 않았다 — 계측: %s" % dict(COUNT))
+                if promised:
+                    P("ⓘ 축출 예고가 비어 있지 않다 — %s (비포화 링이라 0건이어야 한다)" % promised)
+                check_ring_cap(appid, "ⓘ")
+                notes.append("ⓘ 비포화(%d칸)·근거가 최고령: 예고 %d · 실제축출 %d · 무쓰기 %d · "
+                             "증인 생존 %s · 링 %d"
+                             % (store.BACKUP_KEEP - 1, len(promised), len(gone),
+                                COUNT["skipped"], seat[0] in names(appid), len(names(appid))))
+
         # ── ⓖ 계획 밖 키의 판정도 **축출될 사본을 근거로 삼지 않는다** (D-01) ────
         #    ⓓ와 같은 「계획 뒤 본체가 바뀐다」이지만 **링이 포화**이고 **최고령 칸이 바뀐 내용의
         #    유일한 사본**이다. 계획 밖 판정이 「호출 시점의 링」을 보면 그 최고령을 근거로 삼아
@@ -482,7 +523,7 @@ def main_test():                                                # noqa: C901  (�
 
         print("대피 계획은 동작 경계에서 한 번 — ⓐ앞 / ⓑ뒤 / ⓒ음성 대조군(승격 0) / "
               "ⓓD6 계획↔쓰기 창(저장·삭제) / ⓔ링 상한 / ⓕ열거 불가에도 저장 성립 / "
-              "ⓖ계획 밖 판정도 축출될 사본을 안 믿는다  "
+              "ⓖ계획 밖 판정도 축출될 사본을 안 믿는다 / ⓘ비포화 링에서는 증인을 믿는다  "
               "(데이터: %s)" % tmp)
         for n in notes:
             print("  계측: " + n)
