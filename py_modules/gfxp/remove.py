@@ -386,15 +386,53 @@ def reset_fingerprint(reg):
     return store.sha1_bytes(("%s#%s" % (reg_sha, games)).encode("utf-8"))
 
 
+def _delete_failed(appid, stage, message, *, profile_delete_started, cause=None):
+    """★ `DELETE_FAILED`의 **단일 생성점.** 이 코드를 만드는 함수는 여기 하나뿐이다
+    (`qa/test_delete_game.py`가 소스를 AST로 읽어 「하나뿐임」을 잠근다).
+
+    ★★ 왜 한 곳으로 모으는가 — 이 코드는 화면에서 **두 문장으로 갈린다.**
+      *"프로필 데이터가 이미 일부 또는 전부 지워졌을 수 있습니다"*와
+      *"등록 정보와 프로필 데이터는 지우지 않았습니다"*는 서로 부정이라, 갈림이 틀리면
+      **화면이 거짓을 말한다.** 그 갈림의 근거를 `stage` 문자열 화이트리스트에 매달면 새
+      거부 자리를 만든 사람이 목록 갱신을 잊는 순간 조용히 거짓이 된다 — 게다가 같은
+      `"escape"`를 `restore.py`가 **다른 코드**(`BACKUP_OUT_OF_ROOT`)에도 쓴다.
+      → 갈림의 근거를 **필수 키워드 인자**로 올린다. 안 실으면 TypeError로 즉시 죽는다.
+      (「막기」가 아니라 구조다 — 잊을 수 있는 자리 자체가 없어진다.)
+
+    ★ `profile_delete_started=False`의 뜻은 **「등록 정보와 프로필 데이터의 삭제 단계가
+      시작되지 않았다」**다. ⚠️ *"아무것도 안 바뀌었다"*가 **아니다** — 삭제 전에 슬롯
+      본체를 백업으로 대피시키므로, 한 슬롯을 대피시킨 뒤 다음 슬롯에서 거부되면
+      **백업 링은 이미 바뀌어 있다.** 그래서 안전 문구의 주어를 「등록 정보와 프로필
+      데이터」로 한정한다. `True`는 삭제 단계 안에서 멈췄다 = 부분 삭제가 남을 수 있다.
+      (계약 원문은 `src/rpc.ts`의 `deleteGame` — `DELETE_FAILED`의 `params` 계약.)
+
+    ★ `stage`는 **진단용 단계 이름**이다. 화면 분기의 근거로 쓰지 않는다.
+    """
+    #: 두 갈래(원인 예외 연결 유무)가 **같은 인자**를 쓴다 — 한 곳에서만 만든다.
+    #: `raise engine.Refused(...)`를 직접 두 번 쓰는 이유는 `qa/test_codes.py`가
+    #: `raise Refused(code=codes.X)` **호출 형태**를 AST로 훑기 때문이다. 여기서 예외를
+    #: 변수에 담아 `raise 이름`으로 던지면 그 검사의 시야에서 이 자리가 사라진다.
+    params = dict(appid=str(appid), stage=stage,
+                  profile_delete_started=profile_delete_started)
+    if cause is None:
+        raise engine.Refused(message, code=codes.DELETE_FAILED, **params)
+    raise engine.Refused(message, code=codes.DELETE_FAILED, **params) from cause
+
+
 def _fail(appid, stage, exc, path=None):
     """진단 가능성을 남기고 거부한다 — `DELETE_FAILED`는 **부분 삭제 상태를 남길 수 있는
-    유일한 실패 경로**라, `UNEXPECTED`로 뭉개면 사용자가 "지워진 것인가"를 알 수 없다."""
+    유일한 실패 경로**라, `UNEXPECTED`로 뭉개면 사용자가 "지워진 것인가"를 알 수 없다.
+
+    ★ 이 문을 지나는 것은 `meta`·`rmtree` — **삭제 단계 안에서** 실패한 자리뿐이다.
+      그래서 `profile_delete_started=True`다. 시작 전 거부(`escape`)는 여기로 오지 않고
+      `_delete_failed(..., profile_delete_started=False)`를 직접 부른다."""
     _log.error("delete failed appid=%s stage=%s path=%s: %s: %s",
                appid, stage, path or "", type(exc).__name__, exc)
-    raise engine.Refused(
+    _delete_failed(
+        appid, stage,
         "거부: 삭제 도중 실패했습니다 (단계: %s) — %s\n"
         "  다시 삭제하면 남은 것부터 이어서 지웁니다." % (stage, exc),
-        code=codes.DELETE_FAILED, appid=appid, stage=stage) from exc
+        profile_delete_started=True, cause=exc)
 
 
 def _backup_failed(appid, exc, path):
@@ -449,10 +487,13 @@ def _evacuate(appid, profile, plan=None):
         if os.path.islink(path):
             _log.error("delete refused appid=%r stage=escape slot=%s name=%s (링크된 파일)",
                        appid, profile, name)
-            raise engine.Refused(
+            # 대피 전이라 **등록 정보·프로필 데이터의 삭제 단계는 시작되지 않았다.**
+            # (앞 슬롯의 대피는 이미 끝났을 수 있다 → 백업 링까지 부정하지는 않는다.)
+            _delete_failed(
+                appid, "escape",
                 "거부: 프로필 안에 링크된 파일이 있습니다 — %s\n"
                 "  링크를 따라가면 외부 파일을 백업에 복사하게 됩니다. 지우지 않았습니다." % path,
-                code=codes.DELETE_FAILED, appid=str(appid), stage="escape")
+                profile_delete_started=False)
 
     # ── 대피 — **세는 목록과 같은 함수**를 돈다(R14 #1) ─────────────────────────
     #   확인창이 약속한 축출 수는 `store.evacuable_names`에서 산출된다. 지우는 쪽이 다른 목록을
@@ -483,6 +524,11 @@ def delete_game_data(reg, appid):
     `reg`를 제자리에서 고친다. 저장은 호출자가 한다(엔진 문법 그대로).
     실패는 전부 `Refused`다 — `BACKUP_FAILED`(1단계, 원본 무손실) 또는
     `DELETE_FAILED`(2·3단계, 부분 삭제 상태 가능 · `stage`로 어디서 멈췄는지 알린다).
+
+    ⚠️ 바로 위 줄은 **`stage`로 진단한다**는 뜻이지 화면이 `stage`로 갈린다는 뜻이 아니다.
+      `DELETE_FAILED`는 **0단계(경로 봉쇄)와 대피 중 링크 게이트**에서도 난다 — 그쪽은
+      아직 아무것도 지우지 않은 거부다. 화면이 두 경우를 가르는 근거는 `stage`가 아니라
+      `_delete_failed`가 싣는 `profile_delete_started` **한 필드**다(그 helper 참조).
     """
     appid = str(appid)
     entry = engine.game_or_fail(reg, appid)
@@ -505,10 +551,12 @@ def delete_game_data(reg, appid):
     if not _paths_in_position(appid):
         _log.error("delete refused appid=%r stage=escape (경로 봉쇄 — profiles/슬롯/backups 제자리 아님)",
                    appid)
-        raise engine.Refused(
+        # 모든 쓰기보다 먼저다 → 대피조차 시작하지 않았다(`profile_delete_started=False`).
+        _delete_failed(
+            appid, "escape",
             "거부: 삭제 대상 경로가 이 플러그인의 데이터 루트 안 제자리가 아닙니다.\n"
             "  등록 정보가 손상됐을 수 있습니다. 지우지 않았습니다.",
-            code=codes.DELETE_FAILED, appid=appid, stage="escape")
+            profile_delete_started=False)
 
     # ── 1. 대피 (실패 → BACKUP_FAILED, 전체 중단 · 원본 무손실) ──────────────────
     evacuated = {}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """전체 초기화의 계약. 설계 정본 DESIGN-DELETE §2-B·§3-B·§6-B.
 
-이 파일이 잠그는 것 4가지:
+이 파일이 잠그는 것:
   ① **challenge 튜플 바인딩** — type-to-confirm의 판정이 백엔드에 있는가(프론트가 틀려도 막히는가).
      ★ 그중 핵심은 **registry가 안 변하는 변경**이다: `engine.save_profile`은 `reg`를 바꾸지
        않으므로 확인창을 띄운 사이 **다른 슬롯에 저장해도 registry.json의 sha1이 그대로**다.
@@ -15,6 +15,11 @@
      `_VALIDATORS`를 지나지 않는다. registry의 games **키**가 그대로 경로가 되므로
      `"../../X"`·절대경로 키로 **데이터 루트 밖이 rmtree 되던** 실결함이 있었다.
      봉쇄는 문 안 한 곳(`remove.delete_game_data`)이고, 여기서는 제품 경로로 그 문을 지난다.
+  ⑦ ★ **결과 봉투가 「실제로 지운 범주」를 말한다**(QA DEFECT-05) — `counts.deleted`는
+     **게임만** 센다. 초기화는 registry를 통째로 갈아 끼우므로 표시 이름·감지 제외도 같이
+     사라지는데, 그 둘을 아무도 말하지 않으면 등록 0 · 제외 N인 상태에서 화면이 *"0개 삭제"*
+     라고 말하는 사이 N건이 조용히 사라진다. 봉투의 `cleared`가 「지우려 했던 것」이 아니라
+     **지운 것**인지를 부분 실패까지 포함해 잰다.
 그리고 관통 단언: registry는 **통째로 공장초기화**(settings·gpu_map 포함) · 게임 설정 파일
 원본은 1바이트도 안 바뀐다.
 
@@ -58,10 +63,10 @@ def main_test():                                                # noqa: C901  (�
     locked = []
     try:
         main = boot(tmp)
-        from gfxp import codes, engine, store
+        from gfxp import codes, engine, exclude, labels, store
         problems = []
 
-        state = {"by_id": {}, "left": []}
+        state = {"by_id": {}, "left": [], "cleared": None}
 
         def P(msg):
             problems.append(msg)
@@ -70,9 +75,10 @@ def main_test():                                                # noqa: C901  (�
             """★ 사전 조건이 무너지면 **여기로 빠져나온다.** 그냥 진행하면 뒤 절이
             traceback으로 죽어 정작 무엇이 깨졌는지가 화면에서 사라진다(진단이 사라지는 실패)."""
             print("전체 초기화 계약 — challenge 바인딩 6종(★registry 불변 변경 포함) · "
-                  "실패 격리 · backups 불가침 · 0게임 · ★레지스트리 버전 가드(U5)  "
-                  "(데이터: %s)" % tmp)
-            print("  결과: %s / registry 잔존=%s" % (state["by_id"], state["left"]))
+                  "실패 격리 · backups 불가침 · 0게임 · ★레지스트리 버전 가드(U5) · "
+                  "★결과 봉투 cleared(DEFECT-05)  (데이터: %s)" % tmp)
+            print("  결과: %s / registry 잔존=%s / cleared=%s"
+                  % (state["by_id"], state["left"], state["cleared"]))
             if problems:
                 print("\nFAIL")
                 for p in problems:
@@ -104,6 +110,10 @@ def main_test():                                                # noqa: C901  (�
         env = rpc(main, "reset_all", confirm_token=tok, confirm_text="delete")
         if not env.get("ok") or (env.get("data") or {}).get("results") != []:
             P("④ 0게임 초기화가 정상 종료하지 않았다 — %s" % env)
+        # ⑦ 봉투의 모양은 지울 것이 없어도 같다. 없으면 화면이 `undefined`를 읽는다.
+        if (env.get("data") or {}).get("cleared") != {"named": 0, "excluded": 0}:
+            P("⑦ 0게임 봉투에 cleared가 없거나 0/0이 아니다 — %s"
+              % (env.get("data") or {}).get("cleared"))
 
         # ═══════════════════════════════════════════════════════════════════
         # 합성 세계 — 게임 3개, settings·gpu_map을 일부러 더럽혀 둔다
@@ -122,6 +132,14 @@ def main_test():                                                # noqa: C901  (�
             cfgs[appid] = cfg
         reg["settings"].update(auto_apply=True, mode_override="dock", last_appid="222")
         reg["gpu_map"] = {"0000:03:00.0": "dock"}
+        # ★ 표시 이름 2개·감지 제외 2건도 같이 심는다(DEFECT-05). 이 둘은 `counts.deleted`가
+        #   세지 않는 범주라, 봉투가 따로 말하지 않으면 사라진 사실이 화면 어디에도 안 남는다.
+        #   제외 appid는 등록 게임과 **겹치지 않게** 고른다 — 겹치면 무엇이 무엇을 지웠는지
+        #   구분이 안 돼 이 절이 아무것도 증명하지 못한다.
+        labels.set_name(reg, "dock", "내 독 프로필")
+        labels.set_name(reg, "internal", "내 내장 프로필")
+        exclude.add(reg, "8801", "제외한 게임 A")
+        exclude.add(reg, "8802", "제외한 게임 B")
         store.save_registry(reg)
         cfg_bytes = {a: cfgs[a].read_bytes() for a in APPIDS}
 
@@ -204,6 +222,16 @@ def main_test():                                                # noqa: C901  (�
             if row.get("code"):
                 P("② %s는 성공인데 code가 실렸다(%s) — 화면이 정상을 문제로 센다" % (rid, row["code"]))
 
+        # ⑦ ★ **게임별 실패가 있어도** cleared는 「지운 것」과 일치한다(DEFECT-05).
+        #   222가 남았다고 표시 이름·제외가 되살아나지는 않는다 — 되심는 것은 `games`뿐이다.
+        #   즉 여기서 기대값은 「지우려 했던 것」과 같은 2/2이고, 그 근거는 바로 아래 절의
+        #   "settings가 공장초기화됐다" 단언이다. 둘을 **같은 자리에서** 재야 한 쪽만 무너진
+        #   상태(예: 실패분과 함께 settings까지 되살림)를 볼 수 있다.
+        state["cleared"] = data.get("cleared")
+        if data.get("cleared") != {"named": 2, "excluded": 2}:
+            P("★⑦ 부분 실패에서 cleared가 「지운 것」과 어긋난다 — 표시 이름 2·제외 2를 "
+              "지워 놓고 봉투는 %s라고 말한다" % data.get("cleared"))
+
         after = store.load_registry()
         state["left"] = sorted(after["games"])
         if set(after["games"]) != {"222"}:
@@ -249,9 +277,55 @@ def main_test():                                                # noqa: C901  (�
         env = rpc(main, "reset_all", confirm_token=tok, confirm_text="delete")
         if not env.get("ok") or store.load_registry()["games"]:
             P("재시도가 완결되지 않았다 — %s" % env)
+        if ((env.get("data") or {}).get("cleared") or {}).get("excluded") != 1:
+            P("⑦ 제외 1건을 지웠는데 봉투의 cleared.excluded가 1이 아니다 — %s"
+              % (env.get("data") or {}).get("cleared"))
         if store.load_registry()["settings"].get("discover_excluded"):
             P("★ 전체 초기화가 감지 제외 목록을 안 지웠다 — A9 ④ (%s)"
               % store.load_registry()["settings"].get("discover_excluded"))
+
+        # ═══════════════════════════════════════════════════════════════════
+        # ⑦ ★ 등록 0 · 제외 N — DEFECT-05의 **바로 그 시나리오**
+        #
+        #   지울 게임이 하나도 없으므로 `counts.deleted`는 0이다. 그런데 감지 제외 N건과
+        #   표시 이름은 실제로 사라진다. 봉투가 `cleared`로 말하지 않으면 화면이 가진 수는
+        #   0뿐이고, 사용자는 **무엇을 잃었는지 알 방법이 없다.**
+        # ═══════════════════════════════════════════════════════════════════
+        reg = store.load_registry()
+        if reg["games"]:
+            P("⑦ 사전 조건 실패 — 등록 0 상태가 아니다(%s). 이 절은 「deleted=0인데 지워진 것이 "
+              "있다」를 재는 자리다" % sorted(reg["games"]))
+        for appid, label in (("9001", "제외 A"), ("9002", "제외 B"), ("9003", "제외 C")):
+            exclude.add(reg, appid, label)
+        labels.set_name(reg, "dock", "독 이름만 바꿔 둔다")
+        store.save_registry(reg)
+
+        tok, params = ask()
+        if params.get("games") != 0 or params.get("excluded") != 3 or params.get("named") != 1:
+            P("⑦ 사전 조건 실패 — 확인창이 0게임/제외3/이름1을 말하지 않는다 (%s)" % params)
+        env = rpc(main, "reset_all", confirm_token=tok, confirm_text="delete")
+        data = env.get("data") or {}
+        if not env.get("ok"):
+            P("⑦ 등록 0·제외 3 초기화가 실패했다 — %s" % env)
+        if (data.get("counts") or {}).get("deleted"):
+            P("⑦ 등록 0인데 counts.deleted가 실렸다(%s) — 이 절의 전제가 무너졌다"
+              % (data.get("counts") or {}).get("deleted"))
+        state["cleared"] = data.get("cleared")
+        if data.get("cleared") != {"named": 1, "excluded": 3}:
+            P("★⑦ 등록 0·제외 3·표시이름 1인데 봉투가 cleared=%s라고 말한다 — 화면이 셀 수 있는 "
+              "수가 deleted=0뿐이라 「0개 삭제」라고 말하며 4건을 조용히 잃는다(DEFECT-05)"
+              % data.get("cleared"))
+        left_settings = store.load_registry()["settings"]
+        if left_settings != store.default_registry()["settings"]:
+            P("★⑦ 초기화 뒤 settings가 공장 기본이 아니다(%s) — cleared가 「지운 것」이라는 "
+              "근거 자체가 무너진다" % left_settings)
+
+        # ⑦-b 지울 것이 하나도 없으면 cleared는 0/0이다 — 없던 일을 사건처럼 말하지 않는다.
+        tok, _ = ask()
+        env = rpc(main, "reset_all", confirm_token=tok, confirm_text="delete")
+        if ((env.get("data") or {}).get("cleared")) != {"named": 0, "excluded": 0}:
+            P("⑦-b 지울 것이 없는데 cleared가 0/0이 아니다 — %s"
+              % (env.get("data") or {}).get("cleared"))
 
         # ═══════════════════════════════════════════════════════════════════
         # ⑤ ★ 경로 탈출 봉쇄 (QA 반려 ① — 실피해가 재현됐던 자리)

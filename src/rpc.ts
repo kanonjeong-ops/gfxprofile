@@ -529,6 +529,20 @@ export interface DeleteResult {
  *   저장되면 무효가 되고 갱신된 `params`와 함께 `CONFIRM_REQUIRED`가 다시 온다(TOCTOU).
  * ⚠️ `DELETE_FAILED`는 **부분 삭제 상태**를 남길 수 있는 유일한 코드다(`params.stage`에
  *   어디서 멈췄는지가 실린다). 다시 삭제하면 남은 것부터 이어서 지운다.
+ *
+ * ── `DELETE_FAILED`의 `params` 계약 (QA DEFECT-06) ────────────────────────────
+ * - `stage`: **진단용 단계 이름**이다. 화면 분기의 근거로 쓰지 마라 — 같은 문자열
+ *   `"escape"`를 **다른 코드**(`restore.py`의 `BACKUP_OUT_OF_ROOT`)도 쓰므로 이 값만으로는
+ *   "무엇이 지워졌나"가 결정되지 않는다.
+ * - `profile_delete_started`: **화면이 읽어야 하는 사실 필드.**
+ *   - `false` — 등록 정보와 프로필 데이터의 **삭제 단계가 시작되지 않았다.** 그 둘은 그대로다.
+ *     ★ 이것은 *"아무것도 안 바뀌었다"*가 **아니다** — 삭제 전에 슬롯 본체를 백업으로 대피시키므로
+ *       **백업 링은 이미 바뀌어 있을 수 있다**(한 슬롯 대피 성공 후 다음 슬롯에서 거부되는 경로).
+ *       그래서 안전 문구의 주어를 「등록 정보와 프로필 데이터」로 한정한다.
+ *   - `true` — 프로필 데이터가 **일부 지워졌을 수 있다.** 다시 삭제하면 남은 것부터 이어서 지운다.
+ *   ⚠️ 필드가 없거나 boolean이 아니면 **`true`처럼 보수적으로** 다뤄라(안전 단언을 기본값으로
+ *     삼지 않는다). 백엔드는 이 필드를 `DELETE_FAILED` **단일 생성점**에서만 싣고,
+ *     `qa/test_delete_game.py`가 그 단일 생성점과 각 경로의 값을 잠근다.
  */
 export const deleteGame = rpc<[appid: string, confirm_token?: string], DeleteResult>("delete_game");
 
@@ -578,6 +592,25 @@ export interface ResetRow {
 export interface ResetAllResult {
   results: ResetRow[];
   counts: Partial<Record<ResetOutcome, number>>;
+  /**
+   * 초기화가 **실제로 지운 registry `settings` 범주**의 건수(QA DEFECT-05).
+   *
+   * ★ 왜 결과 봉투가 들고 오나: 완료 문구가 「무엇이 사라졌는지」를 말하려면 세 범주(등록 게임·
+   *   표시 이름·감지 제외)를 다 알아야 하는데, `counts.deleted`는 **게임만** 센다. 그것만으로
+   *   문장을 만들면 등록 0 · 제외 N인 상태에서 화면이 *"0개 삭제"*라고 말하면서 제외 N건과
+   *   표시 이름을 조용히 잃는다 — **화면이 거짓을 말하는** 자리였다.
+   * ★★ **프론트가 다시 세지 않는다**(`counts`와 같은 규칙 — 두 곳에서 세면 언젠가 어긋난다).
+   *   확인창 `params`의 `named`/`excluded`와 **다른 시점의 값**이므로 그쪽을 재사용하지도 않는다.
+   * ⚠️ 게임별 실패와 **무관하게** 유효하다: `reset_all`은 `default_registry()`에 실패분 게임만
+   *   되심으므로(`main.py` — `fresh["games"] = dict(reg["games"])`), `settings`는 부분 실패에도
+   *   통째로 갈린다. 즉 이 두 수는 「지우려 했던 것」이 아니라 **지운 것**이다.
+   */
+  cleared: {
+    /** 사용자가 정한 프로필 표시명 수. 0이면 완료 문구가 그 줄을 그리지 않는다. */
+    named: number;
+    /** 감지 제외 목록의 건수. 0이면 완료 문구가 그 줄을 그리지 않는다. */
+    excluded: number;
+  };
 }
 
 /**

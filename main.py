@@ -1239,6 +1239,18 @@ class Plugin:
                          evicted=evict["evicted"], evict_games=evict["evict_games"],
                          challenge=_RESET_CHALLENGE)
 
+        # ★★ 「지운 것」의 수는 **파괴 전에** 센다(QA DEFECT-05). 아래에서 `default_registry()`가
+        #   settings를 통째로 갈아 끼우고 되심는 것은 `games`뿐이므로, 지금 registry에 있는
+        #   표시명·감지 제외 항목은 게임별 성패와 **무관하게** 전부 사라진다. 즉 이 두 수는
+        #   「지우려 했던 것」이 아니라 **지운 것**이다.
+        # ★ 세는 함수는 위 확인창 params와 **같은 것**이다 — 두 곳에서 다르게 세면 언젠가 갈린다.
+        #   다만 **시점이 다르다**: 저기는 토큰 발급 시점, 여기는 실행 시점이다. 그래서 화면도
+        #   확인창의 수를 완료 문구에 재사용하지 않고 이 봉투의 값을 쓴다.
+        # ⚠️ `counts.deleted`는 **게임만** 센다. 그것 하나로 완료 문구를 만들면 등록 0 · 제외 N인
+        #   상태에서 화면이 *"0개 삭제"*라고 말하는 사이 제외 N건과 표시 이름이 조용히 사라진다.
+        cleared = {"named": labels.custom_count(reg),
+                   "excluded": len(exclude.excluded_map(reg))}
+
         results = []
         for appid in sorted(reg["games"]):                 # sorted가 사본이라 순회 중 pop해도 안전
             entry = reg["games"].get(appid) or {}
@@ -1273,7 +1285,7 @@ class Plugin:
             "reset_all session=%s counts=%s outcomes=%s problems=%s",
             SESSION, counts, {r["appid"]: r["outcome"] for r in results}, problems)
         _save_registry(fresh)
-        return _ok(results=results, counts=counts)
+        return _ok(results=results, counts=counts, cleared=cleared)
 
     # ── 표시명 (F11 ①) ───────────────────────────────────────────────────────
     @route

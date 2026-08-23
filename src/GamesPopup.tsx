@@ -609,6 +609,23 @@ export function GamesPopup({
         }
         // `DELETE_FAILED`(부분 삭제)도 여기로 온다 — 다시 해제하면 남은 것부터 이어서 지운다.
         // 그 갈래는 **일부가 이미 지워진** 변이라, 재조회·통지가 성공과 같이 따라온다(§4-F ③).
+        //
+        // ★★ 다만 `DELETE_FAILED`는 **한 문장으로 덮을 수 없는 두 종류**다(QA DEFECT-06):
+        //   삭제 도중 실패(부분 삭제 가능)와 **시작 전 거부**(아무것도 안 지웠다). 뒤쪽에
+        //   *"이미 일부 또는 전부 지워졌을 수 있습니다"*를 보이면 **화면이 거짓을 말한다.**
+        //   ⚠️ 갈림의 근거는 `params.stage`가 **아니다** — 같은 문자열 `"escape"`를
+        //     `restore.py`가 **다른 코드**(`BACKUP_OUT_OF_ROOT`)에도 쓴다. 백엔드가 명시적
+        //     사실로 싣는 `profile_delete_started`를 읽는다(계약 전문: `rpc.ts`의 `deleteGame`).
+        //   ⚠️ 필드가 없거나 boolean이 아니면 **보수적으로**(= 부분 삭제 경고 쪽) 간다.
+        //     `=== false`로만 안전 갈래를 연다 — 안전 단언을 기본값으로 삼지 않는다.
+        //   ★ `DELETE_FAILED`가 아닌 코드는 **계속 `tCode` 단일 관문**을 지난다(아래 줄).
+        //     여기 두 키는 캐스트 없는 리터럴이라 `StringKey` 검사를 그대로 받는다.
+        if (res.code === "DELETE_FAILED") {
+          const beforeDelete = res.params.profile_delete_started === false;
+          return showResult(
+            beforeDelete ? t("DELETE_FAILED_BEFORE_DELETE") : t("DELETE_FAILED"),
+          );
+        }
         return showResult(tCode(res.code, "DELETE_ACTION_FAILED"));
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps

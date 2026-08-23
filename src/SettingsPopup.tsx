@@ -83,11 +83,33 @@ export function SettingsPopup({
         if (res.ok) {
           const deleted = res.data.counts.deleted ?? 0;
           const left = res.data.results.length - deleted;
-          // ★ `RESET_OK`는 **지운 것만** 말한다 — 남은 것은 `left > 0`일 때만 아래 줄이 말한다.
-          //   (P16 E4: 예전 문구는 다 지워졌을 때도 "0개 남음"을 그렸다 — 없던 일을 사건처럼
-          //    말하는 자리였고, 남은 게 있을 때는 같은 수를 두 번 말했다.)
-          const ok = t("RESET_OK", { deleted });
-          setNote(left > 0 ? `${ok} ${t("RESET_LEFT_NOTE", { left })}` : ok);
+          /* 완료 문구는 **지운 것만** 말한다 — 0인 범주는 문장 자체를 그리지 않는다.
+             (P16 E4: 예전 문구는 다 지워졌을 때도 "0개 남음"을 그렸다 — 없던 일을 사건처럼
+              말하는 자리였고, 남은 게 있을 때는 같은 수를 두 번 말했다.)
+             ★★ QA DEFECT-05: 예전 `RESET_OK`는 `counts.deleted`(=**게임 수**) 하나로 초기화를
+               통째로 선언했다. 등록 0 · 제외 N인 상태에서는 화면이 *"0개 삭제"*라고 말하는 사이
+               제외 N건과 표시 이름이 조용히 사라진다 — **부분합을 전체처럼** 말한 자리다.
+               범주마다 제 수를 말하고, 말할 것이 하나도 없을 때만 일반 완료문을 그린다.
+             ★ `cleared`는 **봉투가 준 값**이다(`counts`와 같은 규칙 — 프론트가 다시 세지 않는다).
+               확인창 `params`의 `named`/`excluded`는 **다른 시점의 값**이라 재사용하지 않는다. */
+          const parts: string[] = [];
+          if (deleted > 0) {
+            parts.push(t("RESET_OK_GAMES", { n: deleted }));
+          }
+          if (res.data.cleared.named > 0) {
+            parts.push(t("RESET_OK_NAMES", { n: res.data.cleared.named }));
+          }
+          if (res.data.cleared.excluded > 0) {
+            parts.push(t("RESET_OK_EXCLUDED", { n: res.data.cleared.excluded }));
+          }
+          // 남은 것은 `left > 0`일 때만 이 줄이 말한다 — 언제나 **마지막**이다.
+          if (left > 0) {
+            parts.push(t("RESET_LEFT_NOTE", { left }));
+          }
+          if (parts.length === 0) {
+            parts.push(t("RESET_OK"));
+          }
+          setNote(parts.join(" "));
           resetTyped.current = "";     // 성공했으면 보존할 입력도 없다
           return;
         }
@@ -209,8 +231,23 @@ export function SettingsPopup({
           <div style={SECTION_STYLE}>
             <div style={SECTION_TITLE_STYLE}>{t("SETTINGS_RESET_TITLE")}</div>
             <div style={{ fontSize: "13px", marginBottom: "8px" }}>
-              {/* 수를 모르면 **모른다고 말한다** — 0으로 그리면 화면이 거짓을 말한다. */}
-              {t("RESET_ZONE_BODY", { n: counts ? counts.total : t("RESET_ZONE_UNKNOWN") })}
+              {/* 수를 모르면 **모른다고 말한다** — 0으로 그리면 화면이 거짓을 말한다.
+                  ★★ QA DEFECT-02: 그래서 **파괴 범위와 수를 두 줄로 가른다.** 수를 문장 한가운데
+                    슬롯에 끼우던 예전 판은 수를 모를 때 그 자리에 "확인 불가" 같은 조각이 들어가
+                    *"등록 …와 저장된 프로필을 모두 지웁니다"*의 문장이 깨졌다. 이제 첫 줄은
+                    **파괴 범위만** 말하므로 세 상태에서 문장이 같고, 갈리는 것은 둘째 줄뿐이다 —
+                    바로 아래 파괴 버튼이 상태에 따라 움직일 여지를 그만큼 줄인다.
+                  ★ 둘째 줄은 3상태다: 수치 · **확인 중** · **확인 불가**. 로딩(아직 아무것도
+                    모름)과 조회 실패(알 수 없음)를 한 문장으로 접으면 실패가 "곧 나오는 중"으로
+                    읽힌다 — 가르는 것은 위 `loading`이다(버튼 활성 조건과 같은 값). */}
+              <div>{t("RESET_ZONE_BODY")}</div>
+              <div>
+                {counts
+                  ? t("RESET_ZONE_COUNT", { n: counts.total })
+                  : loading
+                    ? t("RESET_ZONE_LOADING")
+                    : t("RESET_ZONE_UNKNOWN")}
+              </div>
             </div>
             <Focusable>
               {/* 설명 줄(RESET_HINT)을 아래 거느리는 **세로 스택** 버튼이다(§4-G 3항). */}
