@@ -17,7 +17,7 @@
 안 닿는다**(실기에서 실제로 빠졌던 함정). 그래서 근거 사본은 반드시 `profile_dock`/`profile_internal`
 태그로 놓고, **축출 꼬리**(`entries[BACKUP_KEEP - adding:]`)에 들어오게 배치한다.
 
-### 이 파일이 잠그는 것 다섯
+### 이 파일이 잠그는 것
   ⓐ **중복인 쪽이 앞**(dock)일 때 — 셋이 같이 서야 잰 것이다:
      ① 그 프로필 **내용이 백업에 남는가** ② 예고한 개수 == 실제 ③ **예고한 이름 == 실제 지워진 이름**
   ⓑ **중복인 쪽이 뒤**(internal)일 때 — 같은 셋. 현행은 ②③이 깨진다(예고 1건, 실제 2건 삭제).
@@ -64,6 +64,19 @@
   ⓗ **판정은 「동작 경계에서 한 번」이다 — 횟수로 잰다.** 승인 1회는 `plan_backups`를
      **정확히 두 번**(고지 1 + 실행 1) 부른다. `>= 1`로만 재면 **계획 호출을 하나 더 넣은
      구현이 그대로 통과한다**(실측 — 이종 검토 지적). 그래서 등식으로 잠근다.
+  ⓛ **★ 한 동작이 **둘 이상** 쓸 때, 먼저 쓴 대피본이 뒤 쓰기의 prune에 잘리지 않는다**
+     (QA DEFECT-01 처방 ③, 2026-08-23). 링에 **지금보다 미래 stamp**를 가진 백업이 있으면 새
+     대피본이 `backup_order_key` 기준 **가장 오래된 것**으로 읽힌다 — 자기 하나만 보호하는
+     prune은 그것을 **다음 쓰기에서** 잘라 내고, 그 슬롯은 곧 `rmtree`된다(**전손**). 그런데
+     결과 봉투는 `evacuated`로 *대피시켰다*고 보고한다. 실측(고치기 전): 링 12 · 미래 stamp에서
+     **예고 4 · 실제 3 · dock 프로필 내용 소멸**(문턱은 그런 백업 9칸).
+     ★ **음성 대조군이 붙는다**(정상 시각 링) — 거기서는 예고도 실제도 **그대로**여야 한다.
+       보호를 넓히면서 정상 시각의 축출 수가 달라지면 그것도 결함이다.
+     ★ **삭제(등록 해제)와 「본체가 둘 이상인 슬롯 저장」을 둘 다 지난다** — 계획 객체를 만드는
+       호출부가 `remove`·`engine` **둘**이라, 한쪽만 되돌린 사본이 다른 쪽 세계를 그대로 통과한다.
+     ⚠️ **이 세계가 잠그는 것은 「한 동작 안의 순서」뿐이다.** *"링 순서를 벽시계 stamp에서
+       유도한다"*는 전제는 그대로 남고 화면의 시각 표기·목록 정렬도 그대로다 — 여기가 초록이라고
+       *"시각 축을 닫았다"*로 읽으면 화면도 문서도 거짓이 된다.
   ⓕ **대피는 「할 수 있을 때」 한다**(사용자 결정 D4) — 슬롯 폴더를 **열거하지 못해도** 저장은
      성립한다. `store.atomic_write`는 `os.replace`가 `try` 안이고 디렉터리 fsync는 **밖**이라,
      예전에는 **본체를 덮은 뒤에** 예외가 났다: 화면은 *"프로필 정보가 손상되어 저장할 수
@@ -85,12 +98,15 @@ import pathlib
 import shutil
 import sys
 import tempfile
+import time
 import types
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCK = b"quality=dock\nshadows=high\nsource=DOCK-PROFILE\n"
 INTL = b"quality=intl\nshadows=low_\nsource=INTL-PROFILE\n"
 MOVED = b"quality=mvd_\nshadows=mid_\nsource=CHANGED-BEHIND-PLAN\n"
+#: ⓛ 전용 — **한 슬롯에 본체가 둘**인 상태를 만들어 저장이 백업을 둘 쓰게 한다.
+EXTRA = b"quality=xtra\nshadows=none\nsource=SECOND-BODY-IN-SLOT\n"
 
 #: 승격/무쓰기 계측. 세계마다 `reset()`하고 그 세계의 동작만 센다.
 COUNT = {"call": 0, "wrote": 0, "skipped": 0, "plan_calls": 0, "off_plan": 0,
@@ -629,10 +645,120 @@ def main_test():                                                # noqa: C901  (�
         notes.append("ⓓ-2 삭제: 쓰기 %d · 무쓰기 %d · 계획밖 자체판정 %d"
                      % (COUNT["wrote"], COUNT["skipped"], COUNT["plan_fallback"]))
 
+        # ── ⓛ 한 동작의 **먼저 쓴 대피본**은 뒤 쓰기의 prune에 안 잘린다 (DEFECT-01 ③) ──
+        def stamped_ring(appid, count, years):
+            """링을 **직접 놓는다**(prune을 안 지난다). stamp의 **연도만** `years`만큼 민다.
+
+            ★★ **시스템 시각을 건드리지 않는다** — 미는 것은 파일 **이름**뿐이고, 그것이
+              `store.backup_order_key`가 읽는 전부다. 시각을 바꾸면 이 검사가 도는 기기의
+              다른 모든 것도 같이 바뀐다.
+            ★ 연도를 **박아 두지 않는다** — `2027`처럼 적으면 그 해가 지나는 순간 이 세계가
+              조용히 **반대편**(과거 stamp)을 재게 되고, 그때도 초록이 뜬다.
+            """
+            d = pathlib.Path(store.backups_dir(appid))
+            shutil.rmtree(str(d), ignore_errors=True)
+            d.mkdir(parents=True, exist_ok=True)
+            year = int(time.strftime("%Y")) + years
+            for i in range(count):
+                (d / ("%04d%02d%02d-1200%02d-disk-o%02d.ini"
+                      % (year, (i // 28) + 1, (i % 28) + 1, i, i))).write_bytes(b"o-%02d\n" % i)
+
+        def reads_oldest(appid):
+            """**지금 쓰는 백업이 이 링에서 가장 오래된 것으로 읽히는가** — 이 세계의 전제."""
+            now = store.backup_order_key("%s-profile_dock-video.ini"
+                                         % time.strftime("%Y%m%d-%H%M%S"))
+            return now < min(store.backup_order_key(n) for n in names(appid))
+
+        RING = store.BACKUP_KEEP + 2          # 링 12 = 예고 4건이 나오는 자리(실측 최대 피해)
+        for tag, years in (("ⓛ-1 삭제·미래stamp", +1), ("ⓛ-2 삭제·정상시각(대조군)", -1)):
+            appid = "9112" if years > 0 else "9113"
+            build(appid)
+            stamped_ring(appid, RING, years)
+            if len(names(appid)) != RING:
+                P("%s 계측기 무효 — 링 %d칸(%d이어야 한다)" % (tag, len(names(appid)), RING))
+                continue
+            if reads_oldest(appid) != (years > 0):
+                P("%s 계측기 무효 — 「지금 쓴 백업이 최고령으로 읽히는가」가 %s다(이 세계의 전제가 깨졌다)"
+                  % (tag, reads_oldest(appid)))
+                continue
+            promised, rows, gone, done, ask = delete_via_route(appid)
+            if not done.get("ok"):
+                P("%s 등록 해제가 실패했다 — code=%s" % (tag, done.get("code")))
+                continue
+            if not promised:
+                P("%s 계측기 무효 — 축출 예고가 0건이라 이 세계는 아무것도 안 잰다" % tag)
+                continue
+            # ① 두 프로필 내용이 **백업에 남는가** — 슬롯은 이미 rmtree됐다
+            for prof, data in (("dock", DOCK), ("internal", INTL)):
+                if not holds(appid, store.profile_tag(prof), data):
+                    P("%s ① **전손** — %s 프로필 내용이 슬롯에도 백업에도 없다. 먼저 쓴 대피본이 "
+                      "뒤 쓰기의 prune에 잘렸다(봉투는 evacuated=%s라 보고한다)"
+                      % (tag, prof, done.get("data", {}).get("evacuated")))
+            # ②③ 예고한 개수·이름 == 실제
+            if len(promised) != len(gone):
+                P("%s ② 예고 %d건 ≠ 실제 지워진 %d건 (예고=%s / 실제=%s)"
+                  % (tag, len(promised), len(gone), sorted(promised), sorted(gone)))
+            if sorted(promised) != sorted(gone):
+                P("%s ③ 예고한 이름과 실제 지워진 이름이 다르다 — 예고=%s / 실제=%s"
+                  % (tag, sorted(promised), sorted(gone)))
+            check_ring_cap(appid, tag)
+            notes.append("%s 링 %d·최고령으로 읽힘=%s: 예고 %d = 실제 %d · dock남음 %s · "
+                         "internal남음 %s · 링 %d"
+                         % (tag, RING, years > 0, len(promised), len(gone),
+                            bool(holds(appid, store.profile_tag("dock"), DOCK)),
+                            bool(holds(appid, store.profile_tag("internal"), INTL)),
+                            len(names(appid))))
+
+        # ── ⓛ-3·4 **본체가 둘 이상인 슬롯 저장**도 같은 자리다 (engine 쪽 호출부) ──
+        for tag, years in (("ⓛ-3 저장·미래stamp", +1), ("ⓛ-4 저장·정상시각(대조군)", -1)):
+            appid = "9114" if years > 0 else "9115"
+            cfg = build(appid)
+            (pathlib.Path(store.profile_dir(appid, "dock")) / "extra.ini").write_bytes(EXTRA)
+            stamped_ring(appid, RING, years)
+            cfg.write_bytes(MOVED)                    # 디스크가 슬롯과 달라야 확인창이 뜬다
+            if sorted(store.evacuable_names(appid, "dock")) != ["extra.ini", "video.ini"]:
+                P("%s 계측기 무효 — dock 본체가 둘이 아니다: %s"
+                  % (tag, store.evacuable_names(appid, "dock")))
+                continue
+            if len(names(appid)) != RING or reads_oldest(appid) != (years > 0):
+                P("%s 계측기 무효 — 링 %d칸 · 최고령으로 읽힘=%s"
+                  % (tag, len(names(appid)), reads_oldest(appid)))
+                continue
+            before = names(appid)
+            ask = rpc(main, "save_profile", appid, "dock")
+            p = ask.get("params") or {}
+            promised = [r["backup_id"] for r in (p.get("evicted") or [])]
+            reset()
+            done = rpc(main, "save_profile", appid, "dock", confirm_token=p.get("confirm_token"))
+            gone = [n for n in before if n not in names(appid)]
+            if not done.get("ok"):
+                P("%s 저장이 실패했다 — code=%s params=%s" % (tag, done.get("code"), p))
+                continue
+            if len(promised) < 2:
+                P("%s 계측기 무효 — 축출 예고가 %d건이다(본체 둘을 대피시키면 2건 이상이어야 한다)"
+                  % (tag, len(promised)))
+                continue
+            # ① 대피본 **둘 다** 링에 남는가 — 먼저 쓴 쪽(extra.ini = 이름순 앞)이 잘리던 자리다
+            for what, data in (("extra.ini(먼저 쓴 쪽)", EXTRA), ("video.ini", DOCK)):
+                if not holds(appid, store.profile_tag("dock"), data):
+                    P("%s ① %s의 대피본이 링에 없다 — 먼저 쓴 대피본이 뒤 쓰기의 prune에 잘렸다"
+                      % (tag, what))
+            if len(promised) != len(gone) or sorted(promised) != sorted(gone):
+                P("%s ②③ 예고와 실제가 다르다 — 예고=%s / 실제=%s"
+                  % (tag, sorted(promised), sorted(gone)))
+            check_ring_cap(appid, tag)
+            notes.append("%s 링 %d·최고령으로 읽힘=%s: 예고 %d = 실제 %d · extra남음 %s · "
+                         "video남음 %s · 링 %d"
+                         % (tag, RING, years > 0, len(promised), len(gone),
+                            bool(holds(appid, store.profile_tag("dock"), EXTRA)),
+                            bool(holds(appid, store.profile_tag("dock"), DOCK)),
+                            len(names(appid))))
+
         print("대피 계획은 동작 경계에서 한 번 — ⓐ앞 / ⓑ뒤 / ⓒ음성 대조군(승격 0) / "
               "ⓓD6 계획↔쓰기 창(저장·삭제) / ⓔ링 상한 / ⓕ열거 불가에도 저장 성립 / "
               "ⓖ계획 밖 판정도 축출될 사본을 안 믿는다 / ⓘ비포화 링에서는 증인을 믿는다 / "
-              "ⓙ살아남는 칸 격자 / ⓚ상한 초과+빈 계획  "
+              "ⓙ살아남는 칸 격자 / ⓚ상한 초과+빈 계획 / "
+              "ⓛ먼저 쓴 대피본은 뒤 쓰기의 prune에 안 잘린다(삭제·저장 × 미래stamp·정상시각)  "
               "(데이터: %s)" % tmp)
         for n in notes:
             print("  계측: " + n)

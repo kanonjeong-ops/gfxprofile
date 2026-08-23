@@ -625,6 +625,31 @@ def plan_backups(entries, items):
         write = nxt
 
 
+class BackupPlan(set):
+    """한 동작의 **백업 허가 목록**(`(safe_tag, sha1)`의 집합) + 그 동작이 **이미 쓴 경로**.
+
+    ★ 집합 부분은 종전 그대로다 — `make_backup`이 `in`으로 보고 `discard`로 **소비하면서
+      줄인다**. `_trusted_entries`의 `len(plan)`도 그대로 *"앞으로 남은 쓰기"*를 센다.
+      호출부는 `BackupPlan(plan_backups(...))`로 만들어 한 동작 안의 여러 호출에 **같은 객체**를
+      넘긴다(예전에 `set(plan_backups(...))`라고 적혀 있던 그 자리다).
+    ★★ **`written`이 붙은 이유**(QA DEFECT-01 처방 ③, 2026-08-23): prune이 보호하는 것을
+      *"방금 쓴 파일 하나"*에서 *"이번 동작이 쓴 것 전부"*로 넓히려면 그 목록을 이고 다닐
+      **동작 경계 객체**가 있어야 한다. **계획이 이미 그 경계다** — 두 번째 객체를 만들어 나란히
+      들고 다니면 언젠가 한쪽만 넘기는 호출부가 생긴다(이 프로젝트가 *"문이 둘이면 언젠가 한쪽이
+      빠진다"*로 이미 겪은 형태다 — `main.py`의 `_save_registry` 단일 관문이 같은 처분이다).
+    ★ `plan`이 `None`인 갈래(단일 쓰기)에는 이 객체가 없다 — 쓰기가 하나면 보호할 것도 자기
+      하나뿐이라 종전 그대로다.
+    ⚠️ 계획을 **평범한 `set`으로** 넘기면 `make_backup`이 `written`을 못 찾아 그 자리에서 죽는다.
+      조용히 종전 동작으로 돌아가지 않게 **일부러 그대로 둔다** — 그 침묵이 곧 DEFECT-01의
+      재발이고 재발의 결과는 **프로필 손실**이라, 눈에 띄는 실패가 낫다.
+    """
+
+    def __init__(self, items=()):
+        super().__init__(items)
+        #: 이 동작이 실제로 만든 백업 경로 — **쓴 순서**다(`prune_backups`가 그 순서를 쓴다).
+        self.written = []
+
+
 def _trusted_entries(appid, plan):
     """무쓰기 판정의 **근거로 삼아도 되는 링 항목** — 이번 동작이 축출할 꼬리를 뺀 나머지.
 
@@ -672,7 +697,9 @@ def make_backup(appid, data, tag, filename, plan=None):
       여기로 넘긴다. 매 호출마다 다시 재면, 먼저 쓴 백업이 밀어낸 칸을 뒤 항목이 계속 근거로
       믿어 **내용이 통째로 사라진다.** `plan`이 없으면(단일 쓰기) 종전대로 여기서 스스로 잰다.
       (`plan`은 `(safe_tag, sha1)`의 **집합**이고 이 함수가 소비하면서 줄인다 — 호출부가
-      `set(plan_backups(...))`로 만들어 한 동작 안의 여러 호출에 **같은 객체**를 넘긴다.)
+      `BackupPlan(plan_backups(...))`로 만들어 한 동작 안의 여러 호출에 **같은 객체**를 넘긴다.)
+      ★ 그 객체는 **이 동작이 쓴 경로**도 같이 이고 다닌다(`BackupPlan.written`) — 아래 prune이
+        *"이번 동작이 쓴 것 전부"*를 보호해야 하기 때문이다(QA DEFECT-01 처방 ③).
     ★ **계획은 「이것만 써라」가 아니라 「이건 중복이라도 써라」는 허가 목록이다**(사용자 결정
       D6, 2026-08-22). 계획에 없는 키를 만나면 건너뛰지 않고 **그 자리에서 스스로 판정한다** —
       계획은 본체를 `sha1_file`로 재고 쓰기는 `read_bytes`로 다시 읽으므로, 그 사이에 본체가
@@ -722,7 +749,17 @@ def make_backup(appid, data, tag, filename, plan=None):
     # ★ **방금 쓴 파일은 이 자리에서 지워지지 않는다**(불변식). 순서 키가 옳으면 어차피 맨
     #   앞이지만, 이름을 못 읽는 극단(위 `backup_order_key`의 폴백)에서도 이 인자가 그 사실을
     #   보장한다 — 성공값으로 돌려주는 경로가 이미 지워진 경로일 수는 없다.
-    prune_backups(appid, protect=path)
+    # ★★ **한 동작이 여럿 쓰면 「방금 쓴 것」만으로는 모자라다**(QA DEFECT-01 처방 ③): 먼저 쓴
+    #   대피본이 **뒤 쓰기의 prune에** 잘려 나간다 — 링에 미래 stamp가 있으면 새 대피본이 가장
+    #   오래된 것으로 읽히기 때문이다. 그래서 계획이 이 동작의 쓰기를 **누적**해 전부 보호한다.
+    #   불변식은 넓어졌을 뿐 그대로다: **여기서 돌려주는 경로는 이 동작이 끝날 때까지 링에 있다.**
+    #   (예외는 이 동작이 `BACKUP_KEEP`보다 많이 쓰는 경우뿐이고, 그때는 자기 것 중 **먼저 쓴
+    #    것부터** 밀려난다 — 위 `prune_backups` 주석. 링 상한이 그 대가다.)
+    if plan is None:
+        prune_backups(appid, protect=path)          # 단일 쓰기 — 보호할 것은 자기 하나뿐이다
+    else:
+        plan.written.append(path)
+        prune_backups(appid, protect=plan.written)
     return path
 
 
@@ -748,11 +785,41 @@ def list_backups(appid):
 def prune_backups(appid, protect=None):
     """링을 `BACKUP_KEEP`칸으로 자른다 — **오래된 것부터**(위 `backup_order_key`).
 
-    `protect`는 방금 쓴 파일이다. 절대 지우지 않고, 대신 한 칸을 차지한 것으로 센다.
+    `protect`는 **이번 동작이 쓴 파일**이다 — 경로 하나여도 되고 **쓴 순서대로의 목록**이어도
+    된다. 절대 지우지 않고, 대신 그만큼 칸을 차지한 것으로 센다.
+
+    ★★ **왜 「방금 쓴 파일 하나」로는 모자란가**(QA DEFECT-01 처방 ③, 2026-08-23 — 실측으로
+      전손을 재현했다): 한 동작이 백업을 **둘 이상** 쓰면(등록 해제 · 전체 초기화 · 본체가 둘
+      이상인 슬롯 저장), 자기만 보호하는 prune은 **먼저 쓴 대피본을 다음 쓰기에서 잘라 낸다.**
+      링에 **지금보다 미래 stamp**를 가진 백업이 있으면 새 대피본이 `backup_order_key` 기준
+      **가장 오래된 것**으로 읽히기 때문이다(실측 문턱: 그런 백업이 9칸 이상). 그 슬롯은 곧
+      `rmtree`되므로 그 프로필 내용은 **슬롯에도 백업에도 없다** — 그런데 삭제 결과 봉투는
+      `evacuated`로 *대피시켰다*고 보고한다.
+    ★★ **고친 것과 안 고친 것을 갈라 적는다.** 고친 것: **한 동작 안에서는 쓴 순서가 진실이다** —
+      이번 동작이 쓴 것은 stamp가 무엇이든 맨 앞(최신)에 놓고 자른다. **안 고친 것**: *"링 순서를
+      벽시계 stamp에서 유도한다"*는 **전제는 그대로 남는다.** 동작 **밖에서** 벌어진 시각 역행
+      (미래 stamp를 가진 옛 백업이 새 백업보다 새것으로 읽히는 것)은 여기서 고쳐지지 않고,
+      화면의 시각 표기와 목록 정렬도 그대로다. 이 처방이 내린 것은 **그 자리의 결과**이지
+      (프로필 손실 → 링 상한 초과) 시각 축이 아니다 — *"시각 축을 닫았다"*고 쓰면 거짓이 된다.
+    ★ **자르는 자리는 `[BACKUP_KEEP:]` 하나다** — 보호 대상 수만큼 `keep`을 빼는 산술을 따로
+      두지 않는다. 기각된 「보호 집합」 안이 깨진 자리가 정확히 거기였다: 보호 대상이 상한을
+      넘으면 `keep = BACKUP_KEEP - len(protect)`가 **음수**가 되어 링이 11·13칸이 된다(실측 ·
+      `qa/test_evacuation_plan.py` ⓔ가 그 자리를 지킨다). 한 줄로 세운 목록을 **언제나 같은
+      자리에서** 자르면 보호 대상이 몇이든 링은 `BACKUP_KEEP`칸을 넘지 않고, 이번 동작이 상한보다
+      많이 쓰면 **자기 것 중 먼저 쓴 것부터** 밀려난다(보호가 없던 종전과 같은 결과다).
+    ★ 링에 없는 경로는 칸을 차지하지 않는다 — 자를 목록은 언제나 링의 부분집합이다.
     """
-    entries = [p for p in list_backups(appid) if p != protect]
-    keep = BACKUP_KEEP - (1 if protect else 0)
-    for path in entries[keep:]:
+    ring = list_backups(appid)                       # 최신순 — 자르는 순서의 정본이다
+    if protect is None:
+        mine = []
+    elif isinstance(protect, str):
+        mine = [protect]                             # 단일 쓰기 — 보호할 것은 자기 하나뿐이다
+    else:
+        mine = list(protect)                         # 이번 동작이 쓴 것 **전부**(쓴 순서)
+    have, seat = set(ring), set(mine)
+    # 이번 동작이 쓴 것을 **나중에 쓴 것부터** 맨 앞에 놓는다 = 그것들이 이 링의 최신이다.
+    ordered = [p for p in reversed(mine) if p in have] + [p for p in ring if p not in seat]
+    for path in ordered[BACKUP_KEEP:]:
         try:
             os.unlink(path)
         except OSError:

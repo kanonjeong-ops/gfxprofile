@@ -449,7 +449,7 @@ def save_profile(reg, appid, profile):
     #   목록을 먼저 잡는 이유도 같다 — 세는 쪽과 도는 쪽이 다른 나열을 보면 계획이 어긋난다.
     directory = store.profile_dir(appid, profile)
     names = store.evacuable_names(appid, profile)
-    plan = set(store.plan_backups(
+    plan = store.BackupPlan(store.plan_backups(
         store.list_backups(appid),
         [(store.profile_tag(profile), store.sha1_file(os.path.join(directory, n))) for n in names]))
     for name in names:

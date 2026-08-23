@@ -562,7 +562,8 @@ def delete_game_data(reg, appid):
     evacuated = {}
     # ★ 중복 판정은 **여기서 한 번**이고 두 슬롯이 같은 계획을 쓴다(사용자 결정 D1). 고지층
     #   (`delete_preview` → `restore.ring_observe`)이 세는 것과 **같은 목록·같은 함수**다.
-    plan = set(store.plan_backups(store.list_backups(appid), _evacuable_items(appid)))
+    plan = store.BackupPlan(
+        store.plan_backups(store.list_backups(appid), _evacuable_items(appid)))
     for profile in PROFILES:
         saved = _evacuate(appid, profile, plan)
         if saved:
