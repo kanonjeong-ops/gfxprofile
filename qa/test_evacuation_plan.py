@@ -39,6 +39,14 @@
      꼬리를 한 칸이라도 과대평가하면 곧바로 증인을 불신한다. 그러면 정상 중복이 쓰이고
      **확인창이 예고하지 않은 백업이 삭제된다**(실측 — 우리가 D-01을 고치며 만든 결함이다).
      ⚠️ 판정을 `BACKUP_KEEP - len(plan)` 꼴로 쓰면 **링이 가득 찼다고 가정**하는 것이라 여기서 깨진다.
+  ⓙ **★ 「살아남는 칸」 계산이 정의와 어긋나지 않는다 — 특히 계획이 링보다 클 때**(N-02).
+     `entries[:len(entries) - doomed]` 꼴로 적으면 `doomed`가 링 칸수를 넘는 순간 인덱스가 **음수**가
+     되고, 파이썬 음수 슬라이스는 **0개가 아니라 앞부분을 다시 신뢰한다**(계획 14 → 「전부 불신」이어야
+     할 자리가 **6칸 신뢰**로 뒤집혔다). ⚠️ **`max(0, …)`가 슬라이스 인덱스 자리에 있어야** 막힌다.
+     ★ 이 세계는 **단위 단언**이다 — `len(plan) > BACKUP_KEEP` 구간에서는 기존 링이 **어차피 전부**
+     축출되므로 **행동으로는 차이가 안 난다**(직접 확인했다). 그래서 술어를 직접 잰다.
+     ⚠️ **ⓔ(본체 11개)로는 못 잡는다** — 거기선 모든 본체가 새 내용이라 전부 계획에 들어가
+     **계획 밖 갈래에 0회 닿는다**(실측). 세계를 넓히는 것으로는 안 되고 새로 세워야 한다.
   ⓖ **★ 계획 밖 키의 자체 판정도 「축출될 사본」을 근거로 삼지 않는다**(D-01, 2026-08-23).
      ⓓ와 같은 「계획 뒤 본체가 바뀐다」인데 **링이 포화**이고 **최고령 칸이 바뀐 내용의 유일한
      사본**이다. 자체 판정이 *호출 시점의 링*을 보면 그 최고령을 근거로 무쓰기가 되고,
@@ -377,6 +385,38 @@ def main_test():                                                # noqa: C901  (�
                              % (store.BACKUP_KEEP - 1, len(promised), len(gone),
                                 COUNT["skipped"], seat[0] in names(appid), len(names(appid))))
 
+        # ── ⓙ 「살아남는 칸」 계산 — 격자 전수 (N-02) ─────────────────────────
+        #    정의: 이 쓰기를 **안 했을 때** 살아남는 칸 = `max(0, 링 - max(0, 링 + 계획 - KEEP))`.
+        trusted_fn = getattr(store, "_trusted_entries", None)
+        if trusted_fn is None:
+            notes.append("ⓙ 이 판본엔 계획 밖 판정 자체가 없다(`_trusted_entries` 부재) — 잴 것이 없다")
+        else:
+            appid = "9110"
+            bd = pathlib.Path(store.backups_dir(appid))
+            bad, checked = [], 0
+            for ring in (0, 1, 9, store.BACKUP_KEEP, store.BACKUP_KEEP + 2):
+                shutil.rmtree(str(bd), ignore_errors=True)
+                bd.mkdir(parents=True, exist_ok=True)
+                for i in range(ring):                 # prune을 거치지 않고 직접 놓는다
+                    (bd / ("20260101-0000%02d-disk-g.ini" % i)).write_bytes(b"g%02d\n" % i)
+                have = len(store.list_backups(appid))
+                for size in (0, 1, 2, store.BACKUP_KEEP - 1, store.BACKUP_KEEP,
+                             store.BACKUP_KEEP + 1, store.BACKUP_KEEP + 4):
+                    fake = set(("tag%d" % j, "sha%d" % j) for j in range(size))
+                    want = max(0, have - max(0, have + size - store.BACKUP_KEEP))
+                    got = len(trusted_fn(appid, fake))
+                    checked += 1
+                    if got != want:
+                        bad.append("링%d·계획%d → 신뢰 %d (%d이어야 한다)" % (have, size, got, want))
+            shutil.rmtree(str(bd), ignore_errors=True)
+            if bad:
+                P("ⓙ 「살아남는 칸」이 정의와 어긋난다 %d칸 — %s%s"
+                  % (len(bad), " / ".join(bad[:4]), " …" if len(bad) > 4 else ""))
+            if checked < 20:
+                P("ⓙ 계측기 무효 — 격자를 %d칸밖에 안 쟀다" % checked)
+            notes.append("ⓙ 「살아남는 칸」 격자 %d칸 대조 · 어긋남 %d칸(0이어야 정상)"
+                         % (checked, len(bad)))
+
         # ── ⓖ 계획 밖 키의 판정도 **축출될 사본을 근거로 삼지 않는다** (D-01) ────
         #    ⓓ와 같은 「계획 뒤 본체가 바뀐다」이지만 **링이 포화**이고 **최고령 칸이 바뀐 내용의
         #    유일한 사본**이다. 계획 밖 판정이 「호출 시점의 링」을 보면 그 최고령을 근거로 삼아
@@ -523,7 +563,8 @@ def main_test():                                                # noqa: C901  (�
 
         print("대피 계획은 동작 경계에서 한 번 — ⓐ앞 / ⓑ뒤 / ⓒ음성 대조군(승격 0) / "
               "ⓓD6 계획↔쓰기 창(저장·삭제) / ⓔ링 상한 / ⓕ열거 불가에도 저장 성립 / "
-              "ⓖ계획 밖 판정도 축출될 사본을 안 믿는다 / ⓘ비포화 링에서는 증인을 믿는다  "
+              "ⓖ계획 밖 판정도 축출될 사본을 안 믿는다 / ⓘ비포화 링에서는 증인을 믿는다 / "
+              "ⓙ살아남는 칸 격자  "
               "(데이터: %s)" % tmp)
         for n in notes:
             print("  계측: " + n)

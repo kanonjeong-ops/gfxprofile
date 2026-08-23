@@ -613,8 +613,16 @@ def _trusted_entries(appid, plan):
       dock이 그것을 근거로 무쓰기가 되고 internal의 쓰기가 그 칸을 축출해 **전손**이 났다.
     ★★ **묻는 것은 「이 쓰기를 안 했을 때 증인이 살아남는가」다** — 그래서 지금 판정 중인 쓰기를
       꼬리에 **세지 않는다.** 안 쓰기로 정하면 앞으로 일어날 쓰기는 `len(plan)`건뿐이고, 링은
-      `len(entries) + len(plan)`까지 자랐다가 `BACKUP_KEEP`으로 잘린다. 그 초과분이 꼬리다.
-      → `doomed = max(0, len(entries) + len(plan) - BACKUP_KEEP)`.
+      `BACKUP_KEEP`으로 잘리므로 **앞에서부터 `BACKUP_KEEP - len(plan)`칸만 살아남는다.**
+    ★★ **식을 `plan_backups`와 같은 모양으로 적는다** — 그쪽 축출은
+      `entries[max(0, BACKUP_KEEP - adding):]`이고 여기는 그 **여집합**이다. 판정을 두 벌로 적지
+      않는다는 규칙에 맞고, 한쪽이 바뀌면 다른 쪽도 같이 봐야 한다는 신호가 구조로 남는다.
+    ⚠️ **`max(0, …)`는 반드시 슬라이스 인덱스 자리에 있어야 한다**(N-02, 2026-08-23 — 실측).
+      `entries[:len(entries) - doomed]` 꼴로 적으면 `doomed`가 링 칸수를 넘는 순간 인덱스가 **음수**가
+      되고, 파이썬 음수 슬라이스는 **0개가 아니라 앞부분을 다시 신뢰한다** — 계획 14건에서
+      「전부 불신」이어야 할 자리가 **6칸 신뢰**로 뒤집혔고 전손까지 갔다.
+      (도달 조건: `len(plan) > BACKUP_KEEP` = 한 동작의 슬롯 본체 합이 11개 이상.)
+      링 0~15 × 계획 0~15 **전수 대조**에서 이 식은 정의와 **0칸** 어긋난다.
     ⚠️ **자기 쓰기를 꼬리에 세면 자기실현 회로가 된다**(N-01, 2026-08-23 — 실측으로 재현했다).
       *"이 쓰기가 일어난다"*를 가정하면 그 가정이 꼬리를 키우고 → 증인이 꼬리에 들어가고 →
       안 믿게 되고 → **정말로 쓴다.** 가정이 스스로를 실현한다. 실제 피해: **비포화 링**(9칸)에서
@@ -629,9 +637,9 @@ def _trusted_entries(appid, plan):
     entries = list_backups(appid)
     if plan is None:
         return entries
-    # ★ 「이 쓰기를 **안 했을 때** 몇 칸이 밀려나는가」 — 그것이 곧 *"증인이 살아남는가"*다.
-    doomed = max(0, len(entries) + len(plan) - BACKUP_KEEP)
-    return entries[:len(entries) - doomed]
+    # ★ 「이 쓰기를 **안 했을 때** 몇 칸이 살아남는가」 — `plan_backups`의 축출 식과 **같은 식**이다.
+    #   그쪽은 꼬리를 `entries[max(0, BACKUP_KEEP - adding):]`로 집고, 여기는 그 **여집합**을 집는다.
+    return entries[:max(0, BACKUP_KEEP - len(plan))]
 
 
 def make_backup(appid, data, tag, filename, plan=None):
