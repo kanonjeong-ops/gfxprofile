@@ -558,6 +558,22 @@ def backup_holds(entries, tag, sha1):
     return ""
 
 
+def _doomed_tail(entries, adding):
+    """이 동작이 `adding`건을 쓸 때 링에서 **밀려날 자리**. 계획 경로와 계획 밖 판정이 **같이 쓴다**.
+
+    ★★ **이 식을 두 벌로 적지 마라.** `plan_backups`(계획)와 `_trusted_entries`(계획 밖)가 각자
+      적고 있던 동안 **같은 함수에서 경계 결함이 네 번 났다**(2026-08-23): 호출 시점 링(D-01) ·
+      자기 쓰기를 셈+포화 가정(N-01) · 음수 슬라이스(N-02) · **`adding == 0` 분기 누락(N-03)**.
+      매번 산술을 고쳐 닫았고 매번 다른 경계가 남았다. 그래서 **산술이 아니라 자리를 고쳤다** —
+      경계 조건이 몇 개든 이제 **한 곳에만** 있고, 계획 밖 판정은 그 **여집합**을 구조로 받는다.
+    ★ **`adding == 0`은 「꼬리 없음」이다 — 링이 상한을 넘어도 그렇다.** `prune_backups`는
+      `make_backup` **안에서 쓰기 뒤에만** 돌기 때문이다: 한 건도 안 쓰면 prune 자체가 안 돌아
+      **아무도 안 밀려난다.** 상한을 넘긴 링을 「어차피 10칸으로 잘린다」고 읽으면 여기서 틀린다
+      (N-03 실측: 링 12·계획 0에서 **예고 0인데 4건이 삭제**됐고 그중 둘은 최신 10칸 안의 고유 백업이었다).
+    """
+    return set(entries[max(0, BACKUP_KEEP - adding):]) if adding > 0 else set()
+
+
 def plan_backups(entries, items):
     """`items`(= `(tag, sha1)` 쌍들)를 링에 넣을 때 **실제로 파일이 생기는 것들**만 남긴다.
     **판정은 동작이 시작할 때 여기서 한 번**이고, 아래 `make_backup`은 그 결과를 집행한다.
@@ -596,7 +612,7 @@ def plan_backups(entries, items):
     while True:
         adding = len(write)
         # 이 동작이 `adding`칸을 쓰면 링의 꼬리가 그만큼 잘린다 — 그 자리에 있는 사본은 근거가 못 된다.
-        doomed = set(entries[max(0, BACKUP_KEEP - adding):]) if adding > 0 else set()
+        doomed = _doomed_tail(entries, adding)          # ★ 계획 밖 판정과 **같은 식**(위 헬퍼)
         nxt = [u for u in uniq if (not u[2]) or (u[2] in doomed)]
         if len(nxt) == len(write):             # 고정점 — 단조 증가라 길이가 같으면 집합도 같다
             return [(t, s) for t, s, _ in nxt]
@@ -614,15 +630,9 @@ def _trusted_entries(appid, plan):
     ★★ **묻는 것은 「이 쓰기를 안 했을 때 증인이 살아남는가」다** — 그래서 지금 판정 중인 쓰기를
       꼬리에 **세지 않는다.** 안 쓰기로 정하면 앞으로 일어날 쓰기는 `len(plan)`건뿐이고, 링은
       `BACKUP_KEEP`으로 잘리므로 **앞에서부터 `BACKUP_KEEP - len(plan)`칸만 살아남는다.**
-    ★★ **식을 `plan_backups`와 같은 모양으로 적는다** — 그쪽 축출은
-      `entries[max(0, BACKUP_KEEP - adding):]`이고 여기는 그 **여집합**이다. 판정을 두 벌로 적지
-      않는다는 규칙에 맞고, 한쪽이 바뀌면 다른 쪽도 같이 봐야 한다는 신호가 구조로 남는다.
-    ⚠️ **`max(0, …)`는 반드시 슬라이스 인덱스 자리에 있어야 한다**(N-02, 2026-08-23 — 실측).
-      `entries[:len(entries) - doomed]` 꼴로 적으면 `doomed`가 링 칸수를 넘는 순간 인덱스가 **음수**가
-      되고, 파이썬 음수 슬라이스는 **0개가 아니라 앞부분을 다시 신뢰한다** — 계획 14건에서
-      「전부 불신」이어야 할 자리가 **6칸 신뢰**로 뒤집혔고 전손까지 갔다.
-      (도달 조건: `len(plan) > BACKUP_KEEP` = 한 동작의 슬롯 본체 합이 11개 이상.)
-      링 0~15 × 계획 0~15 **전수 대조**에서 이 식은 정의와 **0칸** 어긋난다.
+    ★★ **식은 위 `_doomed_tail` 하나이고 여기는 그 여집합이다** — 산술을 다시 적지 않는다.
+      이 함수에서 경계 결함이 **네 번** 났고(D-01·N-01·N-02·N-03) 넷 다 *"같은 규칙을 두 곳에
+      각자 적었다"*가 뿌리였다. 경계 조건이 몇 개든 이제 한 곳에만 있다.
     ⚠️ **자기 쓰기를 꼬리에 세면 자기실현 회로가 된다**(N-01, 2026-08-23 — 실측으로 재현했다).
       *"이 쓰기가 일어난다"*를 가정하면 그 가정이 꼬리를 키우고 → 증인이 꼬리에 들어가고 →
       안 믿게 되고 → **정말로 쓴다.** 가정이 스스로를 실현한다. 실제 피해: **비포화 링**(9칸)에서
@@ -637,9 +647,10 @@ def _trusted_entries(appid, plan):
     entries = list_backups(appid)
     if plan is None:
         return entries
-    # ★ 「이 쓰기를 **안 했을 때** 몇 칸이 살아남는가」 — `plan_backups`의 축출 식과 **같은 식**이다.
-    #   그쪽은 꼬리를 `entries[max(0, BACKUP_KEEP - adding):]`로 집고, 여기는 그 **여집합**을 집는다.
-    return entries[:max(0, BACKUP_KEEP - len(plan))]
+    # ★ 「이 쓰기를 **안 했을 때** 무엇이 살아남는가」 = 위 `_doomed_tail`의 **여집합**이다.
+    #   식을 다시 적지 않는다 — 그것이 네 번 갈린 자리다.
+    doomed = _doomed_tail(entries, len(plan))
+    return [e for e in entries if e not in doomed]
 
 
 def make_backup(appid, data, tag, filename, plan=None):

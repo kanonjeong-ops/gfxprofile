@@ -39,6 +39,13 @@
      꼬리를 한 칸이라도 과대평가하면 곧바로 증인을 불신한다. 그러면 정상 중복이 쓰이고
      **확인창이 예고하지 않은 백업이 삭제된다**(실측 — 우리가 D-01을 고치며 만든 결함이다).
      ⚠️ 판정을 `BACKUP_KEEP - len(plan)` 꼴로 쓰면 **링이 가득 찼다고 가정**하는 것이라 여기서 깨진다.
+  ⓚ **★ 링이 상한을 넘고 계획이 **0건**이면 아무것도 안 밀려난다**(N-03) — **행동으로 잰다.**
+     `prune_backups`는 `make_backup` **안에서 쓰기 뒤에만** 돈다. 한 건도 안 쓰면 prune 자체가
+     안 돌아, 상한을 넘긴 링이라도 **그대로 남는다.** 계획 경로는 `adding == 0`을 특수 처리해
+     이것을 지켰는데 계획 밖 판정이 그 분기를 안 가져와서, **예고 0인데 4건이 삭제**되고
+     그중 둘은 **최신 10칸 안의 고유 백업**이었다(실측 — *"어차피 잘린다"*가 아니다).
+     ★ 이 세계가 ⓙ의 사각 셋을 한꺼번에 덮는다 — **실제 `make_backup` 호출을 지나므로**
+     술어가 죽은 헬퍼가 되거나 이름이 바뀌면 여기서 걸린다.
   ⓙ **★ 「살아남는 칸」 계산이 정의와 어긋나지 않는다 — 특히 계획이 링보다 클 때**(N-02).
      `entries[:len(entries) - doomed]` 꼴로 적으면 `doomed`가 링 칸수를 넘는 순간 인덱스가 **음수**가
      되고, 파이썬 음수 슬라이스는 **0개가 아니라 앞부분을 다시 신뢰한다**(계획 14 → 「전부 불신」이어야
@@ -167,6 +174,23 @@ def instrument_plan(store):
 
     store.plan_backups = wrapped
     return real
+
+
+def ring_survivors(entries, adding, keep):
+    """**독립 오라클** — `adding`건을 쓴 뒤 **원래 항목 중** 살아남는 것.
+
+    ★★ 생산 코드의 식(`_doomed_tail`)을 **인용하지 않는다.** 그것을 오라클로 쓰면 항진식이 되어
+      *"코드로 코드를 재게"* 된다. 대신 **링의 동작 자체**를 흉내 낸다: 새 백업은 맨 앞(최신)에
+      놓이고, `prune_backups`는 **오래된 것부터** 잘라 `keep`칸으로 맞춘다.
+    ★ **쓰기가 0건이면 아무도 안 밀린다** — `prune_backups`는 `make_backup` **안에서 쓰기 뒤에만**
+      돌기 때문이다. 링이 `keep`을 넘겨 있어도 그렇다. (이 한 줄이 N-03이 깨진 자리이고,
+      **예전 ⓙ의 기대값은 결함과 같은 방향으로 틀려 있었다** — 그래서 초록이 나왔다.)
+    """
+    if adding <= 0:
+        return list(entries)
+    ring = ["#new%d" % i for i in range(adding)] + list(entries)
+    have = set(entries)
+    return [e for e in ring[:keep] if e in have]
 
 
 def rpc(main, name, *args, **kwargs):
@@ -385,6 +409,40 @@ def main_test():                                                # noqa: C901  (�
                              % (store.BACKUP_KEEP - 1, len(promised), len(gone),
                                 COUNT["skipped"], seat[0] in names(appid), len(names(appid))))
 
+        # ── ⓚ 상한 초과 링 + 빈 계획 → **예고 0 == 실제 축출 0** (N-03) ────────
+        appid = "9111"
+        build(appid)
+        kbd = pathlib.Path(store.backups_dir(appid))
+        kbd.mkdir(parents=True, exist_ok=True)
+        #   증인 둘을 **최고령**에 둔다 — 상한 밖 꼬리라 「어차피 잘린다」로 오판하기 쉬운 자리.
+        (kbd / "20260101-000000-profile_dock-video.ini").write_bytes(DOCK)
+        (kbd / "20260101-000001-profile_internal-video.ini").write_bytes(INTL)
+        for i in range(store.BACKUP_KEEP):                # 상한 초과(= KEEP + 2칸)
+            (kbd / ("20260301-0000%02d-disk-uniq.ini" % i)).write_bytes(b"uniq-%02d\n" % i)
+        kbefore = names(appid)
+        kplan = store.plan_backups(store.list_backups(appid), remove._evacuable_items(appid))
+        if len(kbefore) != store.BACKUP_KEEP + 2 or kplan:
+            P("ⓚ 계측기 무효 — 링 %d칸(%d이어야 한다) · 계획 %d건(0이어야 한다)"
+              % (len(kbefore), store.BACKUP_KEEP + 2, len(kplan)))
+        else:
+            promised, rows, gone, done, ask = delete_via_route(appid)
+            if not done.get("ok"):
+                P("ⓚ 등록 해제가 실패했다 — code=%s" % done.get("code"))
+            else:
+                if promised:
+                    P("ⓚ 축출 예고가 비어 있지 않다 — %s (계획 0건이면 0건이어야 한다)" % promised)
+                if gone:
+                    P("ⓚ **예고 0인데 백업이 사라졌다** — %s. 한 건도 안 쓰면 `prune`이 안 도는데 "
+                      "상한 초과 링을 「어차피 잘린다」고 읽었다" % gone)
+                if len(names(appid)) != len(kbefore):
+                    P("ⓚ 링 칸수가 바뀌었다 — %d → %d (그대로여야 한다)"
+                      % (len(kbefore), len(names(appid))))
+                if COUNT["skipped"] < 2:
+                    P("ⓚ 두 슬롯이 무쓰기로 접히지 않았다 — 계측: %s" % dict(COUNT))
+                notes.append("ⓚ 상한 초과(%d칸)·계획 0: 예고 %d · 실제축출 %d · 무쓰기 %d · 링 %d"
+                             % (len(kbefore), len(promised), len(gone), COUNT["skipped"],
+                                len(names(appid))))
+
         # ── ⓙ 「살아남는 칸」 계산 — 격자 전수 (N-02) ─────────────────────────
         #    정의: 이 쓰기를 **안 했을 때** 살아남는 칸 = `max(0, 링 - max(0, 링 + 계획 - KEEP))`.
         trusted_fn = getattr(store, "_trusted_entries", None)
@@ -400,20 +458,30 @@ def main_test():                                                # noqa: C901  (�
                 for i in range(ring):                 # prune을 거치지 않고 직접 놓는다
                     (bd / ("20260101-0000%02d-disk-g.ini" % i)).write_bytes(b"g%02d\n" % i)
                 have = len(store.list_backups(appid))
+                listed = store.list_backups(appid)
                 for size in (0, 1, 2, store.BACKUP_KEEP - 1, store.BACKUP_KEEP,
                              store.BACKUP_KEEP + 1, store.BACKUP_KEEP + 4):
                     fake = set(("tag%d" % j, "sha%d" % j) for j in range(size))
-                    want = max(0, have - max(0, have + size - store.BACKUP_KEEP))
-                    got = len(trusted_fn(appid, fake))
+                    want = ring_survivors(listed, size, store.BACKUP_KEEP)
+                    got = list(trusted_fn(appid, fake))
                     checked += 1
-                    if got != want:
-                        bad.append("링%d·계획%d → 신뢰 %d (%d이어야 한다)" % (have, size, got, want))
+                    if got != want:          # ★ 개수가 아니라 **항목**을 본다(같은 수의 꼬리를 줘도 걸린다)
+                        bad.append("링%d·계획%d → 신뢰 %d개%s (%d개여야 하고 항목도 달라진다)"
+                                   % (have, size, len(got),
+                                      "" if len(got) != len(want) else "(개수는 같다)", len(want)))
             shutil.rmtree(str(bd), ignore_errors=True)
             if bad:
                 P("ⓙ 「살아남는 칸」이 정의와 어긋난다 %d칸 — %s%s"
                   % (len(bad), " / ".join(bad[:4]), " …" if len(bad) > 4 else ""))
             if checked < 20:
                 P("ⓙ 계측기 무효 — 격자를 %d칸밖에 안 쟀다" % checked)
+            # ★ 오라클이 항진식이 아님을 **음성 대조군**으로 보인다: 틀린 답을 주면 걸려야 한다.
+            sample = ["e%02d" % i for i in range(store.BACKUP_KEEP)]
+            if (ring_survivors(sample, 0, store.BACKUP_KEEP) != sample
+                    or len(ring_survivors(sample, 1, store.BACKUP_KEEP)) != store.BACKUP_KEEP - 1
+                    or ring_survivors(sample, store.BACKUP_KEEP + 3, store.BACKUP_KEEP) != []):
+                P("ⓙ 계측기 무효 — 오라클이 링 동작을 흉내 내지 못한다"
+                  "(0건→전부 · 1건→한 칸 밀림 · 상한 초과→전부 밀림 중 하나가 깨졌다)")
             notes.append("ⓙ 「살아남는 칸」 격자 %d칸 대조 · 어긋남 %d칸(0이어야 정상)"
                          % (checked, len(bad)))
 
@@ -564,7 +632,7 @@ def main_test():                                                # noqa: C901  (�
         print("대피 계획은 동작 경계에서 한 번 — ⓐ앞 / ⓑ뒤 / ⓒ음성 대조군(승격 0) / "
               "ⓓD6 계획↔쓰기 창(저장·삭제) / ⓔ링 상한 / ⓕ열거 불가에도 저장 성립 / "
               "ⓖ계획 밖 판정도 축출될 사본을 안 믿는다 / ⓘ비포화 링에서는 증인을 믿는다 / "
-              "ⓙ살아남는 칸 격자  "
+              "ⓙ살아남는 칸 격자 / ⓚ상한 초과+빈 계획  "
               "(데이터: %s)" % tmp)
         for n in notes:
             print("  계측: " + n)
