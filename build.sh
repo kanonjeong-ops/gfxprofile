@@ -285,6 +285,38 @@ for ln in hits:
 if len(hits) != 1 or len(inside) != 1:
     sys.exit("불변식 위반 — 영속화는 `_save_registry` 래퍼 하나만 지나야 한다 (U5 문 ②)")
 PY
+
+  # ⑦ QA DEFECT-03 — `kind: "code"` 실패는 **백엔드가 준 코드**만 담는다.
+  #    ★ 왜 타입만으로 부족한가: 판별 유니온은 "출처를 밝혀라"까지만 강제한다. 두 갈래의 필드가
+  #      같은 모양이라 **거짓으로 밝히는 것**(화면이 지어낸 사유에 `kind:"code"`를 다는 것)은
+  #      컴파일러가 못 본다 — 그런데 그게 바로 DEFECT-03의 형태였다. `tCode`는 등재된 코드면
+  #      호출부의 키를 이기므로, 그 순간 화면은 *무엇이 죽었는지*를 영영 말하지 못한다.
+  #    ★ 판별은 간단하다: **백엔드가 준 값은 이 파일에 적혀 있을 수 없다.** 그러니
+  #      `kind:"code"` 리터럴의 `code:`가 문자열 리터럴이면 그건 화면이 지어낸 사유다.
+  #      (화면이 지은 사유의 옳은 자리는 `kind:"local"`이고, 거기서는 리터럴이 정상이다.)
+  #    ⚠️ 주석을 먼저 지운다(게이트 ①·⑤와 같은 문법) — 이 프로젝트는 주석 오탐을 이미 두 번 겪었다.
+  #    ⚠️ 하나도 못 찾으면 **실패**로 끝낸다. 판별자 이름이 바뀌면 이 검사는 아무것도 안 보면서
+  #      초록불을 내는데, 그 상태가 검사 없는 것보다 나쁘다(U19 검사의 처분과 같다).
+  python3 - <<'PY'
+import re, pathlib, sys
+sites, bad = [], []
+for path in sorted(list(pathlib.Path('src').rglob('*.tsx')) + list(pathlib.Path('src').rglob('*.ts'))):
+    text = path.read_text()
+    text = re.sub(r'/\*.*?\*/', lambda m: '\n' * m.group(0).count('\n'), text, flags=re.S)
+    text = re.sub(r'//[^\n]*', '', text)
+    for m in re.finditer(r'\{[^{}]*\bkind:\s*["\']code["\'][^{}]*\}', text):
+        line = text[:m.start()].count('\n') + 1
+        sites.append(f"{path}:{line}")
+        if re.search(r'\bcode:\s*["\'`]', m.group(0)):
+            bad.append(f"{path}:{line} {' '.join(m.group(0).split())[:90]}")
+print(f'kind:"code" 실패 리터럴 {len(sites)}곳 — 화면이 지어낸 사유(문자열 리터럴) {len(bad)}건 (0이어야 한다)')
+for b in bad:
+    print("  " + b)
+if not sites:
+    sys.exit('DEFECT-03 검사 불가 — `kind: "code"` 형태를 하나도 못 찾았다 (판별자 이름이 바뀌었나?)')
+if bad:
+    sys.exit('불변식 위반 — 화면이 지어낸 사유는 `kind:"local"`이다 (`tCode`가 호출부의 키를 이긴다)')
+PY
 fi
 
 if run package; then

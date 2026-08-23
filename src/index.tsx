@@ -180,12 +180,33 @@ function stoppedSummary(profile: Profile, code: string): ApplySummary {
   };
 }
 
-/** 화면이 실패를 **받은 시각까지** 들고 있는다 — 언제 있었던 일인지가 사유만큼 중요하다. */
-interface Failure {
-  key: StringKey;
-  code: string;
-  at: number;
-}
+/**
+ * 화면이 실패를 **받은 시각까지** 들고 있는다 — 언제 있었던 일인지가 사유만큼 중요하다.
+ *
+ * ★★ **사유를 누가 지었는가**로 모양을 가른다(QA DEFECT-03). `tCode(code, fallback)`은
+ *   `code in en ? t(code) : t(fallback, { code })`다 — **i18n에 등재된 코드면 fallback 키를
+ *   항상 버린다.** 그것이 단일 관문의 정의이고, 백엔드가 준 코드에 대해서는 옳다.
+ *   그런데 이 한 모양에 성질이 다른 둘이 들어왔다: 백엔드가 준 코드와, **화면이 스스로 지어낸
+ *   사유**("확인창을 못 띄웠다" 같은). 뒤쪽을 그 관문에 넣으면 화면이 고른 이름이 등재돼 있는
+ *   순간 **호출부가 준 key가 통째로 사문이 된다** — 실제로 그렇게 깨져 있었다: 왕복이 죽은
+ *   갈래가 준 `"UNEXPECTED"`가 등재된 키라 "예기치 못한 오류"만 떴고, 저장이 죽었는지 삭제가
+ *   죽었는지 화면이 영영 말하지 못했다.
+ * ★ 예전 해법은 **등재되지 않은 문자열을 고르는 규약**이었다(`"MODAL"`). 그건 막기이지 구조가
+ *   아니다 — 규약을 적어 둔 같은 파일 안에서 다른 자리가 이미 한 번 빠졌고, 누군가 그 문자열을
+ *   i18n에 등재하는 것만으로도 나머지가 조용히 깨진다.
+ * ★ 그래서 **갈래를 타입으로 만든다.** 실패를 만드는 자리는 전부 출처를 밝혀야 하고(컴파일러가
+ *   강제한다), 화면이 지어낸 사유가 `tCode` 관문에 닿는 경로 자체가 없어진다. 무엇을 등재하든
+ *   동작이 안 변한다. 그리는 자리는 `renderStatusBox` ③ 하나다.
+ * ★★ **필드 이름도 갈라 둔다**(`code` / `reason`). 판별자만 갈라 두면 유니온은 *"출처를
+ *   밝혀라"*까지만 강제하고 *"밝힌 대로 써라"*는 강제하지 못한다 — 두 갈래의 모양이 같으면
+ *   렌더를 다시 `tCode(failure.code, …)` 한 줄로 되돌려도 **컴파일이 통과한다**(실측). 이름이
+ *   갈라져 있으면 그 줄이 그 자리에서 깨진다.
+ */
+type Failure =
+  /** 백엔드가 준 코드다 — 코드→문구의 **단일 관문**(`tCode`)을 지난다. */
+  | { kind: "code"; key: StringKey; code: string; at: number }
+  /** 화면이 지어낸 사유다 — `key`가 곧 문장이고, `reason`은 `{code}` 자리를 채우는 꼬리표다. */
+  | { kind: "local"; key: StringKey; reason: string; at: number };
 
 // ★ 마지막 일괄 적용 요약은 **컴포넌트 밖**에 둔다.
 //   QAM을 닫으면 패널이 언마운트되므로(실측: 다시 열면 요약 줄이 사라졌다) 상태에만 두면
@@ -457,16 +478,27 @@ function Content() {
       // 새 로드 성공 = 다음 동작의 시작이다 — 승계해 온 실패를 여기서 거둔다(§3-B 수명).
       setFailure(null);
     },
-    onLoadFail: (code, err) => {
+    // 봉투가 준 코드다 — `tCode` 단일 관문이 맞는 자리다(`kind:"code"`).
+    onLoadFail: (code) => {
+      setFailure({ kind: "code", key: "LOAD_FAILED", code, at: Date.now() });
+    },
+    // ★ 조회 왕복이 통째로 죽었다 — **봉투가 없으니 백엔드 코드도 없다**(`kind:"local"`).
+    //   예전엔 이 갈래가 `onLoadFail("UNEXPECTED", err)`로 같이 들어왔고, 등재된 그 코드가
+    //   `LOAD_FAILED`를 이겨 *현황을 못 읽었다*는 사실이 화면에서 사라졌다(QA DEFECT-03).
+    onLoadDead: (err) => {
       // 백엔드에 닿지 못한 경우다 — 남길 곳이 cef_log뿐이라 여기만 console.error다.
-      if (err !== undefined) failTag(`overview-failed err=${String(err)}`);
-      setFailure({ key: "LOAD_FAILED", code, at: Date.now() });
+      failTag(`overview-failed err=${String(err)}`);
+      setFailure({ kind: "local", key: "LOAD_FAILED", reason: "UNEXPECTED", at: Date.now() });
     },
     // 왕복이 통째로 죽은 갈래 — 일괄 적용은 아래에서 스스로 봉투로 바꿔 받으므로 여기 오지
     // 않는다. 남겨 두는 것은 그 밖의 죽음(호출이 그 자리에서 던지는 경우)을 위한 자리다.
     onCallFail: (key, err) => {
       failTag(`call-failed key=${key} err=${String(err)}`);
-      setFailure({ key, code: "UNEXPECTED", at: Date.now() });
+      // ★ **봉투가 없다 = 백엔드가 준 코드도 없다.** `"UNEXPECTED"`는 화면이 붙인 꼬리표이므로
+      //   `kind:"local"`이다 — `tCode`에 넣으면 그것이 등재된 키라 호출부가 준 `key`를 이겨
+      //   *무엇이 죽었는지*가 사라진다(QA DEFECT-03). 팝업 쪽 같은 갈래와 같은 처분이다
+      //   (`popup.tsx`의 `onCallFail: (key) => setNote(t(key, { code: "UNEXPECTED" }))`).
+      setFailure({ kind: "local", key, reason: "UNEXPECTED", at: Date.now() });
     },
   });
   const refresh = door.reload;
@@ -560,11 +592,15 @@ function Content() {
               );
             } catch (err) {
               failTag(`apply-confirm-modal-failed err=${String(err)}`);
-              // ⚠️ code에 `"UNEXPECTED"`를 넣으면 안 된다 — `tCode`는 **i18n에 등재된 코드면
-              //   그 문구를 이긴다**(단일 관문의 정의). 그러면 "예기치 못한 오류"가 떠서
-              //   *확인창이 안 떴다*는 진짜 사유가 사라진다. 등재되지 않은 코드를 줘야
-              //   fallback(=아래 키)이 화면에 나온다.
-              setFailure({ key: "APPLY_CONFIRM_MODAL_FAILED", code: "MODAL", at: Date.now() });
+              // ⚠️ **화면이 지어낸 사유다** — 백엔드는 여기서 아무 말도 하지 않았다. 그래서
+              //   `kind:"local"`로 `tCode` 관문 **밖에** 둔다: `tCode`는 **i18n에 등재된 코드면
+              //   그 문구를 이긴다**(단일 관문의 정의). 그 관문에 넣으면 "예기치 못한 오류"가
+              //   떠서 *확인창이 안 떴다*는 진짜 사유가 사라진다.
+              // ★ 예전엔 그것을 **등재되지 않은 코드를 골라** 피했다 — 그래야 fallback(=아래 키)이
+              //   화면에 나왔다. 그 규약은 이제 필요 없다: 갈래를 밝히는 일을 타입이 강제하므로
+              //   (`Failure`) `"MODAL"`이 언젠가 등재돼도 이 줄의 동작은 안 변한다. 남은 `"MODAL"`은
+              //   진단 꼬리표일 뿐이다(이 키에는 `{code}` 자리가 없어 화면에 나오지 않는다).
+              setFailure({ kind: "local", key: "APPLY_CONFIRM_MODAL_FAILED", reason: "MODAL", at: Date.now() });
             }
             return;
           }
@@ -595,7 +631,8 @@ function Content() {
    * ★ 엘리먼트를 **함수로 받는다**: 여기서 미리 만들면 `showModal`이 없는 상황에서도 팝업이
    *   한 번 그려진다. 열지 못할 화면을 먼저 그릴 이유가 없다.
    * ★ 실패는 **대상 이름을 포함해** 말한다(F21) — "화면을 못 띄웠다"만으로는 어느 화면인지
-   *   알 수 없다. `code`에 등재되지 않은 값을 주어 `tCode`가 그 키로 떨어지게 한다(위 참조).
+   *   알 수 없다. 사유를 지은 것은 화면이므로 `kind:"local"`이고, 그래서 `failKey`가 그대로
+   *   문장이 된다 — `tCode` 관문을 지나지 않는다(위 참조).
    */
   const openPopup = useCallback(
     (make: () => ReactElement, failKey: StringKey) => {
@@ -603,7 +640,7 @@ function Content() {
         showModal(make());
       } catch (err) {
         failTag(`popup-modal-failed key=${failKey} err=${String(err)}`);
-        setFailure({ key: failKey, code: "MODAL", at: Date.now() });
+        setFailure({ kind: "local", key: failKey, reason: "MODAL", at: Date.now() });
       }
     },
     [setFailure],
@@ -702,11 +739,17 @@ function Content() {
     if (runningNote) {
       now.push(<div key="running" style={{ color: MUTED_COLOR }}>{runningNote}</div>);
     }
-    // ③ 실패 — 사유(tCode 단일 관문)와 **받은 시각**을 함께.
+    // ③ 실패 — 사유와 **받은 시각**을 함께. 사유가 지나는 문은 **출처가 정한다**(`Failure`):
+    //   백엔드 코드는 `tCode` 단일 관문으로, 화면이 지어낸 사유는 그 관문을 지나지 않고
+    //   호출부가 준 키가 곧 문장이 된다(`{code}`가 있는 키면 꼬리표가 그 자리에 실린다).
+    //   ⚠️ TS 필드는 `reason`인데 치환자는 `{code}`다 — **치환자 이름은 i18n 문자열 쪽 계약**이라
+    //     (`LOAD_FAILED` 등 10개 문구가 그 이름을 쓴다) 같이 고치는 것이 아니다.
     if (failure) {
       now.push(
         <div key="failure" style={{ color: WARN_COLOR }}>
-          {tCode(failure.code, failure.key)}
+          {failure.kind === "code"
+            ? tCode(failure.code, failure.key)
+            : t(failure.key, { code: failure.reason })}
           <span>{" · "}{stampOf(failure.at)}</span>
         </div>,
       );

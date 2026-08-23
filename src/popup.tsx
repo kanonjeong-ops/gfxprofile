@@ -931,11 +931,30 @@ export interface DoorSink<T> {
   /** 최신 세대의 조회가 성공했다 — 봉투의 payload. */
   onData: (data: T) => void;
   /**
-   * 조회가 실패했다. `code`는 봉투의 코드이고, 왕복 자체가 죽었으면 `"UNEXPECTED"`와 함께
-   * 그 오류가 온다(진단 태그를 남길 곳이 필요한 소비자가 있다).
+   * 조회가 실패했다 — **봉투가 왔고 `ok:false`인 경우뿐**이다. `code`는 그 봉투의 코드이므로
+   * 소비자는 `tCode` 단일 관문에 그대로 실어도 된다.
+   *
+   * ★★ 예전에는 **왕복이 죽은 경우까지 이 문으로** 나갔다(`"UNEXPECTED"`를 코드 자리에 실어서).
+   *   그러면 소비자의 `tCode(code, failKey)`가 등재된 그 키를 만나 **failKey를 통째로 버리고**
+   *   "예기치 못한 오류"만 그린다 — *어느 화면이 못 읽혔는지*가 사라진다(QA DEFECT-03).
+   *   감시자 문자열을 고르는 방식으로는 그 함정을 못 벗어나므로 **문을 갈랐다**(아래).
    */
-  onLoadFail: (code: string, err?: unknown) => void;
-  /** 변이·조회 **왕복이 죽었다**(봉투가 없다) — 호출부가 준 failKey와 함께. */
+  onLoadFail: (code: string) => void;
+  /**
+   * **조회 왕복이 죽었다**(봉투 자체가 없다) — 백엔드가 준 코드는 **존재하지 않는다.**
+   *
+   * ★ 그래서 이 문은 코드를 주지 않는다. 소비자가 그릴 수 있는 것은 *자기가 아는 실패 키*뿐이고
+   *   (`tCode`에 넣을 재료가 애초에 없다), 진단 원문이 필요한 소비자를 위해 `err`만 온다.
+   * ★ 변이 쪽 `onCallFail`과 **같은 대칭**이다: 봉투가 온 갈래와 왕복이 죽은 갈래는 서로 다른
+   *   문으로 나간다. 소비자가 이 문을 안 채우면 **컴파일이 깨진다** — 다뤄야 할 갈래를 잊는
+   *   경로가 없다.
+   */
+  onLoadDead: (err: unknown) => void;
+  /**
+   * 변이·조회 **왕복이 죽었다**(봉투가 없다) — 호출부가 준 failKey와 함께.
+   * ★ 여기 오는 것은 **화면이 직접 건 호출**(`runMutation`·`runQuery`)이다. 문이 스스로 도는
+   *   `reload`의 죽음은 위 `onLoadDead`로 나간다 — 그쪽은 호출부가 준 키가 없다.
+   */
   onCallFail: (key: StringKey, err: unknown) => void;
   /**
    * **변이는 성공했는데 뒤따르는 재조회가 실패했다**(§4-I ⑥ — 성공 침묵의 유일한 예외).
@@ -1042,7 +1061,7 @@ export function useDataDoor<T>(
       // 옛 응답은 **없던 일**이다 — 화면은 이미 더 새 것을 알고 있다.
       if (mine !== generation.current) return;
       if (!res) {
-        to.current.onLoadFail("UNEXPECTED", err);
+        to.current.onLoadDead(err);
         if (afterWrite) to.current.onStaleAfterWrite?.();
         return;
       }
@@ -1181,6 +1200,14 @@ export function usePopupData<T>(
     setLoadNoteState(value);
   }, []);
 
+  /** 둘째 줄에 **이 훅의 조회**가 쓴다는 표시까지 함께 — 위 `setReloadNote`의 대칭이다.
+   *  ★ 조회 실패의 두 갈래(봉투 / 왕복 사망)가 같은 줄을 쓰므로, 출처 표시와 쓰기를 한 문에
+   *    묶어 둔다. 갈래가 늘 때 한쪽만 표시를 빠뜨리는 경로를 만들지 않는다. */
+  const setOwnLoadNote = useCallback((value: string) => {
+    ownLoadNote.current = true;
+    setLoadNoteState(value);
+  }, []);
+
   const door = useDataDoor<T>(
     load,
     {
@@ -1195,17 +1222,23 @@ export function usePopupData<T>(
         setData(payload);
         if (ownLoadNote.current) setLoadNoteState(null);
       },
-      onLoadFail: (code) => {
-        ownLoadNote.current = true;
-        setLoadNoteState(tCode(code, failKey));
-      },
+      // 봉투가 준 코드다 — `tCode` 단일 관문이 맞는 자리다.
+      onLoadFail: (code) => setOwnLoadNote(tCode(code, failKey)),
+      // ★ 왕복이 죽었다 = **백엔드 코드가 없다.** `"UNEXPECTED"`는 화면이 붙이는 꼬리표이므로
+      //   `tCode`가 아니라 `t(failKey, …)`다 — 아래 `onCallFail`과 같은 처분이고, 그래야
+      //   *어느 화면이 못 읽혔는지*가 남는다(QA DEFECT-03).
+      onLoadDead: () => setOwnLoadNote(t(failKey, { code: "UNEXPECTED" })),
       // ★ **`tCode`를 쓰면 안 되는 자리다**(QA DEFECT-03): `tCode(code, fallback)`은
       //   `code in en ? t(code) : t(fallback, {code})`이고 `"UNEXPECTED"`는 **등재된 키**라
       //   `key`가 **항상 버려진다.** 그러면 저장이 죽었는지 삭제가 죽었는지 화면이 말하지
       //   못하고, 위 인터페이스의 *"호출부가 준 failKey와 함께"*가 거짓이 된다
       //   (`runMutation(call, "SAVE_FAILED", …)`의 둘째 인자가 이 갈래에서 전부 사문이었다).
-      //   ⚠️ 바로 위 `onLoadFail`은 **`code`가 진짜 백엔드 코드**라 `tCode`가 맞다 —
-      //     두 줄이 같은 모양이라고 같이 고치지 말 것.
+      //   ⚠️ 위 `onLoadFail`은 **봉투가 온 경로뿐**이라 `code`가 진짜 백엔드 코드다 — 그쪽은
+      //     `tCode`가 맞다.
+      //   ⚠️⚠️ 예전 이 자리의 경고는 그 한정어 없이 *"onLoadFail은 백엔드 코드라 tCode가 맞다"*
+      //     라고만 적어 **왕복이 죽은 경로까지 그 문으로 나가던 사실을 가렸고**, 뒤에 "같이
+      //     고치지 말 것"까지 붙어 **틀린 전제가 수정을 막았다.** 그 경로는 이제 `onLoadDead`라는
+      //     다른 문이다 — 세 줄은 이제 모양부터 다르다.
       onCallFail: (key) => setNote(t(key, { code: "UNEXPECTED" })),
       // ★ ref로 최신 것을 부른다 — 이 훅이 만들어질 때의 클로저를 잡으면 확인창 안에 갇힌
       //   옛 콜백이 불린다(문이 `notify`를 ref로 드는 것과 같은 이유).
