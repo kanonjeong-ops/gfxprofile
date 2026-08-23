@@ -209,8 +209,21 @@ def _slot_materials(appid, profile, meta, bodies):
     """
     size = meta.get("size") or 0
     sha1_short = (meta.get("sha1") or "")[:10]
-    if size and sha1_short:
-        return size, sha1_short               # 기록이 멀쩡하다 — 파일을 열지 않는다
+    # ★★ **기록은 「본체와 맞을 때만」 믿는다**(사용자 결정 D8의 형제 자리 — QA DEFECT-04).
+    #   필드가 비지 않았다는 것은 *"기록이 있다"*이지 *"기록이 맞다"*가 아니다. 같은 `meta`의
+    #   같은 두 필드(`size`·`sha1`)를 쓰는 크기 가드(`engine.save_profile`)는 이미
+    #   `store.slot_holds`로 그 조건을 걸었는데 이 화면만 안 걸고 있었다.
+    #   ⚠️ 이 반쪽 상태(본체 새것 · 기록 옛것)는 **이 캠페인이 스스로 적어 둔 도달 경로**다 —
+    #     `main.save_profile`의 `except OSError`가 *"본체를 먼저 쓰고 기록을 나중에 쓰므로
+    #     반쪽 상태가 남을 수 있다"*고 말한 그 상태다. 거기서 확인창이 **잃지 않을 것의
+    #     크기·해시**를 댔다(실측: 기록 4 B/9dc9cfd3b3 ↔ 본체 20 B/8d93f3af2a).
+    trusted = store.slot_holds(appid, profile, meta.get("sha1"), meta.get("filename"))
+    if size and sha1_short and trusted:
+        return size, sha1_short               # 기록이 본체와 맞는다 — 파일을 다시 열지 않는다
+    if not trusted:
+        # ★ 기록이 본체와 **어긋난다** — 값이 차 있어도 그 칸을 쓰면 안 된다. 비워서 아래
+        #   실측 갈래로 보낸다(비어 있던 칸을 채우는 기존 문법과 같은 자리를 지난다).
+        size, sha1_short = 0, ""
     directory = store.profile_dir(appid, profile)
     if not size:
         for name in bodies:

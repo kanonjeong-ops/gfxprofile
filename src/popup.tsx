@@ -1199,7 +1199,14 @@ export function usePopupData<T>(
         ownLoadNote.current = true;
         setLoadNoteState(tCode(code, failKey));
       },
-      onCallFail: (key) => setNote(tCode("UNEXPECTED", key)),
+      // ★ **`tCode`를 쓰면 안 되는 자리다**(QA DEFECT-03): `tCode(code, fallback)`은
+      //   `code in en ? t(code) : t(fallback, {code})`이고 `"UNEXPECTED"`는 **등재된 키**라
+      //   `key`가 **항상 버려진다.** 그러면 저장이 죽었는지 삭제가 죽었는지 화면이 말하지
+      //   못하고, 위 인터페이스의 *"호출부가 준 failKey와 함께"*가 거짓이 된다
+      //   (`runMutation(call, "SAVE_FAILED", …)`의 둘째 인자가 이 갈래에서 전부 사문이었다).
+      //   ⚠️ 바로 위 `onLoadFail`은 **`code`가 진짜 백엔드 코드**라 `tCode`가 맞다 —
+      //     두 줄이 같은 모양이라고 같이 고치지 말 것.
+      onCallFail: (key) => setNote(t(key, { code: "UNEXPECTED" })),
       // ★ ref로 최신 것을 부른다 — 이 훅이 만들어질 때의 클로저를 잡으면 확인창 안에 갇힌
       //   옛 콜백이 불린다(문이 `notify`를 ref로 드는 것과 같은 이유).
       onStaleAfterWrite: () => stale.current?.(),

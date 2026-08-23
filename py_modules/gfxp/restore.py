@@ -141,7 +141,9 @@ def ring_observe(appid, items=()):
     adding = len(store.plan_backups(entries, items))
     observed["adding"] = adding
     if adding <= 0:
-        return observed                              # 전부 중복 — 한 칸도 안 쓰므로 축출도 없다
+        # 전부 중복 — 한 칸도 안 쓰므로 축출도 없다. ★ 이것은 **비용 단락**이지 두 번째 규칙이
+        # 아니다: 아래 `store._doomed_tail`도 `adding == 0`이면 빈 집합을 낸다(같은 답).
+        return observed
     rows = []
     for name in names:                               # ★ 먼저 **링 전체**를 만든다 (아래 이유)
         info = store.parse_backup_id(name)
@@ -151,7 +153,13 @@ def ring_observe(appid, items=()):
     # ★ 구분 번호는 **링 전체를 보고** 매긴 뒤 자른다 — 지워질 것만 보고 매기면, 쌍둥이 중
     #   하나만 지워질 때 번호가 안 붙어 화면이 남는 쪽까지 가리키는 이름을 댄다.
     _mark_duplicates(rows)
-    observed["evicted"] = rows[max(0, store.BACKUP_KEEP - adding):]
+    # ★★ 꼬리는 **`store._doomed_tail` 한 곳**에서만 유도한다(QA DEFECT-08). 예전에는 이 줄이
+    #   같은 산술을 한 벌 더 갖고 있었고, 그 함수에서 경계 결함이 **네 번** 났다
+    #   (호출 시점 링 · 자기 쓰기를 셈 · 음수 슬라이스 · `adding == 0`). 값이 같다고 두면
+    #   다음번에 링 의미를 바꿀 때 **확인창이 약속한 축출과 실제로 지워지는 파일이 갈린다.**
+    #   `rows`는 `names`(=`entries`)와 **같은 순서로** 만들었으므로 짝지어 거른다.
+    doomed = store._doomed_tail(entries, adding)
+    observed["evicted"] = [row for row, path in zip(rows, entries) if path in doomed]
     return observed
 
 
@@ -169,6 +177,8 @@ def evict_preview(appid, items):
       `ring_observe`를 직접 부른다** — 여기를 한 번 더 부르면 관측이 둘로 갈린다(위 ⓕ).
     ★★ 정렬은 `store.list_backups`(=prune이 실제로 자르는 목록)다. 표시 목록(`backup_rows`)도
       **같은 순서**를 쓴다 — 순서의 정본은 `store.backup_order_key` 하나다(R14 #3에서 통합).
+    ★ **그 산술의 정본은 `store._doomed_tail` 하나다** — 아래는 그 **이유 설명**이지 두 번째
+      규칙이 아니다(`adding == 0`이면 꼬리가 아예 없다는 갈래도 거기 있다).
     ★ `BACKUP_KEEP - adding`인 이유: 새 백업이 목록 맨 앞에 `adding`건 끼어들면 기존 항목이 그만큼
       밀린다. prune은 새 목록의 `[BACKUP_KEEP:]`을 지우므로, 지워지는 것은 **지금 목록의
       `[KEEP-adding:]`**이다. `adding`이 링보다 크면(슬롯에 파일이 아주 많은 삭제 경로) 지금

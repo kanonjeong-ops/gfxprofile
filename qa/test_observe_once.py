@@ -64,7 +64,15 @@ ROUTES = ("apply_profile", "save_profile", "delete_game", "restore_backup")
 #:   **무엇이 하나 더 읽혔는지 말하고 지나가라**는 뜻이다.
 BUDGET = {
     "apply_profile":  (4, 11),
-    "save_profile":   (3, 2),
+    # ★ 2026-08-23 QA DEFECT-04로 **(3, 2) → (4, 3)**. 늘어난 것은 `confirm._slot_materials`가
+    #   부르는 `store.slot_holds` 하나다(그 안에서 `load_meta` 1 + 본체 `sha1_file` 1).
+    #   ⚠️ **ⓕ가 닫은 창을 다시 열지 않는다**: 이 관측은 확인창의 표시값(`size`·`sha1_short`)만
+    #     정하고 **지문에 안 들어간다**(지문 두 칸은 슬롯 meta 파일의 sha1과 대상 설정 파일의
+    #     sha1이고 둘 다 이 호출 전에 이미 읽은 값이다). 읽는 것도 **슬롯 본체**라 지문이 재는
+    #     두 파일과 대상이 다르다.
+    #   왜 늘렸나: 기록이 본체와 어긋난 반쪽 상태에서 확인창이 **잃지 않을 것의 크기·해시**를
+    #     댔다(실측 기록 4 B ↔ 본체 20 B). 크기 가드(D8)가 이미 쓰던 술어를 그 화면에도 걸었다.
+    "save_profile":   (4, 3),
     "delete_game":    (0, 1),
     "restore_backup": (1, 13),
 }
