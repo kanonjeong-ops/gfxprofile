@@ -443,7 +443,7 @@ def _preview_one(reg, appid, profile, running):
     """게임 하나가 어느 버킷에 드는가. **판정 순서 = 엔진 실행 순서**다.
 
     ★ 순서가 계약이다(설계 §3-B 2조). `already` 판정이 G5(실행 중)보다 **먼저**이므로
-      (engine.py:594-598이 `apply_profile` 진입 전에 스킵한다) **실행 중이어도 디스크==프로필이면
+      (`engine.apply_all`의 `already` 갈래가 `apply_profile` 진입 전에 스킵한다) **실행 중이어도 디스크==프로필이면
       `already`**다. 순서를 바꾸면 화면이 "실행 중 N개는 거부 예상"이라고 말하는데 실제로는
       조용히 already가 되어, 미리보기와 결과가 어긋난다.
 
@@ -454,7 +454,7 @@ def _preview_one(reg, appid, profile, running):
         return "no_profile"
     try:
         state = engine.disk_state(reg, appid)
-    except Exception:                      # noqa: BLE001 — 엔진의 같은 자리(engine.py:592-593)와 동형
+    except Exception:                      # noqa: BLE001 — 엔진의 같은 자리(`engine.apply_all`의 `disk_state` try/except)와 동형
         state = {}
     if state.get("sha1") and state["sha1"] == meta.get("sha1"):
         return "already"
