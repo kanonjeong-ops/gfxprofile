@@ -2,7 +2,7 @@
 
 User-visible changes only. Release notes are cut from this file, one section per release.
 
-## 0.1.0 — 2026-08-19
+## 0.1.0
 
 First public release.
 

@@ -55,6 +55,12 @@ def user_home():
     그럼에도 이 사슬이 필요한 이유는 root가 아니라 **사용자명이 `deck`이 아닌 배포판**(Bazzite 등)
     때문이다. 그래서 loader가 준 `DECKY_USER_HOME`을 가장 먼저 본다 — 그게 있으면 추측이 필요 없다.
     UID 1000은 아무 단서도 없을 때의 마지막 수단이다.
+
+    ★ **처분: 유지**(배포 T2 · 2026-08-26). 배포하면 표본이 느니 한 번 판단하고 넘어가기로 한
+    자리다. 유지하는 근거는 위 문단 그대로이고, 더해 **이 폴백은 정상 설치에서 도달하지 않는다** —
+    `plugin.json`의 `flags`가 비어 있어 백엔드가 root로 돌지 않으므로 `os.geteuid() != 0`에서
+    이미 갈라진다. 바꾸려면 *"단서가 없을 때 무엇을 할 것인가"*의 답을 새로 정해야 하는데,
+    지금 답(`expanduser`로 떨어진다)보다 나은 것이 없다.
     """
     explicit = os.environ.get("GFXPROFILE_HOME") or os.environ.get("DECKY_USER_HOME")
     if explicit:

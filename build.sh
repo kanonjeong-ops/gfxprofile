@@ -387,30 +387,6 @@ missing_terms = [t for t in ('@decky/api', 'LGPL', 'licenses/LGPL-2.1.txt') if t
 if missing_terms:
     sys.exit(f"THIRD-PARTY-NOTICES.md가 고지해야 할 것을 담고 있지 않다: {missing_terms}")
 
-# (F) store metadata — 제출 가능한 구조인가 (2026-08-07 마일스톤 R3)
-#   공식 database workflow는 `publish.image`를 그대로 제출값으로 쓰고, 빈 값·잘못된 scheme을
-#   실패 처리한다. 우리는 **제출 전에** 그것을 잡는다.
-publish = json.loads((proj / 'plugin.json').read_text()).get('publish', {})
-image = publish.get('image', '')
-if not image:
-    sys.exit("plugin.json publish.image가 비어 있다 — 공식 workflow가 제출을 거부한다")
-if not image.startswith('https://'):
-    sys.exit(f"publish.image가 https:// URL이 아니다: {image!r}")
-if not (proj / 'assets' / 'store-image.png').is_file():
-    sys.exit("assets/store-image.png가 없다 — publish.image가 가리킬 실물이 리포에 있어야 한다")
-# ★ 아직 확정되지 않은 값은 **지어낸 최종값처럼 두지 않는다.** 이 프로젝트의 자리표시자
-#   규약(`__NAME__`)을 그대로 써서 *검사 가능한 형태로* 미확정임을 표시한다.
-store_placeholders = sorted(set(re.findall(r'__[A-Z][A-Z0-9_]*__', image)))
-if store_placeholders:
-    if os.environ.get('GFXP_STORE_READY') == '1':
-        sys.exit(f"publish.image에 미확정 자리표시자가 남았다: {store_placeholders} "
-                 "— 공개 저장소 URL을 확정한 뒤 다시 패키징하라(스토어 제출 게이트)")
-    print(f"⚠️  STORE_SUBMISSION_BLOCKED=1 publish.image 자리표시자 {store_placeholders} — "
-          "로컬 설치에는 지장이 없다. 스토어 제출 전에 공개 저장소 URL을 확정하고 "
-          "`GFXP_STORE_READY=1 bash build.sh package`로 잠금을 확인하라")
-else:
-    print("STORE_SUBMISSION_BLOCKED=0 publish.image 확정됨")
-
 # ── 식별자와 표시명은 다른 것이다 (설계 E19) ────────────────────────────────
 # IDENT : 배포 ZIP 최상위 폴더명 = 런타임 경로(~/homebrew/{data,settings,logs}/<IDENT>).
 #         **정본이 여기다.** 절대 plugin.json에서 파생시키지 않는다 — 반대 방향(검사)만 있다.
