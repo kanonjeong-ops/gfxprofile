@@ -799,7 +799,7 @@ def prune_backups(appid, protect=None):
     stamp에서 유도하므로 시계 역행 자체는 고치지 않는다.
     자르는 자리는 `[BACKUP_KEEP:]` 하나다. 링에 없는 보호 경로는 목록에서 제외한다.
     """
-    ring = list_backups(appid)                       # 최신순 — 자르는 순서의 정본이다
+    ring = list_backups(appid)                       # stamp 문자열 내림차순 — 벽시계 유래라 실제 생성 순서를 보증하지 않는다(`backup_order_key` 참조)
     if protect is None:
         mine = []
     elif isinstance(protect, str):
