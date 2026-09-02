@@ -376,12 +376,15 @@ def needs_confirm(reg, appid, backup_id):
     """
     appid = str(appid)
     _assert_in_position(appid)                       # 0단계
-    # 보존 계열(§8-D · §14-H ⓚ): 비-dict + 슬롯 대상에서 오늘 나가던 `already` 성공을 지킨다 —
-    #   검증을 끄고(`require_intact=False`) 비-dict를 `{}`로 접는다. 접기 뒤 config 갈래는 `""`
-    #   → `os.path.exists("")` 거짓 → `proceed`로 나가고, 실제 쓰기는 여전히
-    #   `engine.restore_backup`(`require_intact=True`)이 `REGISTRY_ENTRY_CORRUPT`로 거부한다.
+    # 보존 계열(§8-D · §14-H ⓚ): 손상 항목 + 슬롯 대상에서 오늘 나가던 `already` 성공을 지킨다 —
+    #   검증을 끄고(`require_intact=False`) 손상 항목을 `{}`로 접는다. 손상인가는 공용 술어
+    #   `engine.entry_corrupt`에 맡긴다 — 비-dict, 그리고 dict이되 `config_path`가 문자열이 아닌
+    #   항목. 접기를 그 술어보다 좁게 적으면(예: 비-dict만) 술어가 손상으로 보는 `config_path`가
+    #   아래 config 갈래로 새어 `os.path.exists`·`store.sha1_file`에 그대로 넘어간다.
+    #   접기 뒤 config 갈래는 `""` → `os.path.exists("")` 거짓 → `proceed`로 나가고, 실제 쓰기는
+    #   여전히 `engine.restore_backup`(`require_intact=True`)이 `REGISTRY_ENTRY_CORRUPT`로 거부한다.
     entry = engine.game_or_fail(reg, appid, require_intact=False)   # 미등록 → GAME_NOT_REGISTERED
-    if not isinstance(entry, dict):
+    if engine.entry_corrupt(entry):
         entry = {}
 
     info = store.parse_backup_id(backup_id)
