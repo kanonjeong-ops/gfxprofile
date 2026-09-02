@@ -524,12 +524,16 @@ def apply_profile(reg, appid, profile):
     #   덮게 된다. 그래서 쓰기 직전에 다시 확인한다 — 비용은 sha1 1회뿐이다(파일은 어차피
     #   여기서 다시 읽는다).
     if state["exists"]:
-        disk_data = store.read_bytes(path)
-        if not state["matches"] or store.sha1_bytes(disk_data) != state["sha1"]:
-            try:
+        # read_bytes와 그것을 쓰는 조건문까지 블록째 try 안이다(§14-E″ ⓒ · `restore_backup`의
+        #   같은 자리와 동형). 읽을 수 없는 설정 파일(권한·EIO)의 `OSError`가 try 밖이면
+        #   `UNEXPECTED`로 새는데, 이 대피가 실패하면 뒤의 쓰기(`atomic_write`)에 도달하지 않으므로
+        #   실패 사유는 `BACKUP_FAILED`이고 문구 "원본은 그대로입니다"가 전 갈래에서 참이다.
+        try:
+            disk_data = store.read_bytes(path)
+            if not state["matches"] or store.sha1_bytes(disk_data) != state["sha1"]:
                 store.make_backup(appid, disk_data, store.KIND_DISK, os.path.basename(path))
-            except OSError as exc:                               # G13
-                raise Refused("거부: 백업에 실패해 적용을 중단했습니다 (%s). 원본은 그대로입니다." % exc, code=codes.BACKUP_FAILED)
+        except OSError as exc:                               # G13
+            raise Refused("거부: 백업에 실패해 적용을 중단했습니다 (%s). 원본은 그대로입니다." % exc, code=codes.BACKUP_FAILED)
 
     # 기존 파일의 권한과 소유권을 임시 파일에 이어받도록 요청한다. 소유권 복원 실패는
     # `store.atomic_write`가 비치명으로 취급하므로, owner 전달이 보존 성공을 보장하지는 않는다.
