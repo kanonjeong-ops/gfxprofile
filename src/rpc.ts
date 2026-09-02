@@ -527,9 +527,32 @@ export interface DeleteResult {
  */
 export const deleteGame = rpc<[appid: string, confirm_token?: string], DeleteResult>("delete_game");
 
-/** reset_all이 CONFIRM_REQUIRED로 돌려주는 params. 아직 아무것도 지워지지 않았다. */
-export interface ResetConfirmParams {
+/** 초기화가 실제로 한 일의 갈래. 두 갈래는 **지우는 대상이 다르다**(§7-4′ 2항) —
+ *  화면이 그 차이를 말해야 하므로 봉투가 판별자를 싣는다. */
+export type ResetMode = "normal" | "fresh";
+
+/**
+ * reset_all이 CONFIRM_REQUIRED로 돌려주는 params. 아직 아무것도 지워지지 않았다.
+ *
+ * 판별자는 `mode` 한 필드이고 **두 갈래에 모두** 싣는다 — 한쪽에만 두고 「없으면 저쪽」으로
+ *   읽으면 필드가 빠진 봉투가 조용히 반대 갈래로 간다. 같은 함정을 이 프로젝트는 이미 한 번
+ *   겪었다(§3-A 12판 C-1: `ready`가 undefined일 때 `ready===0`만 보면 버튼이 활성이 됐다).
+ * 프론트의 판별자 관례가 `kind`인 것(popup.tsx의 DView·ConfirmSpec)과 충돌하지 않는다 —
+ *   그쪽은 **프론트가 만들어 프론트가 읽는 뷰·스펙**의 판별자이고 이것은 **백엔드 봉투**의 필드다.
+ */
+export interface ResetConfirmBase {
   confirm_token: string;
+  /**
+   * 사용자가 그대로 입력해야 하는 확인 단어. 번역하지 않는다 — i18n에 넣으면 화면이 보여주는
+   * 단어와 백엔드가 대조하는 상수가 언어에 따라 갈려 입력이 영영 안 맞는다. 백엔드가 준 값을
+   * 그대로 보여주고 그대로 대조한다. fresh 갈래도 2단 방어를 유지한다(되돌릴 수 없다는 성격은 같다).
+   */
+  challenge: string;
+}
+
+/** 정상 갈래 — registry를 읽었고, 무엇을 지우는지 셀 수 있다. */
+export interface ResetNormalConfirmParams extends ResetConfirmBase {
+  mode: "normal";
   /** 파괴 내역 — 화면이 다시 세지 않는다(두 곳에서 세면 언젠가 어긋난다). */
   games: number;
   profiles: number;
@@ -544,12 +567,6 @@ export interface ResetConfirmParams {
    */
   excluded: number;
   /**
-   * 사용자가 그대로 입력해야 하는 확인 단어. 번역하지 않는다 — i18n에 넣으면 화면이 보여주는
-   * 단어와 백엔드가 대조하는 상수가 언어에 따라 갈려 입력이 영영 안 맞는다. 백엔드가 준 값을
-   * 그대로 보여주고 그대로 대조한다.
-   */
-  challenge: string;
-  /**
    * 이 초기화로 지워질 백업 건수와 그런 게임 수(일괄 적용과 같은 필드). 초기화는 게임마다 슬롯
    * 본체를 대피시키므로 링이 찬 게임에서는 오래된 백업이 밀려난다. 이름은 대지 않는다(게임이
    * 여럿이다). 0이면 그 줄을 그리지 않는다.
@@ -557,6 +574,19 @@ export interface ResetConfirmParams {
   evicted: number;
   evict_games: number;
 }
+
+/**
+ * 손상 복구 갈래 — registry를 읽지 못했다.
+ *
+ * **수를 싣지 않는 것이 계약이다.** 무엇이 등록돼 있었는지 셀 수 없는 상태이므로, 0을 그리면
+ *   화면이 거짓을 말한다(§7-4′ 3항). 이 갈래가 지우는 것은 게임 목록 파일 하나뿐이고
+ *   프로필·백업은 하나도 지우지 않는다 — 확인창 문구가 그 사실을 말한다.
+ */
+export interface ResetFreshConfirmParams extends ResetConfirmBase {
+  mode: "fresh";
+}
+
+export type ResetConfirmParams = ResetNormalConfirmParams | ResetFreshConfirmParams;
 
 export type ResetOutcome = "deleted" | "refused" | "error";
 
@@ -570,10 +600,16 @@ export interface ResetRow {
 }
 
 export interface ResetAllResult {
+  /**
+   * 어느 갈래로 끝났나(§7-4′ 2항). `"fresh"`면 아래 셋은 전부 빈 값이고, 완료 문구는
+   * 조각 조립을 타지 않고 `RESET_OK_FRESH` 하나다 — `RESET_OK`("초기화 작업을 마쳤습니다")로
+   * 접으면 지우지 않은 프로필 데이터를 지웠다고 말하게 된다.
+   */
+  mode: ResetMode;
   results: ResetRow[];
   counts: Partial<Record<ResetOutcome, number>>;
   /**
-   * 초기화가 실제로 지운 registry settings 범주의 건수.
+   * 초기화가 실제로 지운 registry settings 범주의 건수. fresh에서는 둘 다 0이다.
    *
    * 왜 결과 봉투가 들고 오나: 완료 문구가 「무엇이 사라졌는지」를 말하려면 세 범주(등록 게임·
    *   표시 이름·감지 제외)를 다 알아야 하는데, counts.deleted는 게임만 센다. 그것만으로 문장을
@@ -596,6 +632,9 @@ export interface ResetAllResult {
 /**
  * 전체 초기화 = 개별 삭제의 반복 + registry 공장초기화(settings·gpu_map 포함). backups/는
  * 그대로 남는다.
+ * ★ 19판 — 그것은 `mode:"normal"` 갈래다. registry를 읽지 못하면 `mode:"fresh"` 갈래로 갈라져
+ *   게임을 하나도 열거하지 않고 손상된 목록 파일만 격리한 뒤 빈 목록을 새로 쓴다(프로필·백업은
+ *   손대지 않는다) — 정상 초기화와 손상 복구 초기화는 **지우는 대상이 다르다**(ResetMode).
  *
  * 방어가 2중이다: 1회용 토큰 + type-to-confirm. 판정은 둘 다 백엔드에 있고, confirm_text는 토큰
  *   튜플의 한 칸으로 비교된다 — 프론트의 OK 비활성은 UX 보조일 뿐이라 런타임에 안 먹어도

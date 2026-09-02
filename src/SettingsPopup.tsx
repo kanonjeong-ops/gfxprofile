@@ -1,5 +1,5 @@
 import { useCallback, useRef } from "react";
-import { makeNameEditSpec, makeResetConfirmSpec } from "./confirmSpecs";
+import { makeNameEditSpec, makeResetConfirmSpec, makeResetFreshConfirmSpec } from "./confirmSpecs";
 import { Focusable } from "./deckyui";
 import { IconGear, IconTrash } from "./icons";
 import { hasProfileNameOverride, setProfileNames, t, tCode } from "./i18n";
@@ -78,6 +78,13 @@ export function SettingsPopup({
     (token?: string, text?: string) =>
       runMutation(() => resetAll(token, text), "RESET_ACTION_FAILED", (res) => {
         if (res.ok) {
+          if (res.data.mode === "fresh") {
+            /* 조각 조립을 타지 않는다 — fresh는 프로필 데이터를 하나도 안 지웠다(§7-4′ 2항).
+               `RESET_OK`("초기화 작업을 마쳤습니다")로 접으면 화면이 실제보다 넓게 말한다. */
+            setNote(t("RESET_OK_FRESH"));
+            resetTyped.current = "";
+            return;
+          }
           const deleted = res.data.counts.deleted ?? 0;
           const left = res.data.results.length - deleted;
           /* 완료 문구는 지운 것만 말한다 — 0인 범주는 문장 자체를 그리지 않는다. 다 지워졌을
@@ -112,20 +119,28 @@ export function SettingsPopup({
         }
         if (res.code === "CONFIRM_REQUIRED") {
           const p = res.params as unknown as ResetConfirmParams;
-          gate(
-            makeResetConfirmSpec(
-              p,
-              resetTyped.current,
-              (value) => { void runReset(p.confirm_token, value); },
-              (value) => { resetTyped.current = value; },
-            ),
-            // 토큰이 안 돌아가면 아무것도 지워지지 않는다 — 이 문구가 참인 자리다.
-            "MANAGE_MODAL_FAILED",
-            setNote,
-          );
-          return;
+          /* 콜백 둘은 현행 인라인 그대로다 — 두 spec이 함께 쓰도록 이름만 준다. */
+          const onOK = (value: string) => { void runReset(p.confirm_token, value); };
+          const onSnapshot = (value: string) => { resetTyped.current = value; };
+          switch (p.mode) {
+            case "fresh":
+              // 토큰이 안 돌아가면 아무것도 지워지지 않는다 — 이 문구가 참인 자리다.
+              gate(makeResetFreshConfirmSpec(p, resetTyped.current, onOK, onSnapshot),
+                   "MANAGE_MODAL_FAILED", setNote);
+              return;
+            case "normal":
+              gate(makeResetConfirmSpec(p, resetTyped.current, onOK, onSnapshot),
+                   "MANAGE_MODAL_FAILED", setNote);
+              return;
+            default:
+              /* 타입상 도달 불가이나 런타임 방어를 남긴다 — 확인창을 못 그리면 아무것도 안
+                 지운다(fail-closed). 모르는 mode를 정상으로 접으면 수 자리가 undefined로
+                 렌더되고, fresh로 접으면 파괴 규모 고지가 통째로 빠진다. 둘 다 안 된다. */
+              setNote(tCode(res.code, "RESET_ACTION_FAILED"));
+              return;
+          }
         }
-        // 토큰 발급 전 또는 확정 실행 중의 실패다. 상태를 단정하지 않고 재조회·통지한다.
+        // 토큰 발급 전 또는 확정 실행 중의 실패다(RESET_FAILED도 여기를 지난다 — §7-5′).
         setNote(tCode(res.code, "RESET_ACTION_FAILED"));
       }),
     // 보존값을 ref로 읽으므로 이 문은 한 번 만들어지면 계속 옳다 — deps에 입력값이 없다.
@@ -178,10 +193,12 @@ export function SettingsPopup({
    *   초기화가 제외 목록도 지운다는 사실이 도달 불가가 된다.
    * 수는 봉투가 준 값이다(`counts.excluded`) — 프론트가 다시 세지 않는다.
    * 조회 실패(=counts 없음)일 때는 활성 유지다: ⓐ 일시 원인이 섞여 있어 원천 차단은 과잉이고
-   *   ⓑ 눌러도 오발동이 없다 — 백엔드가 토큰+challenge로 fail-closed이고, registry가 실제로
-   *   손상됐다면 `reset_all`이 첫 줄의 `load_registry()`에서 같은 코드로 거부해 토큰 발급
-   *   자체가 안 된다(정확한 사유가 note로 뜨는 정직한 실패).
-   *   즉 이것은 손상 복구의 탈출구가 아니다. 로딩 중(아직 아무것도 모름)만 비활성이다.
+   *   ⓑ 눌러도 오발동이 없다 — 백엔드가 토큰+challenge로 fail-closed다.
+   *   ★ 19판 — 눌렀을 때 실제로 하는 일이 생겼다: registry가 손상됐으면 `reset_all`이
+   *   **fresh 복구 갈래**로 갈라져 확인창을 띄우고(자기 토큰을 발급한다 — 확인 배관은 registry를
+   *   읽지 않아 `load_registry`를 못 지나도 성립한다), 승인하면 손상 목록 파일을 격리한 뒤
+   *   목록을 빈 상태로 새로 시작한다(프로필·백업은 손대지 않는다). 즉 이것은 이제 **손상
+   *   registry의 인앱 탈출로다**(§7-4′). 로딩 중(아직 아무것도 모름)만 비활성이다.
    */
   const loading = data === null && !noteText;
   const resetEnabled = counts ? counts.total > 0 || counts.excluded > 0 : !loading;

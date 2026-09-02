@@ -147,6 +147,8 @@
   "RESET_OK_GAMES": "Unregistered {n} game(s).",
   "RESET_OK_NAMES": "Reset {n} display name(s) to the defaults.",
   "RESET_OK_EXCLUDED": "Cleared {n} detection exclusion(s).",
+  "RESET_FRESH_CONFIRM_WARN": "⚠ This plugin's game-list file is in an unusable state. Resetting starts the list over empty and keeps the current file under a different name. Saved profiles and backups are not deleted — register a game again to use the profiles and backups it already has.",
+  "RESET_OK_FRESH": "The game list has been started over. Saved profiles and backups were not deleted — register a game again to use them as they are.",
   "RESET_ACTION_FAILED": "Could not reset ({code})",
   "BACKUP_LIST_TITLE": "{name} — backups",
   "BACKUP_LIST_HINT": "Each row says where it goes back into — profile backups go into that profile, the rest go into the game's settings file.",

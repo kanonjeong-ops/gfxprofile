@@ -218,9 +218,12 @@ def mutating(fn):
 def _save_registry(reg):
     """문 ② — 영속화 직전, 실제로 쓰려는 그 dict를 검사한다.
 
-    이 래퍼에 예외 경로는 없다 — reset_all(탈출로)도 여기를 지나지만, 그것이 영속화하는
-    dict는 `store.default_registry()` 기반이라 `version`이 현재 값이고 검사를 자연 통과한다.
-    탈출을 허용하는 것은 예외 분기가 아니라 데이터 자체다 — 구조가 예외를 없앤 자리.
+    이 래퍼에 예외 경로는 없다 — 정상 갈래의 reset_all(탈출로)은 여전히 여기를 지나지만, 그것이
+    영속화하는 dict는 `store.default_registry()` 기반이라 `version`이 현재 값이고 검사를 자연
+    통과한다. 탈출을 허용하는 것은 예외 분기가 아니라 데이터 자체다 — 구조가 예외를 없앤 자리.
+    ★ 19판 — **fresh 갈래는 여기를 지나지 않는다**: `store.save_fresh_registry()`가 인자를 받지
+    않아 밖에서 만든 dict가 그 문으로 들어올 수 없고, 그래서 버전 가드 없이도 `version`이 언제나
+    현재 값이다(§7-4′ 6항). 구조가 예외를 없앤 자리가 하나 더 늘었다.
     """
     _guard_not_newer(reg)
     store.save_registry(reg)
@@ -495,6 +498,8 @@ _CONFIRM_MAX = 32             # 토큰이 무한히 쌓이지 않게 — 발급�
 _ADD_GAME_SCOPE = "add_game"  # 등록 토큰의 네임스페이스. profile 값과 절대 겹치지 않는다
 _DELETE_SCOPE = "delete_game"  # 개별 삭제 토큰의 네임스페이스
 _RESET_SCOPE = "reset_all"
+_RESET_FRESH_SCOPE = "reset_all:fresh"   # 손상 복구 갈래 — 정상 갈래의 `_RESET_SCOPE`와 섞지 않는다
+#   (두 갈래가 지우는 대상이 다르므로 확인한 것과 실행한 것이 갈릴 여지를 스코프에서 막는다 — §7-4′ 4항).
 _RESTORE_SCOPE = "restore_backup"   # 복원 토큰의 네임스페이스(합성 스코프의 앞자리 — 아래 `_restore_scope`)
 _APPLY_ALL_SCOPE = "apply_all"      # 일괄 적용 토큰의 네임스페이스(방향은 4번 칸에 묶는다)
 _APPLY_ONE_SCOPE = "apply_profile"  # 개별 적용 토큰의 네임스페이스(합성 스코프의 앞자리 — 아래 `_apply_scope`)
@@ -573,6 +578,43 @@ def _consume(tok, appid, profile, meta_sha1, disk_sha1):
     if time.monotonic() - issued > _CONFIRM_TTL:
         return False
     return (a, p, m, d) == (appid, profile, meta_sha1, disk_sha1)
+
+
+# ── 손상 registry의 fresh 복구 탈출 갈래 (19판 — §7-4′) ────────────────────────
+
+def _reset_preflight(reg):
+    """탈출로 입구의 형태 검사 — 버전 무관.
+
+    로더(§14-F′ ⓒ)는 미래 registry의 `games`를 검사하지 않는다(U5: 읽기는 막지 않는다).
+    그 게이트가 남기는 「미래 + 손상 → reset 재사망」을 여기서 막는다. 미래 registry의
+    읽기 능력은 이 검사로 조금도 줄지 않는다 — 여기는 탈출로 입구이지 읽기 경로가 아니다.
+    보는 것은 컨테이너 둘뿐이다: appid 키와 항목의 형태는 보지 않는다(그 둘은 registry가
+    멀쩡한 세계의 문제이고, §8-D 정규화 규칙이 정상 갈래에서 처리한다).
+    """
+    for key in ("games", "settings"):
+        if not isinstance(reg.get(key), dict):
+            raise store.RegistryError(
+                "거부: 레지스트리 형식이 올바르지 않습니다 — %s가 dict가 아닙니다 (%s: %r). 파일: %s"
+                % (key, type(reg.get(key)).__name__, reg.get(key), store.registry_path()),
+                code=codes.REGISTRY_MALFORMED)
+
+
+def _reset_fresh_fingerprint(code):
+    """fresh 토큰에 묶을 지문 — 발급과 소비가 같은 규칙을 같은 순서로 재계산한다.
+
+    정상 갈래의 지문(`reset_fingerprint|evict=`)은 `reg["games"]` 순회를 요구해 이 상태에서는
+    산출 자체가 불가능하다. 그래서 **관측 가능한 파일 상태**에 결박한다. 고정 상수를 쓰면 파일이
+    바뀌어도 토큰이 살아남아 TOCTOU 방어가 통째로 사라진다 — 상수는 최후의 한 자리뿐이다.
+    """
+    path = store.registry_path()
+    sha = store.sha1_file(path)                      # 읽기 실패면 None(store.py 실측)
+    if sha:
+        return "sha1=%s|code=%s" % (sha, code)
+    try:
+        st = os.stat(path)
+        return "stat=%d:%d:%d|code=%s" % (st.st_size, st.st_mtime_ns, st.st_ino, code)
+    except OSError:
+        return "unobservable|code=%s" % code          # 결박할 관측이 없다는 사실을 그대로 받는다
 
 
 class Plugin:
@@ -1188,13 +1230,32 @@ class Plugin:
 
         `@mutating`을 두지 않아 더 새 버전의 registry도 초기화할 수 있다. 저장하는 것은 현재
         버전의 새 registry이므로 `_save_registry`의 버전 가드를 통과한다.
+
+        ★ 19판 — registry를 읽지 못하거나(`load_registry`) 컨테이너 형태가 깨졌으면
+        (`_reset_preflight`) **fresh 복구 갈래**(`_reset_fresh`)로 갈라진다: 게임을 한 개도
+        순회하지 않고 손상 원문을 격리 디렉터리로 옮긴 뒤 공장초기 목록을 쓴다. 그 갈래의 토큰
+        지문은 `reg["games"]` 순회가 불가능하므로 registry 파일의 관측 상태(sha1, 없으면 stat)에
+        결박하고(`_reset_fresh_fingerprint`), 스코프도 정상 갈래(`_RESET_SCOPE`)와 별개다
+        (`_RESET_FRESH_SCOPE`). 아래는 정상 갈래(`mode:"normal"`) 그대로다.
         """
-        reg = store.load_registry()
+        # 이 try가 답하는 질문은 「registry를 읽고 이해할 수 있나」 **하나**다. 넓히면 fresh 저장
+        #   실패(격리 실패도 `RegistryError`다 — §7-4′ 6항)가 다시 fresh 확인 발급으로 먹혀
+        #   사용자가 같은 확인창을 무한히 다시 본다. 구조적으로도 안전하다: `except` 절 안에서 난
+        #   예외는 같은 `try`가 다시 잡지 않으므로 `_reset_fresh`가 올리는 것은 `@route`의 봉투로
+        #   곧장 나간다.
+        try:
+            reg = store.load_registry()
+            _reset_preflight(reg)
+        except store.RegistryError as exc:
+            return self._reset_fresh(exc, confirm_token, confirm_text)
         # 축출 예고와 그 지문은 한 번의 산출에서 같이 나온다(일괄 적용과 같은 문법).
         evict = remove.reset_evict_preview(reg)
         fp = "%s|evict=%s" % (remove.reset_fingerprint(reg), evict["fingerprint"])
         if not _consume(confirm_token, "*", _RESET_SCOPE, fp, confirm_text or ""):
             return _fail(codes.CONFIRM_REQUIRED,
+                         # ★ 19판 — 판별자를 정상 갈래에도 싣는다. 안 실으면 프론트 switch가
+                         #   default(fail-closed)로 떨어져 정상 확인창이 아예 안 뜬다(§7-4′ 3항).
+                         mode="normal",
                          confirm_token=_issue("*", _RESET_SCOPE, fp, _RESET_CHALLENGE),
                          games=len(reg["games"]),
                          profiles=_profile_total(reg),
@@ -1267,7 +1328,27 @@ class Plugin:
             "reset_all session=%s counts=%s outcomes=%s problems=%s",
             SESSION, counts, {r["appid"]: r["outcome"] for r in results}, problems)
         _save_registry(fresh)
-        return _ok(results=results, counts=counts, cleared=cleared)
+        return _ok(mode="normal", results=results, counts=counts, cleared=cleared)
+
+    def _reset_fresh(self, exc, confirm_token, confirm_text):
+        """손상 registry의 탈출 갈래. 게임을 하나도 순회하지 않는다 — 열거할 수 없는 상태가 전제다.
+
+        확인 params·성공 봉투 둘 다 `mode:"fresh"`를 싣고 수는 싣지 않는다(셀 수 없다 — 못 세는
+        수를 0으로 그리면 화면이 거짓을 말한다). 코드는 `CONFIRM_REQUIRED` 그대로다(신설 백엔드
+        코드 0). 격리·저장은 `store.save_fresh_registry`가 하고, 그 실패(`RegistryError`)는 이
+        메서드가 잡지 않고 `@route` 봉투로 곧장 올린다(§7-4′ 5항).
+        """
+        fp = _reset_fresh_fingerprint(exc.code)
+        if not _consume(confirm_token, "*", _RESET_FRESH_SCOPE, fp, confirm_text or ""):
+            return _fail(codes.CONFIRM_REQUIRED,
+                         mode="fresh",
+                         confirm_token=_issue("*", _RESET_FRESH_SCOPE, fp, _RESET_CHALLENGE),
+                         challenge=_RESET_CHALLENGE)
+        # 감사 로그는 쓰기보다 먼저(기존 관례). 격리 경로는 성공 뒤에 한 줄 더 남긴다.
+        decky.logger.info("reset_all fresh session=%s cause=%s", SESSION, exc.code)
+        quarantined = store.save_fresh_registry()        # 실패는 RegistryError로 그대로 올린다
+        decky.logger.info("reset_all fresh done session=%s quarantined=%s", SESSION, quarantined)
+        return _ok(mode="fresh", results=[], counts={}, cleared={"named": 0, "excluded": 0})
 
     # ── 표시명 ───────────────────────────────────────────────────────────────
     @route

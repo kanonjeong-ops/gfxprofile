@@ -4,7 +4,8 @@ import { BACKUP_WARN_APPLIES, PROFILE_NAME_MAX } from "./limits";
 import { PATH_BREAK_STYLE, type InputConfirmSpec, type PlainConfirmSpec } from "./popup";
 import type {
   AddGameConfirmParams, ApplyAllConfirmParams, ApplyConfirmParams, ConfirmParams,
-  DeleteConfirmParams, EvictedRow, Profile, ResetConfirmParams, RestoreConfirmParams,
+  DeleteConfirmParams, EvictedRow, Profile, ResetFreshConfirmParams, ResetNormalConfirmParams,
+  RestoreConfirmParams,
 } from "./rpc";
 
 /**
@@ -411,8 +412,8 @@ export function makeDiscoverWarnSpec(
  *   다시 치게 하지 않는다.
  */
 export function makeResetConfirmSpec(
-  params: ResetConfirmParams,
-  initial: string,
+  params: ResetNormalConfirmParams,          // ★ 19판 — 유니언을 그대로 받으면 fresh 구성원에
+  initial: string,                           //   없는 6필드 접근이 TypeScript 오류다
   onOK: (value: string) => void,
   onInputSnapshot?: (value: string) => void,
 ): InputConfirmSpec {
@@ -442,6 +443,36 @@ export function makeResetConfirmSpec(
             사라지는 몫을 말하지 않으면 그 문장이 조건부로 거짓이 된다. */}
         {evictSummary(params.evicted, params.evict_games)}
         {/* 회색(META) — 등록 해제 확인창의 같은 키와 같은 이유·같은 판단이다. */}
+        <div style={META_STYLE}>{t("MANAGE_KEEP_CONFIG")}</div>
+        <div>{t("RESET_CONFIRM_TYPE", { word: params.challenge })}</div>
+      </div>
+    ),
+    okText: t("RESET_CONFIRM_OK"),
+    input: { label: t("RESET_CONFIRM_FIELD_LABEL"), initial },
+    okDisabled: (value) => value !== params.challenge,
+    onOK,
+    onInputSnapshot,
+  };
+}
+
+/**
+ * 손상 복구 초기화 확인 — 정상 초기화와 **지우는 대상이 다르다**(§7-4′ 2항).
+ * 2단 방어(토큰 + type-to-confirm)는 같고, 파괴 규모 고지가 수가 아니라 **범위 진술**이다:
+ *   셀 수 없는 상태이므로 수를 그리지 않는다.
+ */
+export function makeResetFreshConfirmSpec(
+  params: ResetFreshConfirmParams,
+  initial: string,
+  onOK: (value: string) => void,
+  onInputSnapshot?: (value: string) => void,
+): InputConfirmSpec {
+  return {
+    kind: "input",
+    title: t("RESET_CONFIRM_TITLE"),                 // "전체 초기화할까요?" 재사용
+    warnBlock: <div>{t("RESET_FRESH_CONFIRM_WARN")}</div>,
+    body: (
+      <div style={COLUMN_STYLE}>
+        {/* 회색(META) — 정상 초기화·등록 해제 확인창의 같은 키와 같은 판단이다. */}
         <div style={META_STYLE}>{t("MANAGE_KEEP_CONFIG")}</div>
         <div>{t("RESET_CONFIRM_TYPE", { word: params.challenge })}</div>
       </div>

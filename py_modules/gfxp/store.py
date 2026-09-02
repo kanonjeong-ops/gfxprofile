@@ -291,6 +291,64 @@ def save_registry(reg):
     atomic_write(path, data)
 
 
+#: 같은 초에 `.corrupt-<stamp>` 이름이 겹칠 때 붙이는 접미의 상한. 소진하면 격리 실패다.
+_CORRUPT_SEQ_MAX = 100
+
+
+def save_fresh_registry():
+    """손상 원문을 격리한 뒤 공장초기 registry를 쓴다. 격리 디렉터리 경로를 돌려준다.
+
+    `save_registry`를 부르지 않는 것이 이 함수의 존재 이유다: `save_registry`는 직전 파일이
+    JSON으로 파싱되기만 하면(shape는 안 본다) `.bak`으로 승격하므로, 이 갈래가 그것을 지나면
+    JSON-valid 손상본이 정상 `.bak`을 덮는다 — 손상 이전의 마지막 정상본을 잃는다.
+    **인자를 받지 않는 것이 두 번째 안전장치다**: 밖에서 만든 dict가 이 문으로 들어올 수 없어
+    `main._save_registry`(문 ② 버전 가드)를 지나지 않아도 `version`이 언제나 현재 값이다 —
+    §14-F의 *"탈출을 허용하는 것은 예외 분기가 아니라 데이터 자체다"*와 같은 문법이고,
+    여기서는 **함수 시그니처가 그 데이터를 강제한다.**
+    `.bak`은 건드리지 않는다(rotate 없음) — 손상 이전의 정상 `.bak`이 남는 것이 이 갈래의 계약이다.
+    """
+    path = registry_path()
+    base = "%s.corrupt-%s" % (path, time.strftime("%Y%m%d-%H%M%S"))
+    holder = None
+    for seq in range(1, _CORRUPT_SEQ_MAX + 1):
+        candidate = base if seq == 1 else "%s-%d" % (base, seq)
+        try:
+            # 이름 확보는 `mkdir`의 EEXIST가 **구조로** 한다. `os.path.exists` 검사 뒤
+            #   `os.replace`를 쓰면 검사와 rename 사이에 목적지가 생겨도 조용히 덮고,
+            #   dangling symlink는 `exists`가 거짓이라 아예 못 본다. `mkdir`은 그 둘을 다
+            #   EEXIST로 거부한다 — 손상 원문은 사본이 없는 증거라 덮어쓰기를 구조로 막는다.
+            os.mkdir(candidate)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            # EEXIST 아닌 실패(권한·ENOSPC·읽기 전용 마운트 등)를 여기서 봉투화한다. 안 잡으면
+            #   `OSError`가 route의 마지막 갈래에서 익명 `UNEXPECTED`가 되는데, 그것은 §7-4′ 5항의
+            #   좁은 try가 딛는 전제(「격리 실패도 `RegistryError`다」)를 깨뜨린다. 아무것도 쓰지
+            #   않은 상태이므로 문구의 "프로필과 백업은 바뀌지 않았습니다"가 이 자리에서 참이다.
+            raise RegistryError(
+                "거부: 손상된 레지스트리를 치울 자리를 만들지 못했습니다 — %s: %s: %s"
+                % (candidate, type(exc).__name__, exc), code=codes.REGISTRY_UNREADABLE)
+        holder = candidate
+        break
+    if holder is None:
+        raise RegistryError(
+            "거부: 손상된 레지스트리를 치울 이름을 얻지 못했습니다 — %s (…-%d까지 시도)"
+            % (base, _CORRUPT_SEQ_MAX), code=codes.REGISTRY_UNREADABLE)
+    try:
+        # 목적지는 방금 만든 빈 디렉터리 안이라 **반드시 비어 있다** — 유형(일반 파일·심링크·
+        #   디렉터리)에 관계없이 rename이 성립하고, 심링크는 링크 자신만 옮겨진다(대상 무접촉).
+        os.replace(path, os.path.join(holder, os.path.basename(path)))
+    except OSError as exc:
+        # 격리에 실패하면 **아무것도 쓰지 않는다.** fresh 쓰기는 `atomic_write`가 이 경로를
+        #   덮는 일이라, 원문을 치우지 못한 채 진행하면 유일한 증거를 지운다.
+        raise RegistryError(
+            "거부: 손상된 레지스트리를 치우지 못해 초기화를 중단했습니다 — %s → %s: %s: %s"
+            % (path, holder, type(exc).__name__, exc), code=codes.REGISTRY_UNREADABLE)
+    atomic_write(path, json.dumps(default_registry(), indent=2,
+                                  ensure_ascii=False).encode("utf-8"))
+    return holder
+
+
 def game(reg, appid):
     return reg["games"].get(str(appid))
 
