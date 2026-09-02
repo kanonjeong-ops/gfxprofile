@@ -568,8 +568,10 @@ export function SpecConfirmModal({
  * 이 잠긴 모습은 `delete`를 입력하기 전에만 지나가는 자리라 화면 도달 빈도가 낮다 — 안 읽히는
  *   쪽의 값보다 잘못 읽히는 쪽의 대가가 컸다.
  * 중첩 렌더러의 OK 라벨도 같은 이유로 면을 그리지 않는다. 두 렌더러의 잠김 시각이 같아야
- *   한다는 계약은 "둘 다 Steam 기본 dimming에 기댄다"로 지켜진다 — 우리가 값을 적어 맞추지
- *   않으므로 한쪽만 갈릴 자리도 없다.
+ *   한다는 계약은 "둘 다 `DialogButton`에 `disabled`를 넘겨 같은 기본 dimming을 기대한다"로
+ *   선다 — 그 동일성은 확인된 사실이 아니라 가정이다. 폴백 경로는 `showModal`이 죽었을 때만
+ *   진입해 실기에서 재보지 못했다(중첩 쪽 dimming은 관측 당시 Steam 빌드의 실기 결과다).
+ *   두 쪽이 갈려 보이면 폴백만 따로 판정한다.
  */
 const OVERLAY_BUTTON_STYLE = { minWidth: "120px" } as const;
 
