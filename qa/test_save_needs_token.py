@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""**확인 없는 덮어쓰기는 불가능하다** — 그 유일한 증명. 설계 §2-E-0 · P4 착수 조건 ③.
+"""`save_profile`의 확인 토큰 응답과 슬롯 meta의 기록 sha1을 실제 route 호출로 잰다.
 
-이 파일이 왜 중요한가: 인계 문서가 *"`test_save_needs_token` 6항목은 **한 번도 실행된 적이 없다**.
-그전까지 「TOCTOU가 닫혔다」는 **주장이지 증명이 아니다**"*라고 적어 둔 자리다.
-그리고 QA가 P4로 넘긴 조건 ③이 *"**막아야 할 상황을 실제로 만들어** 검증하라 —
-「검사하는 코드가 있다」는 검증이 아니다"*였다.
+빈 슬롯과 같은 내용은 확인 없이 성공해야 한다. 덮어쓰기 상황에서는 무토큰·위조·상태가
+낡은 토큰이 `CONFIRM_REQUIRED`를 내는지, 정상 토큰이 성공하는지, 토큰이 한 번만 소비되는지,
+만료 토큰이 거부되는지를 검사한다. ①·②·⑤의 거부 뒤에는 슬롯 meta의 기록 sha1도 비교한다.
+슬롯 본체·registry·백업 링의 무쓰기는 이 파일이 강제하지 않는다.
 
-**소스 패턴(grep)으로는 이 계약을 강제할 수 없다.** 2판이 붙였던 `confirmed:\\s*true` grep은
-positional 호출 `saveProfile(appid, profile, true)`를 **못 잡아 무효**였다(반증자 실측:
-그 패턴 0건 / 실제 호출 1건). 그래서 **실제로 돌려서** 잰다.
-
-★ 실데이터에 닿을 수 없다 — `main.py`는 `DECKY_PLUGIN_RUNTIME_DIR`이 없으면 **뜨지도 않고**,
-  있으면 그것을 `GFXPROFILE_DATA_DIR`에 **무조건 대입**한다. 여기서는 그것이 tmp다.
+route는 직접 부른다. 소스 패턴은 positional 호출을 놓칠 수 있다.
+`DECKY_PLUGIN_RUNTIME_DIR`과 `GFXPROFILE_HOME`은 tmp를 가리킨다.
 """
 import asyncio
 import os
@@ -35,7 +31,7 @@ def boot(tmp):
         info=lambda *a, **k: None, warning=lambda *a, **k: None,
         error=lambda *a, **k: None, debug=lambda *a, **k: None)
     sys.modules["decky"] = fake
-    os.environ["DECKY_PLUGIN_RUNTIME_DIR"] = str(tmp / "data")   # ← 격리는 이 한 줄이 한다
+    os.environ["DECKY_PLUGIN_RUNTIME_DIR"] = str(tmp / "data")   # 데이터 루트를 tmp로 돌린다
     os.environ["GFXPROFILE_HOME"] = str(tmp)
     sys.path.insert(0, str(ROOT))
     sys.path.insert(0, str(ROOT / "py_modules"))
@@ -69,8 +65,8 @@ def main_test():
             return env.get("ok") is False and env.get("code") == codes.CONFIRM_REQUIRED
 
         # ── 0) 안 물어야 하는 두 경우 ─────────────────────────────────────────
-        # 이게 깨지면 **초기 세팅(A·B 두 벌 만들기)이 통째로 확인창 지옥**이 된다 —
-        # 사용자가 명시적으로 피한 마찰이라 계약의 절반은 "묻지 않는 것"이다.
+        # 이게 깨지면 초기 세팅(A·B 두 벌 만들기)이 통째로 확인창 지옥이 된다 —
+        # 계약의 절반은 "묻지 않는 것"이다.
         env = call(main, APPID, "dock")                   # 빈 슬롯 첫 저장
         if not env.get("ok"):
             problems.append(f"빈 슬롯 첫 저장에 확인을 요구했다 — 초기 세팅이 확인창 지옥이 된다 ({env})")
@@ -110,8 +106,8 @@ def main_test():
             problems.append("③ 저장 성공이라는데 프로필이 안 바뀌었다 — 재려던 경로에 닿지 못했다")
 
         # ── ④ 1회용 소각 ─────────────────────────────────────────────────────
-        # ★ 행위 수준에서만 재면 **거부 사유가 「소각」인지 「상태 변경」인지 갈리지 않는다**
-        #   (③ 직후엔 상태도 같이 바뀌기 때문이다). 그래서 소각 자체를 인자 고정으로 직접 잰다.
+        # 행위 수준에서만 재면 거부 사유가 「소각」인지 「상태 변경」인지 갈리지 않는다
+        #   (③ 직후엔 상태도 같이 바뀐다). 그래서 소각 자체를 인자 고정으로 직접 잰다.
         tok = main._issue("999", "dock", "m", "d")
         if not main._consume(tok, "999", "dock", "m", "d"):
             problems.append("④ 방금 발급한 토큰이 첫 소비에서 거부됐다")
@@ -121,7 +117,7 @@ def main_test():
             problems.append("④ ③에서 쓴 토큰이 아직 살아 있다 — 소각되지 않았다")
 
         # ── ⑤ 상태 바인딩 (TOCTOU) ──────────────────────────────────────────
-        # 토큰을 받은 **뒤** 디스크가 바뀌면, 사용자가 확인창에서 본 숫자는 이미 낡았다.
+        # 토큰을 받은 뒤 디스크가 바뀌면, 사용자가 확인창에서 본 숫자는 이미 낡았다.
         cfg.write_bytes(C)
         env = call(main, APPID, "dock")                   # 새 토큰 발급 (상태 = C)
         tok5 = (env.get("params") or {}).get("confirm_token")

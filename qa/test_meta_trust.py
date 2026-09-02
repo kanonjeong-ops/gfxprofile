@@ -1,38 +1,38 @@
 #!/usr/bin/env python3
-"""**기록(meta)을 어디까지 믿는가** — 사용자 결정 D8(크기 가드) · D5(삭제 확인창) · §14-E′(실패 사유).
+"""기록(meta)을 어디까지 믿는가 — 크기 가드 · 삭제 확인창 · 저장 실패 사유.
 
-세 수정이 같은 축에 있다. 앱은 슬롯의 **기록**과 **본체**를 따로 들고 있고, 기록이 본체와
-어긋나는 상태를 **앱 자신이 만든다**(기록 쓰기 실패 · 삭제의 `rmtree` 중단 · 디렉터리 fsync를
-비치명으로 낮춘 뒤의 쌍 원자성 저하). 그런데도 세 자리가 기록을 그대로 믿고 있었다:
+셋이 같은 축에 있다. 앱은 슬롯의 기록과 본체를 따로 들고 있고, 그 둘이 어긋난 상태를 앱 자신이
+만든다: `store.write_profile`은 본체를 먼저 쓰고 기록을 나중에 쓰며, 삭제는 기록을 먼저 지우고
+본체를 나중에 지운다. `store.atomic_write`의 디렉터리 fsync 실패도 비치명이다.
+그 상태에서 기록을 그대로 믿으면 이렇게 무너진다:
 
-  · **크기 가드**가 기록의 `size`를 기준으로 써서, 세대가 어긋나면 **멀쩡한 저장을 거부**했다(D8).
-    → 방향이 나쁘다. 이 프로젝트가 한계로 남긴 것들은 전부 *"과하게 알려 준다"*였는데
-      이건 **막는 방향**이고 사용자 기준 ③(메인 기능 막힘)에 닿는다.
-  · **삭제 확인창**이 기록 유무로 *"저장돼 있나"*를 판정해서, 기록만 없고 본체는 멀쩡한 슬롯에서
-    *"저장된 것 없음"*이라 말하고 승인하면 실제로는 대피와 삭제가 일어났다(D5).
-  · **저장 실패 사유**가 기록 손상과 기기 문제(디스크 가득참·권한)를 **한 코드로 뭉갰다**(§14-E′).
-    → 사용자가 엉뚱한 것을 의심하고 엉뚱한 복구를 시도한다.
+  · 크기 가드가 기록의 `size`를 기준으로 쓰면, 세대가 어긋난 슬롯에서 멀쩡한 저장이 거부된다.
+    막는 방향의 실패라 사용자가 그 프로필에서 빠져나올 길이 없다.
+  · 삭제 확인창이 기록 유무로 「저장돼 있나」를 판정하면, 기록만 없고 본체는 멀쩡한 슬롯에서
+    "저장된 것 없음"이라 말하고도 승인하면 대피와 삭제가 일어난다.
+  · 저장 실패 사유가 기록 손상과 기기 문제(디스크 가득참·권한)를 한 코드로 뭉개면, 사용자가
+    엉뚱한 것을 의심하고 엉뚱한 복구를 시도한다.
 
-### ★ 세 자리 모두 **양방향으로** 잰다
-한 방향만 재면 *"가드를 아예 껐다"* · *"전부 True로 바꿨다"* · *"전부 새 코드로 바꿨다"*는
-구현이 초록으로 지나간다. 그래서 세계마다 **음성 대조군**을 붙인다.
+세 자리 모두 양방향으로 검증한다. 한 방향만 재면 "가드를 아예 껐다"·"전부 True로
+바꿨다"·"전부 새 코드로 바꿨다"는 구현이 통과하므로 음성 대조군을 둔다. ⑥은 권한 프로브가
+실제로 막히지 않아도 계측 불능으로 실패한다.
 
-### 이 파일이 잠그는 것 여덟
-  ① 기록이 **다른 세대**를 가리키는 슬롯 — 저장이 **거부되지 않는다**(크기 대조만 건너뛴다).
-  ② **음성 대조군** — 기록이 본체와 맞는 정상 슬롯에서는 4배 넘는 파일이 **여전히 거부**된다.
-  ③ **음성 대조군** — 빈 파일 거부(`FILE_EMPTY`)는 그대로 돈다(가드 전체를 끈 것이 아니다).
-  ④ 기록만 지운 슬롯 — 삭제 확인창이 **「있다」**고 말한다(본체 기준).
-  ⑤ **음성 대조군** — 본체만 지운 슬롯은 **「없다」**고 말한다(기록만 남은 것은 되찾을 내용이 아니다).
-  ⑥ 쓰기가 막히면(`OSError`) `PROFILE_WRITE_FAILED`.
-  ⑦ **음성 대조군** — 잘린 JSON 기록은 `PROFILE_META_CORRUPT` **그대로**(`JSONDecodeError ⊂ ValueError`).
-  ⑧ **음성 대조군** — 비-UTF8 기록도 `PROFILE_META_CORRUPT`(`UnicodeDecodeError ⊂ ValueError`).
+이 파일이 검증하는 것 여덟:
+  ① 세대가 어긋난 슬롯의 저장 성공과 기준값 미사용
+  ② 정상 슬롯의 크기 가드 유지
+  ③ 빈 파일 거부 유지
+  ④ 기록만 없는 슬롯의 본체 존재 판정
+  ⑤ 본체만 없는 슬롯의 부재 판정
+  ⑥ 쓰기 OSError의 PROFILE_WRITE_FAILED 변환
+  ⑦ 잘린 JSON의 PROFILE_META_CORRUPT 변환
+  ⑧ 비-UTF8 기록의 PROFILE_META_CORRUPT 변환
 
-### ★ 계측 — 크기 가드에 **무엇이 기준으로 들어갔는지** 직접 센다
-`engine.check_sanity`를 감싸 저장 갈래(`what="현재 설정 파일"`)의 `ref_size`가 `None`인지 본다.
-①에서 `None`이 아니면 이 파일은 결함을 재지 못한 것이고, ②에서 `None`이면 가드가 꺼진 것이다.
-**둘 다 화면에 찍는다.**
+계측 — 크기 가드에 무엇이 기준으로 들어갔는지 직접 센다. `engine.check_sanity`를 감싸 저장
+갈래(`what="현재 설정 파일"`)의 `ref_size`를 기록한다. ①에서 `None`이 아니면 이 파일은 결함을
+재지 못한 것이고, ②에서 `None`이면 가드가 꺼진 것이다. 둘 다 화면에 찍는다.
 
-★ 합성 데이터만 쓴다 — `DECKY_PLUGIN_RUNTIME_DIR`·`GFXPROFILE_HOME`이 tmp라 실사용 데이터에 닿을 수 없다.
+합성 데이터만 쓴다 — `DECKY_PLUGIN_RUNTIME_DIR`·`GFXPROFILE_HOME`이 tmp라 실사용 데이터에
+닿을 수 없다.
 """
 import asyncio
 import json
@@ -45,14 +45,14 @@ import types
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-#: 옛 세대의 기록이 가리키는 내용. 아래 NEW와 **4배 넘게** 차이 나야 이 파일이 무언가를 잰다.
+#: 옛 세대의 기록이 가리키는 내용. 아래 NEW와 4배 넘게 차이 나야 이 파일이 무언가를 잰다.
 TINY = b"q=1\nz=2\n"
 #: 슬롯에 실제로 놓인 본체(새 세대).
 BODY = b"# slot body\n" + b"k=v\n" * 120
 #: 이번에 저장할 설정 파일 내용.
 NEW = b"# new config\n" + b"a=b\n" * 150
 
-#: 저장 갈래 `check_sanity` 호출 기록 — `(ref_size, ...)`.
+#: 저장 갈래 `check_sanity`가 받은 `ref_size` 기록 — 값 하나씩 쌓인다.
 SANITY = []
 
 
@@ -73,7 +73,7 @@ def boot(tmp):
 
 
 def instrument(engine):
-    """저장 갈래의 크기 가드에 **무엇이 기준으로 들어갔는지** 기록한다."""
+    """저장 갈래의 크기 가드에 무엇이 기준으로 들어갔는지 기록한다."""
     real = engine.check_sanity
 
     def wrapped(data, ref_size=None, ref_lines=None, what="파일"):
@@ -140,7 +140,7 @@ def main_test():                                                # noqa: C901  (�
         mp = pathlib.Path(store.profile_meta_path("8101", "dock"))
         meta = json.loads(mp.read_text(encoding="utf-8"))
         meta.update({"sha1": store.sha1_bytes(TINY), "size": len(TINY),
-                     "lines": store.count_lines(TINY)})           # ★ 옛 세대를 가리키게 한다
+                     "lines": store.count_lines(TINY)})           # 옛 세대를 가리키게 한다
         mp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
         cfg.write_bytes(NEW)
         got = save("8101")
@@ -208,7 +208,7 @@ def main_test():                                                # noqa: C901  (�
         os.chmod(slot, 0o500)
         unchmod.append(slot)
         blocked = True
-        try:                                                      # ★ 계측기 자기검증
+        try:                                                      # 계측기 자기검증
             probe = slot / ".probe"
             probe.write_bytes(b"x")
             probe.unlink()

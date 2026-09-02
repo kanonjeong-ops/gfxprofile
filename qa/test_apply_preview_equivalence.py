@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""미리보기 ↔ 실제 실행의 **동치성** — 적대 합성 세계가 명세다.
-설계 정본 DESIGN-F6-F8 §3-A(5버킷)·§3-B(계약 2조)·§3-E.
+"""같은 관측 시점에서 미리보기 분류 ↔ 실제 실행 outcome의 대응 — 적대 합성 세계가 명세다.
 
 ### 왜 이 파일이 필요한가
-엔진에 dry-run 플래그를 넣는 것은 diff fence 위반이라 불가능하다. 그래서 `apply_all`의 판정이
-**두 곳**에 존재한다 — 엔진(실행)과 `confirm.apply_all_preview`(미리보기). 미러는 언젠가
-어긋나므로 **어긋남을 테스트로 못박는다.** 문서로 못박으면 문서만 맞는다.
+실행 판정과 미리보기 판정이 별도 함수에 있으므로 두 결과의 대응을 검사한다 — 엔진(실행)과
+`confirm.apply_all_preview`(미리보기). 미러는 언젠가 어긋나므로 어긋남을 테스트로 못박는다.
+문서로 못박으면 문서만 맞는다.
+
+이 파일이 재는 것은 그 두 판정의 대응이지 시점을 넘는 동치가 아니다. 확인 뒤 상태가 바뀌면
+결과는 어느 방향으로도 달라질 수 있다 — 화면의 「예상」은 관측 시점의 분류다
+(`main.py`의 `apply_all`·`confirm.apply_all_preview` 독스트링이 정본). 그래서 이 파일은
+한 세계를 만들어 미리보기를 먼저 재고, 그 세계를 바꾸지 않은 채로 실행을 잰다.
 
 ### 왜 깨끗한 세계로는 부족한가
-초판 설계의 4버킷(refused/error를 would_apply로 셈)은 **정상 게임만 있는 세계에서는 초록**이다.
-그래서 세계를 적대적으로 만든다 — 각 상태가 엔진의 5가지 outcome을 **전부** 만들어 낸다:
+정상 게임만 있는 세계에서는 refused/error를 would_apply로 세는 4버킷 분류도 초록이다.
+그래서 세계를 적대적으로 만든다 — 각 상태가 엔진의 5가지 outcome을 전부 만들어 낸다:
 
 | 게임 | 상태 | 엔진 outcome | 미리보기 버킷 |
 |---|---|---|---|
@@ -20,35 +24,34 @@
 | 500 | 본체 변조(sha 불일치) | refused(PROFILE_CORRUPT) | cannot_apply |
 | 600 | meta.json 손상(비JSON) | error | cannot_apply |
 | 650 | meta가 유효 JSON이지만 비객체 | error | cannot_apply |
-| 660 | **등록 항목에 `config_path` 키 없음** | error(UNEXPECTED) | cannot_apply |
-| 700 | **실행 중** · 디스크 = 프로필 | already ★ | already ★ |
-| 800 | **실행 중** · 디스크 ≠ 프로필 | refused(GAME_RUNNING) | running_refused |
+| 660 | 등록 항목에 `config_path` 키 없음 | error(UNEXPECTED) | cannot_apply |
+| 700 | 실행 중 · 디스크 = 프로필 | already | already |
+| 800 | 실행 중 · 디스크 ≠ 프로필 | refused(GAME_RUNNING) | running_refused |
 
-★ 700이 이 표의 핵심이다 — **already 판정이 G5보다 먼저**라(`engine.apply_all`의 `already` 갈래) 실행 중이어도
-  디스크가 이미 그 프로필이면 `already`다. 이 순서를 뒤집으면 화면은 "실행 중 2개 거부 예상"이라
-  말하는데 실제로는 1개만 거부된다. 중복 산정 규칙(게임 하나는 정확히 한 버킷)도 여기서 잠긴다.
+700이 이 표의 핵심이다 — already 판정이 G5보다 먼저라(`engine.apply_all`의 `already` 갈래)
+  실행 중이어도 디스크가 이미 그 프로필이면 `already`다. 이 순서를 뒤집으면 화면은
+  "실행 중 2개 거부 예상"이라 말하는데 실제로는 1개만 거부된다. 중복 산정 규칙(게임 하나는
+  정확히 한 버킷)도 여기서 잠긴다.
 
 ### 이 파일이 잠그는 것
-  ① 게임별 **버킷 ↔ outcome 대응**(위 표 전수). ⚠️ 이것을 *"1:1"*이라 부르지 않는다
-     (2026-08-10 최종 QA): `cannot_apply`는 `refused`(GAME_RUNNING 제외)와 `error`를 **함께**
-     받는다. 잠그는 것은 ⓐ 모든 outcome이 어느 버킷엔가 들고 ⓑ 게임 하나는 한 버킷에만 들며
-     ⓒ 어긋나도 "적용된다 해 놓고 안 되는" **안전한 방향**이라는 것이다.
-  ② **격리 계약** — meta 손상 2건이 섞여 있어도 나머지 게임이 정상 분류된다.
+  ① 게임별 버킷 ↔ outcome 대응(위 표 전수). 이것을 "1:1"이라 부르지 않는다: `cannot_apply`는
+     `refused`(GAME_RUNNING 제외)와 `error`를 함께 받는다. 잠그는 것은 표의 10게임 각각이
+     기대 버킷 하나에 들고, 그 실행 outcome이 해당 버킷의 허용 집합에 드는가이다.
+  ② 격리 계약 — meta 손상 2건이 섞여 있어도 나머지 게임이 정상 분류된다.
      격리가 없으면 미리보기가 통째로 죽어 `CONFIRM_REQUIRED`가 영영 안 나오고
-     **일괄 적용 버튼이 전면 불능**이 된다(반증이 잡은 최심각 결함).
-  ③ 미리보기가 **파일을 1바이트도 안 바꾼다**(합성 세계 전 파일 sha1 전수 대조).
+     일괄 적용 버튼이 전면 불능이 된다.
+  ③ 미리보기가 파일을 1바이트도 안 바꾼다(합성 세계 전 파일 sha1 전수 대조).
   ④ 버킷 합 = 등록 수(어느 게임도 빠지거나 두 번 세지 않는다).
 
-⚠️ 660은 **설계 §3-B의 적대 세계 열거에 없던 케이스**다(2026-08-10 qa-lead가 찾았다).
-  `entry["config_path"]`가 없으면 엔진은 `apply_profile` 진입 즉시 KeyError → `error`인데
-  미리보기는 그 자리를 안 보고 `would_apply`로 셌다 — *"적용된다 해 놓고 안 되는"* 어긋남이다.
-  미러에 그 판정을 더해 대응을 회복했고, 이 세계가 그것을 잠근다.
-  (남은 어긋남 하나 — `config_path`가 **심볼릭 링크**여서 G11이 거부하는 경우 — 는 설계가
+660: `entry["config_path"]`가 없으면 엔진은 `error`, 미리보기는 `cannot_apply`여야 한다.
+  미리보기가 그 자리를 안 보면 `would_apply`로 센다 — "적용된다 해 놓고 안 되는" 어긋남이다.
+  미러가 그 판정을 갖고 있는지를 이 세계가 잠근다.
+  (남은 어긋남 하나 — `config_path`가 심볼릭 링크여서 G11이 거부하는 경우 — 는 설계가
    선언한 한계다: 실행 시점 가드는 미리보기가 예측하지 않는다. 방향은 같은 쪽으로 안전하다.)
 
-### 단언 범위 (설계 §3-B 후단 그대로)
-`cannot_apply`는 *"refused(GAME_RUNNING 제외)/error에 대응"*이지 **세부 code까지 예측한다고
-단언하지 않는다.** 미리보기는 분류이지 실행이 아니다 — `BACKUP_FAILED`처럼 실행 시점에만 나는
+### 단언 범위
+`cannot_apply`는 "refused(GAME_RUNNING 제외)/error에 대응"이지 세부 code까지 예측한다고
+단언하지 않는다. 미리보기는 분류이지 실행이 아니다 — `BACKUP_FAILED`처럼 실행 시점에만 나는
 실패는 예측할 수 없고, 그 잔차는 실행 후 요약·로그가 정본으로 보고한다.
 """
 import copy
@@ -93,7 +96,7 @@ def world_sha(root):
 
 
 def build_world(tmp, engine, store):
-    """표의 9게임을 만든다. **전부 실제 저장 경로를 태워** 만든다(손으로 밀지 않는다)."""
+    """표의 게임을 전부 만든다. 전부 실제 저장 경로를 태워 만든다(손으로 밀지 않는다)."""
     reg = store.load_registry()
     cfgs = {}
 
@@ -111,7 +114,7 @@ def build_world(tmp, engine, store):
 
     add("100", "Normal").write_bytes(INTERNAL)            # 디스크≠dock → applied
     add("200", "Already").write_bytes(DOCK)               # 디스크==dock → already
-    # 300: dock 프로필을 만들지 않는다 — internal만 있는 게임(실물: ACE 3058630)
+    # 300: dock 프로필을 만들지 않는다 — internal만 있는 게임
     cfg300 = tmp / "game300" / "video.ini"
     cfg300.parent.mkdir(parents=True, exist_ok=True)
     cfg300.write_bytes(INTERNAL)
@@ -152,8 +155,8 @@ EXPECTED = {
     "500": "cannot_apply",
     "600": "cannot_apply",
     "650": "cannot_apply",
-    "660": "cannot_apply",     # config_path 없음 → 엔진은 error (qa-lead 권고 4-A)
-    "700": "already",          # ★ already가 G5보다 먼저다 — 실행 중이어도 already
+    "660": "cannot_apply",     # config_path 없음 → 엔진은 error
+    "700": "already",          # already가 G5보다 먼저다 — 실행 중이어도 already
     "800": "running_refused",
 }
 
@@ -171,7 +174,7 @@ def main_test():                                                # noqa: C901
         def P(msg):
             problems.append(msg)
 
-        # 실행 중 게임을 합성한다 — 미리보기가 받는 집합과 **같은 사실**이어야 한다.
+        # 실행 중 게임을 합성한다 — 미리보기가 받는 집합과 같은 사실이어야 한다.
         engine.running_game = lambda appid: str(appid) in RUNNING
 
         # ── ③ 미리보기는 아무것도 쓰지 않는다 ────────────────────────────────
@@ -179,8 +182,8 @@ def main_test():                                                # noqa: C901
         try:
             counts = confirm.apply_all_preview(copy.deepcopy(reg), PROFILE, RUNNING)
         except Exception as exc:                                # noqa: BLE001
-            # ★ 격리 계약이 깨지면 여기서 예외가 나온다 — **그 사실 자체가 결함**이므로
-            #   traceback으로 죽지 말고 무슨 일인지 말하고 끝낸다(진단이 사라지는 실패 방지).
+            # 격리 계약이 깨지면 여기서 예외가 나온다. 그 사실 자체가 결함이므로 traceback으로
+            #   죽지 말고 무슨 일인지 말하고 끝낸다 — 진단이 사라지는 실패를 만들지 않는다.
             print("미리보기 동치성 — 적대 세계 %d게임" % len(EXPECTED))
             print("\nFAIL")
             print("  ★② 미리보기가 예외로 죽었다(%s: %s) — 손상 게임 1건이 미리보기를 전멸시키면 "
@@ -197,8 +200,8 @@ def main_test():                                                # noqa: C901
             P("★④ 버킷 합(%d)이 등록 수(%d)와 다르다 — 게임이 빠지거나 두 번 셌다"
               % (sum(counts.values()), len(reg["games"])))
 
-        # ── ② 격리: 손상 2건이 있어도 **나머지가 정상 분류**된다 ─────────────
-        #    (격리가 없으면 여기서 예외가 통째로 터져 아래 per-game 판정이 아예 안 나온다)
+        # ── ② 격리: 손상 2건이 있어도 나머지가 정상 분류된다 ─────────────────
+        #    (격리가 없으면 ③의 전체 미리보기가 예외로 죽어 여기까지 오지도 못한다)
         per_game = {}
         for appid in sorted(reg["games"]):
             one = copy.deepcopy(reg)
@@ -223,7 +226,7 @@ def main_test():                                                # noqa: C901
                 P("① [%s] 미리보기 버킷이 %s다(기대 %s)" % (appid, per_game.get(appid), want))
 
         # ── ① 실제 실행과의 대응(버킷이 그 outcome을 받는가) ────────────────────
-        #    ★ 미리보기를 **먼저** 재고 나서 실행한다(순서를 바꾸면 미리보기가 실행 후 세계를 본다).
+        #    미리보기를 먼저 재고 나서 실행한다 — 순서를 바꾸면 미리보기가 실행 후 세계를 본다.
         rows = engine.apply_all(copy.deepcopy(reg), PROFILE)
         outcomes = {r["appid"]: (r["outcome"], r.get("code")) for r in rows}
         if set(outcomes) != set(EXPECTED):

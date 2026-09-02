@@ -1,34 +1,24 @@
 #!/usr/bin/env python3
-"""**내용이 같은 저장은 한 바이트도 쓰지 않는다** — R13 신설 (설계 §14-B 링 보존 · §4-I).
+"""내용이 같은 저장은 슬롯과 백업 링을 바꾸지 않는다.
 
-R13 이전의 `engine.save_profile`은 디스크 내용 == 프로필 내용이어도 그대로 실행됐다:
-`confirm.needs_confirm`이 *"달라지는 게 없다"*며 **묻지 않고** 통과시키면, 엔진이 이전 프로필을
-대피시키고(=게임당 10칸 링을 1칸 회전 → **최고령 복구 지점 소멸**) `saved_at`을 갱신했다.
-사용자 쪽에서 보면 **아무것도 안 바뀌는 동작이 복구 지점 하나를 조용히 먹는** 것이라,
-"손실 가능 행동은 인지시키고 묻는다"는 원칙의 정면 위반이다(적용은 이미 `already` 무쓰기다).
+무쓰기 분기가 없으면 디스크 내용과 슬롯 내용이 같아도 엔진이 이전 본체를 대피시키고
+프로필을 다시 쓴다. 이 파일은 route를 호출하되 슬롯과 백업 링만 스냅샷한다. route가
+마지막에 저장하는 레지스트리까지 포함한 전역 무쓰기는 재지 않는다.
 
-### 재는 방법 — 슬롯 (이름·inode·mtime_ns·sha1) + 백업 링의 (이름, sha1) 집합
-`sha1`만 보면 **같은 바이트를 다시 쓴 경우**를 통과시킨다(정확히 이 결함의 형태다).
-`store.atomic_write`은 tmp→rename이라 **inode가 바뀌므로** inode·mtime_ns를 같이 재면 잡힌다.
-`meta.json`도 같은 잣대로 재므로 `saved_at` 갱신은 그 파일의 sha1 변화로 드러난다.
-백업 링은 **집합**으로 잰다 — 링이 가득 찬 상태에서 1건이 늘면 최고령 1건이 잘려 나가므로
-개수만으로는 안 드러나고, 집합이면 「추가」와 「축출」이 둘 다 걸린다.
+### 재는 방법 — 슬롯의 (이름, inode, mtime_ns, sha1) + 백업 링의 (이름, sha1) 집합
+sha1만 보면 같은 바이트 재기록을 통과시킨다. `store.atomic_write`는 임시 파일을 교체하므로
+inode·mtime_ns를 함께 잰다. `saved_at` 값이 달라지면 meta sha1도 달라지지만, 같은 초의
+재기록은 inode·mtime_ns로 잡는다. 링은 집합으로 재서 추가와 축출을 함께 잡는다.
 
-### 음성 대조군 — 무쓰기 분기를 **제거한 엔진**을 꽂으면 반드시 FAIL해야 한다
-그렇지 않으면 이 파일은 아무것도 재지 않는 것이다(이 프로젝트의 새 검사 인증 관례).
+### 음성 대조군
+무쓰기 분기를 뺀 엔진을 꽂으면 ①의 슬롯 또는 링 스냅샷이 반드시 달라져야 한다.
 
-### 같이 잠그는 것 — **무쓰기가 복구 경로를 막지 않는다**
-슬롯 본체가 깨졌거나 사라졌으면 기록상 sha1이 같아도 **실제로 쓴다.** meta만 믿고 넘어가면
-"다시 저장해서 고친다"는 유일한 자가 복구 경로가 사라진다.
+### 같이 재는 것
+슬롯 본체가 깨졌거나 사라졌으면 기록상 sha1이 같아도 다시 쓰고, 깨진 본체를 대피하는
+갈래는 확인 뒤에 실행한다. ④는 확인 요구, 확인 전 링 불변, 승인 뒤 저장과 복구를 잰다.
 
-### 같이 잠그는 것 2 — **그 쓰기는 「고지 뒤에」 일어난다** (QA R1 D-1, 2026-08-22)
-본체가 깨진 슬롯의 재저장은 깨진 본체를 대피시키므로 **가득 찬 링의 최고령 복구 지점을 태운다.**
-그런데 판정층(`confirm.needs_confirm`)이 기록만 보면 *"이미 같다"*며 안 묻고, 엔진은 본체 실측으로
-다르다며 실행했다 — **확인창이 한 번도 안 뜬 채** 백업이 하나 사라지는 갈래였다. 아래 ④는
-「쓴다」와 「묻고 쓴다」를 **둘 다** 잰다(묻기 전에 링이 움직이지 않는 것까지).
-
-★ 합성 데이터만 쓴다 — `GFXPROFILE_HOME`·`DECKY_PLUGIN_RUNTIME_DIR`이 tmp라 실사용 데이터에
-  닿을 수 없다.
+합성 데이터만 쓴다 — `GFXPROFILE_HOME`·`DECKY_PLUGIN_RUNTIME_DIR`이 tmp라 실사용 데이터에
+닿을 수 없다.
 """
 import asyncio
 import os
@@ -87,13 +77,13 @@ def ring_state(store, appid):
 
 
 def oldest(store, appid):
-    """최고령 백업의 파일명(`list_backups`는 이름 역순 = 최신 우선)."""
+    """`store.list_backups` 정렬의 마지막 백업 파일명."""
     entries = store.list_backups(appid)
     return os.path.basename(entries[-1]) if entries else None
 
 
 def fill_ring(store, appid, filename):
-    """링을 **가득** 채운다 — 1건만 더 쌓여도 최고령이 잘려 나가는 상태를 만든다."""
+    """링을 가득 채운다 — 1건만 더 쌓여도 정렬 꼬리가 잘릴 상태를 만든다."""
     for i in range(store.BACKUP_KEEP):
         store.make_backup(appid, b"filler-%03d\n" % i, "disk", filename)
 
@@ -119,7 +109,7 @@ def main_test():                                                # noqa: C901  (�
         env = rpc(main, "save_profile", APPID, "dock")
         if not env.get("ok") or (env.get("data") or {}).get("outcome") != "saved":
             P("사전 조건: 빈 슬롯 첫 저장이 outcome=saved로 끝나지 않았다 (%s)" % env)
-        fill_ring(store, APPID, "video.ini")                 # 링을 가득 채운다
+        fill_ring(store, APPID, "video.ini")
 
         # ── ① 내용이 같은 저장 — 무쓰기 ───────────────────────────────────────
         before_slot = slot_state(store, APPID, "dock")
@@ -145,9 +135,9 @@ def main_test():                                                # noqa: C901  (�
         if oldest(store, APPID) != before_oldest:
             P("★① 최고령 백업이 바뀌었다 (%s → %s)" % (before_oldest, oldest(store, APPID)))
 
-        # ── ② 음성 대조군: 무쓰기 분기를 **제거한** 엔진에서는 ①이 FAIL해야 한다 ──
+        # ── ② 음성 대조군: 무쓰기 분기를 제거한 엔진에서는 ①이 FAIL해야 한다 ──
         def legacy_save(reg_, appid_, profile_):
-            """R13 이전 본문의 재현 — 내용이 같아도 대피본을 만들고 다시 쓴다."""
+            """무쓰기 분기가 없던 시절의 재현 — 내용이 같아도 대피본을 만들고 다시 쓴다."""
             entry = engine.game_or_fail(reg_, str(appid_))
             path = entry["config_path"]
             data = store.read_bytes(path)
@@ -180,7 +170,7 @@ def main_test():                                                # noqa: C901  (�
             P("★음성 대조군 무효 — 가득 찬 링에 1건이 쌓였는데 최고령이 그대로다. "
               "링 축출을 재는 계측기가 고장 났다")
 
-        # ── ③ 진짜로 달라진 저장은 **여전히 쓴다**(무쓰기가 저장을 죽이지 않았다) ──
+        # ── ③ 진짜로 달라진 저장은 여전히 쓴다(무쓰기가 저장을 죽이지 않았다) ──
         cfg.write_bytes(OTHER)
         env = rpc(main, "save_profile", APPID, "dock")        # 덮어쓰기 → 확인 요구
         token = (env.get("params") or {}).get("confirm_token")
@@ -195,15 +185,14 @@ def main_test():                                                # noqa: C901  (�
         if (store.load_meta(APPID, "dock") or {}).get("sha1") != store.sha1_bytes(OTHER):
             P("③ 저장 뒤 슬롯 내용이 디스크와 다르다")
 
-        # ── ④ 슬롯 본체가 **깨졌으면** 기록이 같아도 쓴다 — 단 **묻고** 쓴다 ─────
+        # ── ④ 슬롯 본체가 깨졌으면 기록이 같아도 쓴다 — 단 묻고 쓴다 ─────
         #
-        # ★★ 여기가 정책층과 엔진의 술어가 갈리던 자리다(QA R1 D-1, 2026-08-22).
-        #   `meta.sha1`은 디스크와 같은데 본체가 다르면 — `write_profile`이 본체를 먼저 쓰고
-        #   meta를 나중에 쓰므로 그 사이에 죽으면 실제로 생기는 상태다 — 엔진은 `slot_holds`가
-        #   거짓이라 **대피·쓰기·축출을 실행하는데** 정책층은 기록만 보고 *"이미 같다"*며
-        #   **안 물었다.** 확인창이 한 번도 안 뜬 채 포화 링의 최고령 백업이 사라졌다.
-        #   그래서 이 갈래가 잠그는 것은 **둘**이다: ⓐ 자가 복구 경로가 살아 있다(쓴다)
-        #   ⓑ 그 쓰기가 **고지 뒤에** 일어난다(대피가 링을 태우므로).
+        # 여기가 정책층과 엔진의 술어가 갈리던 자리다. `meta.sha1`은 디스크와 같은데 본체가
+        #   다른 상태는 `write_profile`이 본체를 먼저 쓰고 meta를 나중에 쓰므로 실제로 생긴다.
+        #   기록만 보는 판정은 "이미 같다"며 안 묻는데 엔진은 본체 실측으로 대피·쓰기·축출을
+        #   실행한다 — 확인창 없이 포화 링의 정렬 꼬리가 사라진다.
+        #   그래서 이 갈래가 재는 것은 둘이다: ⓐ 자가 복구 경로가 살아 있다(쓴다)
+        #   ⓑ 그 쓰기가 고지 뒤에 일어난다(대피가 링을 태우므로).
         body = store.profile_file_path(APPID, "dock")
         with open(body, "wb") as fh:
             fh.write(b"corrupted-body\n")                     # meta의 sha1과 어긋난다
@@ -226,7 +215,7 @@ def main_test():                                                # noqa: C901  (�
         if broken_sha1 not in [sha for _name, sha in ring_state(store, APPID)]:
             P("★④ 깨진 본체가 대피되지 않았다 — 확인창은 잃을 것을 말하는데 실제로는 버렸다")
 
-        # ── ⑤ 슬롯 본체가 **사라졌으면** 다시 만든다 ──────────────────────────
+        # ── ⑤ 슬롯 본체가 사라졌으면 다시 만든다 ──────────────────────────
         os.unlink(body)
         env = rpc(main, "save_profile", APPID, "dock")
         if (env.get("data") or {}).get("outcome") != "saved":

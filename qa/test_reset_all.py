@@ -1,30 +1,37 @@
 #!/usr/bin/env python3
-"""전체 초기화의 계약. 설계 정본 DESIGN-DELETE §2-B·§3-B·§6-B.
+"""전체 초기화의 계약.
 
 이 파일이 잠그는 것:
-  ① **challenge 튜플 바인딩** — type-to-confirm의 판정이 백엔드에 있는가(프론트가 틀려도 막히는가).
-     ★ 그중 핵심은 **registry가 안 변하는 변경**이다: `engine.save_profile`은 `reg`를 바꾸지
-       않으므로 확인창을 띄운 사이 **다른 슬롯에 저장해도 registry.json의 sha1이 그대로**다.
-       초판 지문(registry sha1 단독)은 그 구멍으로 낡은 토큰을 통과시켰다(반증 채택 3).
-       그 구멍이 다시 열리는지를 **registry sha1이 실제로 안 변했음을 같이 단언하며** 잰다.
-  ② **하나가 실패해도 나머지는 계속** — `apply_all`의 불변식 그대로. 실패한 게임의 registry
-     항목은 **남는다**(registry ≡ 디스크 실물). 봉투는 `ok:true`.
-  ③ **`backups/` 불가침** — 초기화는 안전망을 같이 지우지 않는다(§2-B의 A안).
-  ④ **0게임 엣지** — 지울 것이 없어도 계약이 같은 모양이어야 한다.
-  ⑤ ★ **경로 탈출 봉쇄**(QA 반려 ①) — `reset_all`은 appid 파라미터가 없어 route의
-     `_VALIDATORS`를 지나지 않는다. registry의 games **키**가 그대로 경로가 되므로
-     `"../../X"`·절대경로 키로 **데이터 루트 밖이 rmtree 되던** 실결함이 있었다.
-     봉쇄는 문 안 한 곳(`remove.delete_game_data`)이고, 여기서는 제품 경로로 그 문을 지난다.
-  ⑦ ★ **결과 봉투가 「실제로 지운 범주」를 말한다**(QA DEFECT-05) — `counts.deleted`는
-     **게임만** 센다. 초기화는 registry를 통째로 갈아 끼우므로 표시 이름·감지 제외도 같이
-     사라지는데, 그 둘을 아무도 말하지 않으면 등록 0 · 제외 N인 상태에서 화면이 *"0개 삭제"*
-     라고 말하는 사이 N건이 조용히 사라진다. 봉투의 `cleared`가 「지우려 했던 것」이 아니라
-     **지운 것**인지를 부분 실패까지 포함해 잰다.
-그리고 관통 단언: registry는 **통째로 공장초기화**(settings·gpu_map 포함) · 게임 설정 파일
+  ① challenge 튜플 바인딩 — type-to-confirm의 판정이 백엔드에 있는가(프론트가 틀려도 막히는가).
+     그중 핵심은 registry가 안 변하는 변경이다: `engine.save_profile`은 `reg`를 바꾸지
+       않으므로 확인창을 띄운 사이 다른 슬롯에 저장해도 registry.json의 sha1이 그대로다.
+       registry sha1 단독 지문은 그 구멍으로 낡은 토큰을 통과시킨다. 그 구멍이 열려 있는지를
+       registry sha1이 실제로 안 변했음을 같이 단언하며 잰다.
+  ② 하나가 실패해도 나머지는 계속 — `apply_all`의 불변식 그대로. 실패한 게임의 registry
+     항목은 남는다(registry ≡ 디스크 실물). 봉투는 `ok:true`.
+  ③ 초기화가 `backups/`를 통째로 없애지 않는다 — 안전망을 같이 지우지 않는다. 「하나도 안
+     지운다」는 아니다: 포화 링에서는 삭제 전 대피가 `store.prune_backups`를 돌려 가장 오래된
+     백업을 밀어낸다. 이 파일의 세계는 포화가 아니라(대피 뒤에도 게임당 최대 3/10) 그 갈래를
+     재지 않는다 — `qa/test_evict_notice.py`가 잰다.
+  ④ 0게임 엣지 — 지울 것이 없어도 계약이 같은 모양이어야 한다.
+  ⑤ 경로 탈출 봉쇄 — `reset_all`은 appid 파라미터가 없어 route의 `_VALIDATORS`를 지나지
+     않는다. registry의 games 키가 그대로 경로가 되므로 `"../../X"`·절대경로 키는 데이터
+     루트 밖을 rmtree 할 수 있다. 봉쇄는 문 안 한 곳(`remove.delete_game_data`)이고,
+     여기서는 제품 경로로 그 문을 지난다.
+  ⑥ 레지스트리 버전 가드(U5) — 더 새 버전이 만든 데이터에서 바꾸는 동작만 막히고 읽기와
+     탈출로(전체 초기화)는 열려 있는가. 초기화는 `default_registry()`로 통째 교체하므로
+     미지 필드를 보존하는 경로가 아니라 새 registry로 빠져나가는 경로다.
+  ⑦ 결과 봉투가 「실제로 지운 범주」를 말한다 — `counts.deleted`는 게임만 센다. 초기화는
+     registry를 통째로 갈아 끼우므로 표시 이름·감지 제외도 같이 사라지는데, 그 둘을 아무도
+     말하지 않으면 등록 0 · 제외 N인 상태에서 화면이 "0개 삭제"라고 말하는 사이 N건이 조용히
+     사라진다. 봉투의 `cleared`가 「지우려 했던 것」이 아니라 지운 것인지를 부분 실패까지
+     포함해 잰다.
+그리고 관통 단언: registry는 통째로 공장초기화(settings·gpu_map 포함) · 게임 설정 파일
 원본은 1바이트도 안 바뀐다.
 
-★ 실데이터에 닿을 수 없다 — `GFXPROFILE_DATA_DIR`이 tmp로 못박힌다. 전체 초기화 실기는
-  설계상 **격리 합성 데이터로만** 한다(§6-B).
+실데이터에 닿을 수 없다 — `boot()`가 `DECKY_PLUGIN_RUNTIME_DIR`을 tmp로 못박고 `main.py`가
+  그것을 데이터 루트(`GFXPROFILE_DATA_DIR`)로 대입한다. 전체 초기화 실기는 격리 합성
+  데이터로만 한다.
 """
 import asyncio
 import os
@@ -46,7 +53,7 @@ def boot(tmp):
     fake.logger = types.SimpleNamespace(info=noop, warning=noop, error=noop,
                                         debug=noop, log=noop)
     sys.modules["decky"] = fake
-    os.environ["DECKY_PLUGIN_RUNTIME_DIR"] = str(tmp / "data")   # ← 격리는 이 한 줄이 한다
+    os.environ["DECKY_PLUGIN_RUNTIME_DIR"] = str(tmp / "data")   # ← 데이터 루트 격리는 이 한 줄이 한다
     os.environ["GFXPROFILE_HOME"] = str(tmp)
     sys.path.insert(0, str(ROOT))
     sys.path.insert(0, str(ROOT / "py_modules"))
@@ -72,8 +79,8 @@ def main_test():                                                # noqa: C901  (�
             problems.append(msg)
 
         def finish():
-            """★ 사전 조건이 무너지면 **여기로 빠져나온다.** 그냥 진행하면 뒤 절이
-            traceback으로 죽어 정작 무엇이 깨졌는지가 화면에서 사라진다(진단이 사라지는 실패)."""
+            """사전 조건이 무너지면 여기로 빠져나온다. 그냥 진행하면 뒤 절이 traceback으로
+            죽어 정작 무엇이 깨졌는지가 화면에서 사라진다(진단이 사라지는 실패)."""
             print("전체 초기화 계약 — challenge 바인딩 6종(★registry 불변 변경 포함) · "
                   "실패 격리 · backups 불가침 · 0게임 · ★레지스트리 버전 가드(U5) · "
                   "★결과 봉투 cleared(DEFECT-05)  (데이터: %s)" % tmp)
@@ -132,9 +139,9 @@ def main_test():                                                # noqa: C901  (�
             cfgs[appid] = cfg
         reg["settings"].update(auto_apply=True, mode_override="dock", last_appid="222")
         reg["gpu_map"] = {"0000:03:00.0": "dock"}
-        # ★ 표시 이름 2개·감지 제외 2건도 같이 심는다(DEFECT-05). 이 둘은 `counts.deleted`가
-        #   세지 않는 범주라, 봉투가 따로 말하지 않으면 사라진 사실이 화면 어디에도 안 남는다.
-        #   제외 appid는 등록 게임과 **겹치지 않게** 고른다 — 겹치면 무엇이 무엇을 지웠는지
+        # 표시 이름 2개·감지 제외 2건도 같이 심는다. 이 둘은 `counts.deleted`가 세지 않는
+        #   범주라, 봉투가 따로 말하지 않으면 사라진 사실이 화면 어디에도 안 남는다.
+        #   제외 appid는 등록 게임과 겹치지 않게 고른다 — 겹치면 무엇이 무엇을 지웠는지
         #   구분이 안 돼 이 절이 아무것도 증명하지 못한다.
         labels.set_name(reg, "dock", "내 독 프로필")
         labels.set_name(reg, "internal", "내 내장 프로필")
@@ -170,7 +177,7 @@ def main_test():                                                # noqa: C901  (�
         if len(store.load_registry()["games"]) != 3:
             P("① 거부인데 게임이 지워졌다 — 「거부 시 아무것도 안 지운다」가 거짓이다")
 
-        # ①-f ★ **registry가 안 변하는 변경**에도 토큰이 무효인가 (반증 채택 3의 회귀 방지)
+        # ①-f registry가 안 변하는 변경에도 토큰이 무효인가
         tok, _ = ask()
         reg_sha_before = store.sha1_file(store.registry_path())
         cfgs["333"].write_bytes(b"quality=late\nshadows=mid_\nsource=USER-RESAVED\n")
@@ -193,7 +200,7 @@ def main_test():                                                # noqa: C901  (�
             return finish()
 
         # ═══════════════════════════════════════════════════════════════════
-        # ②③ 하나가 실패해도 계속 · backups 불가침
+        # ②③ 하나가 실패해도 계속 · backups 무삭제(비포화 링)
         # ═══════════════════════════════════════════════════════════════════
         before_backups = {a: set(store.list_backups(a)) for a in APPIDS}
         proot = store.profiles_root("222")
@@ -222,10 +229,10 @@ def main_test():                                                # noqa: C901  (�
             if row.get("code"):
                 P("② %s는 성공인데 code가 실렸다(%s) — 화면이 정상을 문제로 센다" % (rid, row["code"]))
 
-        # ⑦ ★ **게임별 실패가 있어도** cleared는 「지운 것」과 일치한다(DEFECT-05).
+        # ⑦ 게임별 실패가 있어도 cleared는 「지운 것」과 일치한다.
         #   222가 남았다고 표시 이름·제외가 되살아나지는 않는다 — 되심는 것은 `games`뿐이다.
         #   즉 여기서 기대값은 「지우려 했던 것」과 같은 2/2이고, 그 근거는 바로 아래 절의
-        #   "settings가 공장초기화됐다" 단언이다. 둘을 **같은 자리에서** 재야 한 쪽만 무너진
+        #   "settings가 공장초기화됐다" 단언이다. 둘을 같은 자리에서 재야 한 쪽만 무너진
         #   상태(예: 실패분과 함께 settings까지 되살림)를 볼 수 있다.
         state["cleared"] = data.get("cleared")
         if data.get("cleared") != {"named": 2, "excluded": 2}:
@@ -246,7 +253,11 @@ def main_test():                                                # noqa: C901  (�
         if not os.path.exists(store.profiles_root("222")):
             P("② 실패한 222의 profiles/가 사라졌다 — 실패 판정이 거짓이다")
 
-        # ③ backups 불가침 — 지워진 것이 하나도 없어야 한다(추가만 허용)
+        # ③ 이 세계에서는 backups/가 하나도 안 지워진다 — 링이 포화가 아니라서다(대피 뒤에도
+        #   게임당 최대 3/10). 포화 링에서는 초기화의 대피가 `prune_backups`를 돌려 가장
+        #   오래된 백업을 밀어내므로 「불가침」이 무한정 참인 것은 아니다 — 그 갈래는
+        #   `qa/test_evict_notice.py`가 잰다. 111·222는 이 시점에 링이 비어 있어 아래 `gone`이
+        #   공집합끼리의 비교다; 실제로 무언가를 재는 것은 뒤의 「대피본이 늘었는가」다.
         for appid in APPIDS:
             gone = before_backups[appid] - set(store.list_backups(appid))
             if gone:
@@ -260,9 +271,9 @@ def main_test():                                                # noqa: C901  (�
             if not cfgs[appid].exists() or cfgs[appid].read_bytes() != cfg_bytes[appid]:
                 P("★게임 설정 파일 원본이 바뀌었다(%s) — 초기화는 툴 데이터만 지워야 한다" % appid)
 
-        # ★ 감지 제외 목록도 **같이 지워진다**(A9 ④ — 2026-08-11 P11). 지우는 코드는 없다:
-        #   초기화가 `default_registry()`를 통째로 갈아 끼우므로 구조적으로 사라진다.
-        #   그 구조가 깨지면(예: 제외를 games 밖 어딘가에 따로 보존하면) 여기서 걸린다.
+        # 감지 제외 목록도 같이 지워진다. 지우는 코드는 없다 — 초기화가 `default_registry()`를
+        #   통째로 갈아 끼우므로 구조적으로 사라진다. 그 구조가 깨지면(예: 제외를 games 밖
+        #   어딘가에 따로 보존하면) 여기서 걸린다.
         reg = store.load_registry()
         reg["settings"]["discover_excluded"] = {
             "888": {"name": "제외한 게임", "excluded_at": "2026-08-11T09:00:00+0900"}}
@@ -285,11 +296,11 @@ def main_test():                                                # noqa: C901  (�
               % store.load_registry()["settings"].get("discover_excluded"))
 
         # ═══════════════════════════════════════════════════════════════════
-        # ⑦ ★ 등록 0 · 제외 N — DEFECT-05의 **바로 그 시나리오**
+        # ⑦ 등록 0 · 제외 N — 봉투가 없으면 조용히 잃는 자리
         #
         #   지울 게임이 하나도 없으므로 `counts.deleted`는 0이다. 그런데 감지 제외 N건과
         #   표시 이름은 실제로 사라진다. 봉투가 `cleared`로 말하지 않으면 화면이 가진 수는
-        #   0뿐이고, 사용자는 **무엇을 잃었는지 알 방법이 없다.**
+        #   0뿐이고, 사용자는 무엇을 잃었는지 알 방법이 없다.
         # ═══════════════════════════════════════════════════════════════════
         reg = store.load_registry()
         if reg["games"]:
@@ -328,14 +339,14 @@ def main_test():                                                # noqa: C901  (�
               % (env.get("data") or {}).get("cleared"))
 
         # ═══════════════════════════════════════════════════════════════════
-        # ⑤ ★ 경로 탈출 봉쇄 (QA 반려 ① — 실피해가 재현됐던 자리)
+        # ⑤ 경로 탈출 봉쇄
         #
-        #   `reset_all`은 **appid 파라미터가 없어** route의 `_VALIDATORS`를 한 번도 지나지
-        #   않는다. registry의 games **키**가 그대로 `delete_game_data`로 들어가므로,
+        #   `reset_all`은 appid 파라미터가 없어 route의 `_VALIDATORS`를 한 번도 지나지
+        #   않는다. registry의 games 키가 그대로 `delete_game_data`로 들어가므로,
         #   손상·수동 편집된 registry의 `"../../X"`·절대경로 키가 그대로 경로가 된다
-        #   (`os.path.join`은 절대경로 조각을 만나면 앞의 데이터 루트를 **통째로 버린다**).
-        #   → 봉쇄는 **문 안 한 곳**(`remove.delete_game_data`)에 있어야 한다.
-        #     여기서는 그 문을 **제품 경로(reset_all)로** 지난다 — 합성 호출이 아니다.
+        #   (`os.path.join`은 절대경로 조각을 만나면 앞의 데이터 루트를 통째로 버린다).
+        #   → 봉쇄는 문 안 한 곳(`remove.delete_game_data`)에 있어야 한다.
+        #     여기서는 그 문을 제품 경로(reset_all)로 지난다 — 합성 호출이 아니다.
         # ═══════════════════════════════════════════════════════════════════
         targets = {}
         for label in ("REL", "ABS"):
@@ -344,7 +355,7 @@ def main_test():                                                # noqa: C901  (�
             (d / "victim.txt").write_bytes(b"outside-the-data-root\n")
             targets[label] = d
         # `..`를 몇 번 올라가야 표적에 닿는지는 실제 경로로 계산한다 — 상수로 박으면
-        # 데이터 루트 구조가 바뀌는 순간 검사가 **아무것도 안 재면서** 통과한다.
+        # 데이터 루트 구조가 바뀌는 순간 검사가 아무것도 안 재면서 통과한다.
         rel_key = os.path.relpath(str(targets["REL"]),
                                   os.path.join(store.data_dir(), "profiles"))
         abs_key = str(targets["ABS"])
@@ -385,12 +396,13 @@ def main_test():                                                # noqa: C901  (�
         state["left"] = sorted(store.load_registry()["games"])
 
         # ═══════════════════════════════════════════════════════════════════
-        # ⑥ ★ 레지스트리 버전 가드 (U5) — **더 새 버전이 만든 데이터**를 만났을 때
+        # ⑥ 레지스트리 버전 가드 (U5) — 더 새 버전이 만든 데이터를 만났을 때
         #
         #   낡은 플러그인이 모르는 스키마 위에 쓰면 그 필드는 통째로 사라진다. 그래서
-        #   **바꾸는 동작만** 막고, 읽기와 **탈출로(전체 초기화)는 열어 둔다.**
-        #   셋을 **한자리에서** 잰다 — 하나만 보면 나머지가 무너진 것을 못 본다(막기만 하면
-        #   화면이 안 뜨고, 열기만 하면 데이터가 뭉개지고, 탈출로가 막히면 영영 못 벗어난다).
+        #   바꾸는 동작만 막고, 읽기와 탈출로(전체 초기화)는 열어 둔다.
+        #   그 셋에 「거부하고도 안 쓴다」를 더해 넷을 한자리에서 잰다 — 하나만 보면 나머지가
+        #   무너진 것을 못 본다(막기만 하면 화면이 안 뜨고, 열기만 하면 데이터가 뭉개지고,
+        #   탈출로가 막히면 영영 못 벗어나고, 거부하면서 쓰면 「바뀌지 않았습니다」가 거짓이 된다).
         # ═══════════════════════════════════════════════════════════════════
         future = tmp / "game777" / "video.ini"
         future.parent.mkdir(parents=True, exist_ok=True)

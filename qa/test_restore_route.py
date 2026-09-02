@@ -1,30 +1,27 @@
 #!/usr/bin/env python3
-"""복원 route의 계약 — **3-상태 · 토큰 · 조기 거부 · 파일명 파싱/정렬 · 링 소모.**
-설계 정본 DESIGN-F6-F8 §2-B~§2-E.
+"""복원 route의 계약 — 3-상태 · 토큰 · 조기 거부 · 파일명 파싱/정렬 · 링 소모.
 
-`qa/test_restore_path.py`는 **엔진**을 직접 불러 *"덮어쓴 프로필을 원래 바이트로 되돌릴 수
-있다"*(2단계 절차)를 잠근다. 이 파일은 그 위에 얹힌 **route 계약**을 잰다 — 무엇을 묻고,
-무엇을 묻지 않고, 무엇을 쓰지 않는가.
+`qa/test_restore_path.py`는 엔진의 2단계 복원 절차를 잰다. 이 파일은 그 위의 route 계약을 잰다.
 
 이 파일이 잠그는 것:
-  ① **토큰 계약** — 무토큰·위조·재사용·만료·타 게임·**scope 혼동**(저장/삭제 토큰으로 복원,
-     복원 토큰으로 저장)·**디스크 변경 후 무효**(TOCTOU).
-  ② **3-상태 계약** — `already`는 **엔진을 부르지 않는다**(쓰기 0 ∧ 대피 0 ∧ **링 소모 0**,
-     같은 백업 연속 2탭에도 링 불변) / `proceed`(설정 파일 없음)는 **무확인 실행**.
-  ③ **실행 중 게임 조기 거부** — 토큰을 **발급하지도 않고** GAME_RUNNING(§2-B-1).
-  ④ `backup_id` 형태 위반 → BAD_IDENTIFIER · 미등록 → GAME_NOT_REGISTERED ·
-     **backups 디렉터리 링크 봉쇄**(루트 밖 파일이 게임 설정 파일로 복사되지 않는다).
-  ⑤ **파일명 파싱·정렬** — stamp 자체의 하이픈(15자 고정폭) · 충돌 접미사 `-1-` ·
-     하이픈 든 파일명 · 미지 형식 → unknown · **같은 초 2건의 표시 순서가 시간순**.
-  ⑥ **복원 1회 = 링 1칸**(포화 링에서는 정확히 1건 축출) · `get_overview.backups` 정합.
+  ⓞ 목록 행은 봉투의 `target`과 `same_as_target`으로 되돌릴 곳과 현재 동일성을 싣는다.
+  ① 무토큰·위조·재사용·만료·타 게임·scope 혼동·되돌릴 곳 내용 변경 뒤 토큰을 거부한다.
+  ② `already`는 엔진을 부르지 않고 백업 ID 집합·설정 파일을 바꾸지 않으며 토큰을 내지 않는다.
+     설정 파일이 없으면 `proceed`로 묻지 않고 복원한다.
+  ③ 설정 파일 복원은 게임 실행 중 토큰 발급 전에 `GAME_RUNNING`으로 거부된다.
+  ④ 식별자·등록·백업 경로를 검사하고, 링크 밖 파일을 설정 파일로 복사하지 않는다.
+  ⑤ 파일명의 stamp·충돌 번호·하이픈 든 이름·미지 형식을 파싱하고
+     `(stamp, seq, name)` 키의 내림차순을 잰다.
+  ⑥ 새 내용의 설정 파일 대피는 비포화 링에 1건을 더하고, 포화 링에서는 1건을 더해 1건을
+     지운다. 같은 태그·같은 내용이면 성공해도 백업 ID 집합은 그대로다. `get_overview.backups`도
+     목록 행 수와 대조한다.
+  ⑦ 이웃 슬롯 meta가 비-dict여도 설정 파일 복원의 확인과 실행이 성공한다.
+  ⑧ 지문이 같은 두 게임 사이에서도 토큰의 appid가 다른 게임 사용을 막는다.
+  ⑨ `profile_*` 행은 봉투의 `target` 슬롯으로 복원한다. 설정 파일은 그대로이고, 슬롯 대피는
+     같은 태그·같은 내용의 존재에 따라 백업 ID가 1건 늘거나 그대로다. 게임 실행 중에도 막지 않는다.
 
-★ 거짓 검사 방지 — 단언마다 "FAIL이 되는 입력"을 같이 넣는다:
-  · 링 계측기는 **already(+0)와 실제 복원(+1)을 같은 계측기로** 잰다. 계측기가 고장 나
-    (항상 +0 또는 항상 +1) 있으면 둘 중 하나가 반드시 FAIL한다.
-  · 파싱·정렬은 **순진한 구현(첫 `-` split · 사전순 정렬)이 틀리는 픽스처**를 쓰고,
-    그 순진한 구현이 실제로 틀린 답을 낸다는 것을 **테스트가 먼저 출력해 증명**한다.
-  · 경로 봉쇄는 루트 밖에 실제 파일을 두고 **그 파일이 복사되지 않았는지**로 잰다.
-★ 합성 데이터만 쓴다 — `DECKY_PLUGIN_RUNTIME_DIR`이 tmp라 실사용 데이터에 닿을 수 없다.
+파싱·정렬과 경로 봉쇄에는 순진한 구현이 실패하는 음성 대조군을 둔다.
+합성 데이터만 쓰고 데이터 루트와 홈 경계는 tmp를 가리킨다.
 """
 import asyncio
 import os
@@ -38,10 +35,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCK = b"quality=dock\nshadows=high\nsource=DOCK-PROFILE\n"
 INTERNAL = b"quality=intl\nshadows=low_\nsource=INTL-PROFILE\n"
 EDITED = b"quality=edit\nshadows=mid_\nsource=USER-EDITED-\n"
-#: 어느 슬롯과도 다른 제3의 상태. R13부터 **적용이 대피본을 만드는 유일한 조건**이 이것이다
-#: (디스크가 어느 슬롯과 같으면 그 내용은 이미 슬롯에 있으므로 링을 태우지 않는다 — §14-B).
+#: 어느 슬롯과도 다른 제3의 상태. 적용이 대피본을 만드는 조건이 이것이다
+#: (디스크가 어느 슬롯과 같으면 그 내용은 이미 슬롯에 있으므로 링을 태우지 않는다).
 THIRD = b"quality=thrd\nshadows=mid_\nsource=THIRD-STATE-\n"
-#: **아직 어느 태그의 링에도 담긴 적이 없는** 내용. §14-G ⓔ 이후로 대피는 *새 내용일 때만*
+#: 아직 어느 태그의 링에도 담긴 적이 없는 내용. 대피는 그 태그에 같은 내용이 없을 때만
 #: 링을 태우므로, "대피본이 1건 생긴다"를 재는 절은 이 내용을 써야 잴 것이 생긴다.
 #: (중복이라 안 생기는 갈래는 같은 절의 뒤쪽에서 따로 잰다 — 단언을 넓히지 않고 갈래를 가른다.)
 UNSEEN = b"quality=unsn\nshadows=off_\nsource=NEVER-IN-RING\n"
@@ -78,28 +75,27 @@ def rpc(main, name, *args, **kwargs):
 
 
 def mkgame(tmp, engine, store, appid, name):
-    """합성 게임 하나 — **실제 저장·적용 경로를 태워** 백업 링을 채운다(손으로 밀지 않는다).
+    """합성 게임 하나 — 실제 저장·적용 경로를 태워 백업 링을 채운다(손으로 밀지 않는다).
 
     끝난 상태: 슬롯 dock=DOCK · internal=INTERNAL / 디스크 = DOCK / 백업 5건 —
     `profile_internal`(INTERNAL) · `profile_internal`(THIRD) ·
-    `profile_dock`(DOCK) · `profile_dock`(THIRD) · `disk`(**THIRD**).
-    **대피본은 덮어쓰기가 만든다**(빈 슬롯 첫 저장은 대피할 것이 없다) — 실사용의 그 경로를 탄다.
+    `profile_dock`(DOCK) · `profile_dock`(THIRD) · `disk`(THIRD).
+    대피본은 덮어쓰기가 만든다(빈 슬롯 첫 저장은 대피할 것이 없다) — 실사용의 그 경로를 탄다.
 
-    ⚠️ R13: 마지막 적용 직전에 **어느 슬롯과도 다른 THIRD**를 쓴다. 12판에서는 디스크가 dock과
-      같아도 적용이 `disk` 대피본을 만들었지만, §14-B 이후로는 만들지 않는다 — 그 상태로 두면
-      이 픽스처에 `disk` 행이 아예 없어 아래 단언들이 잴 대상을 잃는다(실제로 잃었다).
-    ⚠️⚠️ R13 후속(2026-08-15): **내용이 같은 재저장은 한 바이트도 쓰지 않는다**
-      (`engine.save_profile` 무쓰기 분기 · `qa/test_save_no_write_when_same.py`). 그래서 예전처럼
-      "같은 내용으로 다시 저장"하면 대피본이 **아예 안 생긴다** — 실제로 이 픽스처가 그렇게
-      비었다. 대피는 **내용이 달라지는 덮어쓰기**에서만 일어난다.
-    ★★ 그런데 아래 ⓞ·②는 **슬롯과 내용이 같은 프로필 대피본**을 필요로 한다. 대피본은
-      *덮이기 전 슬롯 내용*이고 새 슬롯 내용은 *그때의 디스크 내용*이라, **한 번의 저장으로는
-      둘이 같아질 수 없다**(같으면 애초에 안 쓴다). 실사용에서 그 상태가 생기는 길은 하나뿐이다 —
-      **갔다가 돌아오는 것**(A → B → A): 첫 덮어쓰기가 A를 대피시키고, 두 번째가 슬롯을 다시
-      A로 되돌린다. 그래서 슬롯마다 대피본이 2건씩 쌓인다(옛 3건 → 5건).
-    ★ 그 결과 **같은 kind의 행이 둘**이 되므로, 아래 단언들은 「그 kind의 첫 행」이 아니라
-      **`same_as_target`이라는 성질로** 행을 고른다(`pick_same`) — 픽스처 순서에 기대면
-      이 파일이 재는 것이 무엇인지 다음 사람이 알 수 없다.
+    마지막 적용 직전에 어느 슬롯과도 다른 THIRD를 쓴다. 디스크가 어느 슬롯과 같으면 적용이
+      대피본을 만들지 않아, 그대로 두면 이 픽스처에 `disk` 행이 아예 없어 아래 단언들이 잴
+      대상을 잃는다.
+    내용이 같은 재저장은 한 바이트도 쓰지 않는다(`engine.save_profile`의 무쓰기 분기). 그래서
+      "같은 내용으로 다시 저장"으로는 대피본이 아예 안 생긴다 — 대피는 내용이 달라지는
+      덮어쓰기에서만 일어난다.
+    그런데 아래 ⓞ·②는 슬롯과 내용이 같은 프로필 대피본을 필요로 한다. 대피본은 덮이기 전
+      슬롯 내용이고 새 슬롯 내용은 그때의 디스크 내용이라, 한 번의 저장으로는 둘이 같아질 수
+      없다(같으면 애초에 안 쓴다). 실사용에서 그 상태가 생기는 길은 하나뿐이다 — 갔다가
+      돌아오는 것(A → B → A): 첫 덮어쓰기가 A를 대피시키고, 두 번째가 슬롯을 다시 A로
+      되돌린다. 그래서 슬롯마다 대피본이 2건씩 쌓인다.
+    그 결과 같은 kind의 행이 둘이 되므로, 아래 단언들은 「그 kind의 첫 행」이 아니라
+      `same_as_target`이라는 성질로 행을 고른다(`pick_same`) — 픽스처 순서에 기대면 이 파일이
+      재는 것이 무엇인지 다음 사람이 알 수 없다.
     """
     reg = store.load_registry()
     cfg = tmp / ("game%s" % appid) / "video.ini"
@@ -117,14 +113,14 @@ def mkgame(tmp, engine, store, appid, name):
     engine.save_profile(reg, appid, "dock")           # 덮어쓰기 → profile_dock(DOCK)
     cfg.write_bytes(DOCK)
     engine.save_profile(reg, appid, "dock")           # 되돌아옴 → 슬롯 == 위 대피본
-    cfg.write_bytes(THIRD)                            # 어느 슬롯과도 다르다(§14-B 조건)
+    cfg.write_bytes(THIRD)                            # 어느 슬롯과도 다르다(적용의 대피 조건)
     engine.apply_profile(reg, appid, "dock")          # → disk 대피본(THIRD), 디스크는 DOCK이 된다
     store.save_registry(reg)
     return cfg
 
 
 def naive_parse(name):
-    """**순진한 구현** — 첫 `-`로 자른다. 음성 대조군이다(이것이 틀리는 것을 테스트가 보인다)."""
+    """순진한 구현 — 첫 `-`로 자른다. 음성 대조군이다(이것이 틀리는 것을 테스트가 보인다)."""
     parts = name.split("-")
     return {"stamp": parts[0], "tag": parts[1] if len(parts) > 1 else ""}
 
@@ -139,11 +135,11 @@ def main_test():                                                # noqa: C901  (�
         engine_calls = []
 
         def counted_restore(reg, appid, path, *args, **kwargs):
-            """엔진 호출을 **직접 센다** — "already면 엔진을 안 부른다"는 결과가 아니라
-            **호출 자체**로 잰다(파일이 우연히 안 바뀌는 것과 구분된다).
+            """엔진 호출을 직접 센다 — "already면 엔진을 안 부른다"는 결과가 아니라
+            호출 자체로 잰다(파일이 우연히 안 바뀌는 것과 구분된다).
 
-            ⚠️ 가변 인자로 받는다: R13에서 엔진에 `target` 인자가 늘었고(§14-C), 고정 3인자
-              래퍼는 그 순간 **TypeError**를 낸다 — 계측기가 대상을 깨는 자리다."""
+            가변 인자로 받는다: 엔진이 `target`을 인자로 받으므로 고정 3인자 래퍼는 그 순간
+              TypeError를 낸다 — 계측기가 대상을 깨는 자리다."""
             engine_calls.append((str(appid), path) + tuple(args))
             return real_engine_restore(reg, appid, path, *args, **kwargs)
 
@@ -204,10 +200,10 @@ def main_test():                                                # noqa: C901  (�
             return None
 
         def pick_same(appid, kind):
-            """그 kind 중 **되돌릴 곳과 내용이 같은** 행. 픽스처 순서가 아니라 성질로 고른다.
+            """그 kind 중 되돌릴 곳과 내용이 같은 행. 픽스처 순서가 아니라 성질로 고른다.
 
-            ★ R13 무쓰기 이후 이 상태는 **갔다가 돌아온 슬롯**에서만 생기고(mkgame 주석),
-              그때 같은 kind의 행이 둘이라 「첫 행」으로는 엉뚱한 것을 집는다.
+            무쓰기 이후 이 상태는 갔다가 돌아온 슬롯에서만 생기고(mkgame 주석), 그때 같은
+              kind의 행이 둘이라 「첫 행」으로는 엉뚱한 것을 집는다.
             """
             for row in rows(appid):
                 if row["kind"] == kind and row["same_as_target"]:
@@ -247,7 +243,7 @@ def main_test():                                                # noqa: C901  (�
             P("★detail=false에서 backups가 안 온다 — 관리 탭(detail=false 호출)이 N을 못 그린다")
 
         # ═══════════════════════════════════════════════════════════════════
-        # ⓞ **되돌릴 곳**이 행마다 실려 오는가 (R13 §5-C ⓐ·ⓒ — 화면이 누르기 전에 말한다)
+        # ⓞ 되돌릴 곳이 행마다 실려 오는가 — 화면이 누르기 전에 말한다
         # ═══════════════════════════════════════════════════════════════════
         want_target = {"disk": "config", "profile_dock": "dock", "profile_internal": "internal"}
         for row in rows100:
@@ -258,10 +254,10 @@ def main_test():                                                # noqa: C901  (�
             if row["target"] != want_target.get(row["kind"], "config"):
                 P("★ⓞ kind=%s의 되돌릴 곳이 %s다(기대 %s) — 확인한 곳과 다른 곳에 쓰게 된다"
                   % (row["kind"], row["target"], want_target.get(row["kind"])))
-        # `profile_internal` 대피본 **하나**는 지금 internal 슬롯과 같은 내용이다(mkgame가 그렇게
+        # `profile_internal` 대피본 하나는 지금 internal 슬롯과 같은 내용이다(mkgame가 그렇게
         # 만든다 — 갔다가 돌아온 슬롯). 그 사실이 배지로 나와야 하고, 같은 시각 `disk` 행은
-        # **다르다**(둘 다 맞아야 계측이 유효하다).
-        # ⚠️ kind로 뭉뚱그리지 않는다 — 같은 kind에 True·False가 함께 있는 것이 정상 상태다.
+        # 다르다(둘 다 맞아야 계측이 유효하다).
+        # kind로 뭉뚱그리지 않는다 — 같은 kind에 True·False가 함께 있는 것이 정상 상태다.
         same_kinds = {r["kind"] for r in rows100 if r["same_as_target"]}
         if "profile_internal" not in same_kinds:
             P("★ⓞ 슬롯과 내용이 같은 프로필 백업에 same_as_target이 안 섰다 — %s"
@@ -272,10 +268,10 @@ def main_test():                                                # noqa: C901  (�
 
         # ═══════════════════════════════════════════════════════════════════
         # ② 3-상태 ①  `already` — 엔진 미호출 · 쓰기 0 · 링 소모 0
-        #    ★ R13: 기준은 **되돌릴 곳**이다(§5-C ⓑ). 지금 internal 슬롯과 `profile_internal`
-        #      대피본의 내용이 같으므로 already다. **12판 규칙(게임 설정 파일만 본다)이면 이 행은
-        #      confirm이었다** — 디스크는 DOCK이라 백업과 다르기 때문이다. 즉 이 단언은 기준이
-        #      목적지로 옮겨졌는지를 직접 가른다.
+        #    기준은 되돌릴 곳이다. 지금 internal 슬롯과 `profile_internal` 대피본의 내용이
+        #      같으므로 already다. 게임 설정 파일만 보는 판정이었다면 이 행은 confirm이다 —
+        #      디스크는 DOCK이라 백업과 다르기 때문이다. 즉 이 단언은 기준이 목적지로
+        #      옮겨졌는지를 직접 가른다.
         # ═══════════════════════════════════════════════════════════════════
         same_row = pick_same("100", "profile_internal")
         if same_row is None:
@@ -289,7 +285,7 @@ def main_test():                                                # noqa: C901  (�
         if engine_calls:
             P("★②-a already인데 엔진 restore_backup이 호출됐다 — 조기 반환이 안 된다 (%s)"
               % engine_calls)
-        # 같은 행을 한 번 더 누른다 — 링이 1칸도 밀리면 안 된다(반증이 재현한 결함).
+        # 같은 행을 한 번 더 누른다 — 링이 1칸도 밀리면 안 된다.
         env = rpc(main, "restore_backup", "100", same_row["backup_id"])
         if data_of(env).get("outcome") != "already":
             P("②-a 두 번째 탭에서 already가 아니다 — %s" % env)
@@ -304,7 +300,7 @@ def main_test():                                                # noqa: C901  (�
 
         # ═══════════════════════════════════════════════════════════════════
         # ① 토큰 계약 + ⑥ 링 소모 (디스크를 손으로 바꿔 「덮어쓰기」 상황을 만든다)
-        #    대상은 `disk` 행 = **게임 설정 파일**이다(현행 계약 그대로 — §7-2 ⓑ).
+        #    대상은 `disk` 행 = 게임 설정 파일이다.
         # ═══════════════════════════════════════════════════════════════════
         cfg100.write_bytes(EDITED)
         prof_row = pick("100", "disk")
@@ -328,7 +324,7 @@ def main_test():                                                # noqa: C901  (�
         if not is_confirm(env) or cfg100.read_bytes() != EDITED:
             P("①-b 지어낸 토큰으로 복원이 통과했다 ★계약 위반 (%s)" % env)
 
-        # ①-c scope 혼동 — **삭제 토큰으로 복원**
+        # ①-c scope 혼동 — 삭제 토큰으로 복원
         del_env = rpc(main, "delete_game", "100")
         del_tok = params_of(del_env).get("confirm_token")
         if not del_tok:
@@ -338,7 +334,7 @@ def main_test():                                                # noqa: C901  (�
             if not is_confirm(env) or cfg100.read_bytes() != EDITED:
                 P("★①-c 삭제 토큰으로 복원이 통과했다 — scope 네임스페이스가 안 갈린다 (%s)" % env)
 
-        # ①-c′ 반대 방향 — **복원 토큰으로 저장**
+        # ①-c′ 반대 방향 — 복원 토큰으로 저장
         tok = token_for("100", prof_row["backup_id"])
         env = rpc(main, "save_profile", "100", "dock", confirm_token=tok)
         if not is_confirm(env):
@@ -371,7 +367,7 @@ def main_test():                                                # noqa: C901  (�
             if not is_confirm(env) or cfg100.read_bytes() != EDITED:
                 P("①-f 다른 게임의 토큰으로 복원이 통과했다 ★계약 위반 (%s)" % env)
 
-        # ── ⑥ 정상 복원 1회 = 링 **정확히 1칸** (already의 +0과 같은 계측기로 잰다) ──
+        # ── ⑥ 정상 복원 1회 = 링 정확히 1칸 (already의 +0과 같은 계측기로 잰다) ──
         tok = token_for("100", prof_row["backup_id"])
         before_ids = backup_ids("100")
         engine_calls.clear()
@@ -401,8 +397,8 @@ def main_test():                                                # noqa: C901  (�
             P("①-g 복원 토큰이 두 번 소비됐다 ★1회용이 아니다")
 
         # ── ⑥′ 포화 링에서 복원 1회 = 정확히 1건 축출 ─────────────────────────
-        #   ★ 디스크 내용은 **링에 없는 것**이어야 한다: 방금 ⑥이 `EDITED`를 `disk` 대피본으로
-        #     담아 뒀으므로 그대로 두면 중복 무쓰기 갈래(§14-G ⓔ)가 되어 이 절이 잴 것을 잃는다.
+        #   디스크 내용은 링에 없는 것이어야 한다: 방금 ⑥이 `EDITED`를 `disk` 대피본으로
+        #     담아 뒀으므로 그대로 두면 중복 무쓰기 갈래가 되어 이 절이 잴 것을 잃는다.
         #     그 갈래는 바로 아래 ⑥″가 잰다.
         cfg100.write_bytes(UNSEEN)
         while len(backup_ids("100")) < store.BACKUP_KEEP:
@@ -422,10 +418,10 @@ def main_test():                                                # noqa: C901  (�
         if len(after) != store.BACKUP_KEEP:
             P("⑥′ 포화 링 크기가 %d다(BACKUP_KEEP=%d)" % (len(after), store.BACKUP_KEEP))
 
-        # ── ⑥″ 같은 내용은 다시 담기지 않는다 → **포화 링에서도 축출 0건** (§14-G ⓔ) ──
+        # ── ⑥″ 같은 내용은 다시 담기지 않는다 → 포화 링에서도 축출 0건 ──
         #   ⑥′이 되돌린 내용은 곧 그 백업 파일의 내용이라, 지금 디스크 내용은 이미 `disk` 링에
         #   있다. 그러면 대피가 아무것도 쓰지 않고, 쓰지 않으므로 지우지도 않는다.
-        #   ★ ⑥′와 **갈래를 갈라서** 잰다 — "1건 또는 0건"으로 넓히면 둘 다 못 잰다.
+        #   ⑥′와 갈래를 갈라서 잰다 — "1건 또는 0건"으로 넓히면 둘 다 못 잰다.
         disk_shas = {store.sha1_file(q) for q in store.list_backups("100")}
         if store.sha1_file(str(cfg100)) not in disk_shas:
             P("⑥″ 사전 조건 실패 — 지금 디스크 내용이 링에 없다(중복 갈래가 안 선다)")
@@ -454,7 +450,7 @@ def main_test():                                                # noqa: C901  (�
                           % (sorted(now2 - before2), sorted(before2 - now2)))
 
         # ═══════════════════════════════════════════════════════════════════
-        # ② 3-상태 ②  `proceed` — 설정 파일이 없으면 **묻지 않고** 재생한다
+        # ② 3-상태 ②  `proceed` — 설정 파일이 없으면 묻지 않고 재생한다
         # ═══════════════════════════════════════════════════════════════════
         cfg300 = mkgame(tmp, engine, store, "300", "MissingConfig")
         row300 = pick("300", "disk")              # 되돌릴 곳 = 게임 설정 파일(지금 없다)
@@ -471,11 +467,11 @@ def main_test():                                                # noqa: C901  (�
             P("② proceed 경로에서 토큰이 발급됐다 — 묻지 않는 경로다")
 
         # ═══════════════════════════════════════════════════════════════════
-        # ③ 실행 중 게임 — **토큰 발급 전에** 거부 (§2-B-1)
+        # ③ 실행 중 게임 — 토큰 발급 전에 거부
         # ═══════════════════════════════════════════════════════════════════
         cfg400 = mkgame(tmp, engine, store, "400", "RunningGame")
         cfg400.write_bytes(EDITED)
-        row400 = pick("400", "disk")              # 조기 거부는 **게임 설정 파일 대상에만** 건다
+        row400 = pick("400", "disk")              # 조기 거부는 게임 설정 파일 대상에만 건다
         if row400 is None:
             return finish()
         main._CONFIRM_TOKENS.clear()
@@ -516,7 +512,7 @@ def main_test():                                                # noqa: C901  (�
         if code_of(env) not in (codes.BACKUP_FILE_MISSING, codes.CONFIRM_REQUIRED):
             P("④ 없는 백업 id의 응답이 예상 밖이다 — %s" % env)
 
-        # ④′ backups/<appid>가 **외부 디렉터리 링크** — 루트 밖 파일이 설정 파일로 복사되면 안 된다
+        # ④′ backups/<appid>가 외부 디렉터리 링크 — 루트 밖 파일이 설정 파일로 복사되면 안 된다
         cfg500 = mkgame(tmp, engine, store, "500", "BackupsLinked")
         cfg500.write_bytes(EDITED)
         outside = tmp / "outside-backups-500"
@@ -542,7 +538,7 @@ def main_test():                                                # noqa: C901  (�
         os.unlink(store.backups_dir("500"))
 
         # ═══════════════════════════════════════════════════════════════════
-        # ⑤ 파일명 파싱·정렬 — **순진한 구현이 틀리는** 픽스처로 잰다
+        # ⑤ 파일명 파싱·정렬 — 순진한 구현이 틀리는 픽스처로 잰다
         # ═══════════════════════════════════════════════════════════════════
         cfg600 = mkgame(tmp, engine, store, "600", "ParseTarget")
         bdir = store.backups_dir("600")
@@ -561,9 +557,9 @@ def main_test():                                                # noqa: C901  (�
         ]
         for name, _, _ in fixtures:
             (pathlib.Path(bdir) / name).write_bytes(DOCK)
-        # ★ 링크 항목 1개 — **목록에 뜨면 안 된다.** 엔진 G15가 링크를 무조건 거부하므로
+        # 링크 항목 1개 — 목록에 뜨면 안 된다. 엔진 G15가 링크를 무조건 거부하므로
         #   목록에 실으면 "누를 수는 있는데 항상 거부되는 행"이 생긴다(없는 조작을 권하지 않는다).
-        #   (2026-08-10 qa-lead 4-B ①: 이 픽스처가 없으면 `_entries`의 islink 스킵을 지워도 안 걸린다.)
+        #   이 픽스처가 없으면 `restore._entries`의 islink 스킵을 지워도 안 걸린다.
         link_bait = tmp / "outside-link-target.ini"
         link_bait.write_bytes(DOCK)
         link_name = "20260809-221534-disk-linked.ini"
@@ -581,7 +577,7 @@ def main_test():                                                # noqa: C901  (�
             if row["filename"] != filename:
                 P("★⑤ %s의 파일명이 %r다(기대 %r) — stamp의 하이픈을 고정폭으로 안 뗐다"
                   % (name, row["filename"], filename))
-        # 음성 대조군 — **첫 `-` split** 구현이면 이 픽스처에서 틀린다(그래야 ⑤가 유효하다)
+        # 음성 대조군 — 첫 `-` split 구현이면 이 픽스처에서 틀린다(그래야 ⑤가 유효하다)
         naive = naive_parse("20260809-221530-disk-video.ini")
         if naive["stamp"] == "20260809-221530":
             P("⑤ 음성 대조군 무효 — 순진한 파서가 우연히 맞았다(픽스처가 이 결함을 못 잡는다)")
@@ -590,7 +586,7 @@ def main_test():                                                # noqa: C901  (�
             P("★⑤ stamp를 15자 고정폭으로 떼지 않았다 — %r / %r"
               % (ours["stamp"], ours["stamp_label"]))
 
-        # ⑤′ 같은 초 충돌 2건의 **표시 순서가 시간순**인가 (접미사 없는 것이 먼저 생긴 것이다)
+        # ⑤′ 같은 초 충돌 2건의 표시 순서 — 충돌 번호가 큰 쪽이 위다(정렬 키의 둘째 칸)
         order = [r["backup_id"] for r in rows("600")]
         try:
             i_plain = order.index("20260809-221530-disk-video.ini")
@@ -600,16 +596,16 @@ def main_test():                                                # noqa: C901  (�
         else:
             if i_suffix >= i_plain:
                 P("★⑤′ 같은 초 충돌 접미사가 시간순이 아니다(최신이 위여야 한다) — %s" % order)
-        # 음성 대조군 — **사전 역순**은 이 픽스처에서 틀린 순서를 낸다(`-1-` < `-video`).
-        #   ⚠️ R14 #3 이후 `store.list_backups`는 사전순이 아니다(생성 순서 `backup_order_key`).
-        #     그래서 대조군을 그 함수가 아니라 **사전순 자체**로 잡는다 — 두 순서가 하나로
-        #     합쳐졌다는 사실 자체는 아래 ⑤″가 잰다.
+        # 음성 대조군 — 사전 역순은 이 픽스처에서 틀린 순서를 낸다(`-1-` < `-video`).
+        #   `store.list_backups`는 사전순이 아니라 `backup_order_key`(stamp·충돌 번호·이름)
+        #     순서다. 그래서 대조군을 그 함수가 아니라 사전순 자체로 잡는다 — 두 순서가
+        #     하나로 합쳐졌다는 사실 자체는 아래 ⑤″가 잰다.
         lex = sorted((os.path.basename(p) for p in store.list_backups("600")), reverse=True)
         li_plain = lex.index("20260809-221530-disk-video.ini")
         li_suffix = lex.index("20260809-221530-disk-1-video.ini")
         if li_suffix < li_plain:
             P("⑤′ 음성 대조군 무효 — 사전 역순이 우연히 맞았다(정렬 결함을 못 잡는 픽스처다)")
-        # ⑤″ **순서는 하나다**(R14 #3) — prune이 자르는 목록과 화면 목록이 같은 순서여야
+        # ⑤″ 순서는 하나다 — prune이 자르는 목록과 화면 목록이 같은 순서여야
         #    축출 예고가 실제로 지워질 파일을 가리킨다(`test_backup_evict_preview` ⓔ와 같은 계약).
         prune_order = [os.path.basename(p) for p in store.list_backups("600")
                        if os.path.basename(p) != link_name]
@@ -619,7 +615,7 @@ def main_test():                                                # noqa: C901  (�
         # unknown 행도 목록에 살아 있어야 한다(형식을 모른다고 백업을 숨기면 복구 수단이 사라진다)
         if "garbage.ini" not in order:
             P("⑤ 미지 형식 백업이 목록에서 사라졌다 — 복구 수단을 숨기면 안 된다")
-        # ★ 링크는 목록에서 빠진다(4-B ①). 음성 대조군: 같은 디렉터리의 **실파일**은 떠 있다.
+        # 링크는 목록에서 빠진다. 음성 대조군: 같은 디렉터리의 실파일은 떠 있다.
         if link_name in order:
             P("★⑤ 링크된 백업이 목록에 떴다 — 눌러도 항상 거부되는 행이다(G15)")
         if not link_bait.exists():
@@ -628,10 +624,9 @@ def main_test():                                                # noqa: C901  (�
             P("⑤ 음성 대조군 무효 — 실파일까지 목록에서 빠졌다(스킵이 과하다)")
 
         # ═══════════════════════════════════════════════════════════════════
-        # ⑦ 손상 meta가 섞여 있어도 **복원은 된다** (4-B ②)
-        #    `engine.disk_state`는 fence 대상이라 비-dict meta에서 AttributeError를 낸다.
-        #    복원은 **망가진 상태를 되돌리는 경로**라 그 예외로 막히면 안 된다 —
-        #    `restore._disk_state`가 조회 실패로 접는다. 이 절이 없으면 그 접기를 지워도 안 걸린다.
+        # ⑦ 이웃 슬롯 meta가 비-dict여도 설정 파일 복원은 된다.
+        #    `engine.disk_state`가 부르는 `store.slot_holds`가 비-dict meta를 불일치로 접는다.
+        #    이 절은 `restore._slot_meta`나 `restore._disk_state`의 예외 포획을 실행하지 않는다.
         # ═══════════════════════════════════════════════════════════════════
         cfg700 = mkgame(tmp, engine, store, "700", "CorruptNeighbourSlot")
         row700 = pick("700", "disk")
@@ -653,23 +648,23 @@ def main_test():                                                # noqa: C901  (�
                     P("⑦ 복원됐다는데 설정 파일이 백업 내용이 아니다")
 
         # ═══════════════════════════════════════════════════════════════════
-        # ⑨ **되돌릴 곳이 프로필 슬롯인 행** (R13 — 설계 §5-C ⓐ · 4-B 1′·4행)
-        #    잠그는 것: ⓐ 슬롯이 백업 내용이 된다 ⓑ **게임 설정 파일은 안 바뀐다**
-        #    ⓒ 대피본이 슬롯의 옛 내용으로 1건 생긴다 ⓓ **실행 중이어도 거부되지 않는다**
-        #    ★ 목적지를 뒤바꾼 구현에서는 ⓐ·ⓑ가 **동시에** 뒤집힌다(음성 대조군을 겸한다).
+        # ⑨ 되돌릴 곳이 프로필 슬롯인 행
+        #    잠그는 것: ⓐ 슬롯이 백업 내용이 된다 ⓑ 게임 설정 파일은 안 바뀐다
+        #    ⓒ 대피본이 슬롯의 옛 내용으로 1건 생긴다 ⓓ 실행 중이어도 거부되지 않는다
+        #    목적지를 뒤바꾼 구현에서는 ⓐ·ⓑ가 동시에 뒤집힌다(음성 대조군을 겸한다).
         # ═══════════════════════════════════════════════════════════════════
         cfg800 = mkgame(tmp, engine, store, "800", "SlotRestore")
         reg800 = store.load_registry()
         cfg800.write_bytes(UNSEEN)
-        # ★ 슬롯을 **링에 없는 내용**으로 만든다: mkgame은 슬롯이 갔다 돌아오게 만들어 두 상태를
+        # 슬롯을 링에 없는 내용으로 만든다: mkgame은 슬롯이 갔다 돌아오게 만들어 두 상태를
         #   모두 대피본으로 담아 두므로, 그 두 상태 중 하나를 슬롯에 두면 이 절의 대피가 중복
-        #   무쓰기(§14-G ⓔ)가 되어 "대피본 1건"을 잴 수 없다. 중복 갈래는 아래 ⑨-e가 잰다.
+        #   무쓰기가 되어 "대피본 1건"을 잴 수 없다. 중복 갈래는 아래 ⑨-e가 잰다.
         engine.save_profile(reg800, "800", "internal")   # 슬롯 = UNSEEN (아직 어디에도 없는 내용)
         store.save_registry(reg800)
-        cfg800.write_bytes(EDITED)                       # 게임 설정 파일은 여기서 **안 움직여야** 한다
+        cfg800.write_bytes(EDITED)                       # 게임 설정 파일은 여기서 안 움직여야 한다
         slot_row = None
         for row in rows("800"):
-            # ★ 행을 **성질로** 고른다(mkgame 주석의 규칙): 같은 kind의 행이 둘이라 순서에 기대면
+            # 행을 성질로 고른다(mkgame 주석의 규칙): 같은 kind의 행이 둘이라 순서에 기대면
             #   무엇을 재는지 알 수 없다. 여기서 필요한 것은 *슬롯을 INTERNAL로 되돌릴 행*이다.
             if row["kind"] != "profile_internal" or row["same_as_target"]:
                 continue
@@ -685,7 +680,7 @@ def main_test():                                                # noqa: C901  (�
         main._CONFIRM_TOKENS.clear()
         # ⓓ 실행 중에도 슬롯 복원은 묻고 진행한다(게임이 읽지도 쓰지도 않는 데이터다).
         #    같은 세계의 `disk` 행은 ③에서 이미 GAME_RUNNING으로 거부되는 것을 봤다 — 두 대상의
-        #    처분이 **갈린다**는 것이 계약이다.
+        #    처분이 갈린다는 것이 계약이다.
         real_running = engine.running_game
         engine.running_game = lambda appid: str(appid) == "800"
         try:
@@ -716,15 +711,15 @@ def main_test():                                                # noqa: C901  (�
             P("★⑨-c 슬롯 복원이 대피본을 %d건 만들었다(1건이어야 한다)" % len(added800))
         if store.sha1_bytes(UNSEEN) not in {store.sha1_file(q) for q in store.list_backups("800")}:
             P("★⑨-c 덮어쓰기 직전 슬롯 내용이 백업에 없다 — 되돌릴 지점이 없다")
-        # 같은 행을 한 번 더: 이제 슬롯 == 백업이므로 **already**(링 소모 0)
+        # 같은 행을 한 번 더: 이제 슬롯 == 백업이므로 already(링 소모 0)
         env = rpc(main, "restore_backup", "800", slot_row["backup_id"])
         if data_of(env).get("outcome") != "already":
             P("⑨ 되돌린 직후 같은 행이 already가 아니다 — 기준이 목적지가 아니다 (%s)" % env)
 
-        # ── ⑨-e **슬롯 대피도 중복이면 한 칸도 안 쓴다** (§14-G ⓔ) ─────────────────
+        # ── ⑨-e 슬롯 대피도 중복이면 한 칸도 안 쓴다 ─────────────────
         #   슬롯은 지금 INTERNAL이고, `profile_internal`(INTERNAL)은 이미 링에 있다(mkgame).
         #   그러니 다른 `profile_internal` 행으로 되돌려도 대피가 새 파일을 만들지 않는다 —
-        #   **태그가 같고 내용이 같기 때문**이다. 태그가 다르면 얘기가 다르다(⑨-f).
+        #   태그가 같고 내용이 같기 때문이다. 태그가 다르면 얘기가 다르다(⑨-f).
         other_row = None
         for row in rows("800"):
             if row["kind"] == "profile_internal" and not row["same_as_target"]:
@@ -751,9 +746,9 @@ def main_test():                                                # noqa: C901  (�
                     P("★⑨-e 같은 태그·같은 내용인데 대피본이 생겼다 — 추가=%s"
                       % sorted(backup_ids("800") - before_e))
 
-        # ── ⑨-f **태그가 다르면 내용이 같아도 쌓인다** — 중복 제거는 태그별이다 ────────
+        # ── ⑨-f 태그가 다르면 내용이 같아도 쌓인다 — 중복 제거는 태그별이다 ────────
         #   `profile_internal`에 있는 내용이라도 `disk` 대피본을 대신하지 못한다:
-        #   되돌릴 곳이 다른 두 행은 서로를 대신할 수 없다(§5-C ⓐ). 전역으로 걸렀다면 여기서
+        #   되돌릴 곳이 다른 두 행은 서로를 대신할 수 없다. 전역으로 걸렀다면 여기서
         #   대피본이 안 생기고, 화면은 그 상태를 *"디스크 쪽에는 백업이 없다"*로 읽는다.
         slot_now = store.profile_file_path("800", "internal")
         same_as_slot = store.read_bytes(slot_now) if slot_now else b""
@@ -779,8 +774,8 @@ def main_test():                                                # noqa: C901  (�
                       "태그를 안 보고 있다" % len(added_f))
 
         # ═══════════════════════════════════════════════════════════════════
-        # ⑧ 토큰의 **appid 칸**이 실제로 게임을 가른다 (4-B ③)
-        #    지문이 **바이트 동일한** 두 게임을 만든다 — 그래야 appid 칸만이 유일한 차이가 되고,
+        # ⑧ 토큰의 appid 칸이 실제로 게임을 가른다
+        #    지문이 바이트 동일한 두 게임을 만든다 — 그래야 appid 칸만이 유일한 차이가 되고,
         #    그 칸을 `"*"`로 바꾸는 변이가 검출된다(①-f는 지문이 달라 그 변이를 못 잡았다).
         # ═══════════════════════════════════════════════════════════════════
         twin_name = "20260101-010101-disk-video.ini"

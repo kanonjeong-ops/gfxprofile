@@ -1,36 +1,32 @@
 #!/usr/bin/env python3
-"""개별 삭제의 계약 — **순서 · 중간 상태 합법성 · 토큰 우회 · 부수 처리.**
-설계 정본 DESIGN-DELETE §5-A·§6-B.
+"""개별 삭제의 계약 — 순서 · 중간 상태 합법성 · 토큰 우회 · 부수 처리.
 
-이 파일이 잠그는 것 6가지:
-  ① **실행 순서**(대피→meta unlink→rmtree→registry)를 **단계별 크래시 주입**으로 잠근다.
+이 파일이 잠그는 것:
+  ① 실행 순서(대피→meta unlink→rmtree→registry)를 단계별 크래시 주입으로 잠근다.
      순서가 바뀌면 주입 지점의 잔존 상태가 달라져 반드시 걸린다.
-  ② 중단 상태의 **소비자 전수 합법성** — 특히 *"본체 없음 · meta 잔존"*이 한 번도 생기지
-     않는지. 그 상태는 `_profile_ready`(빈 슬롯)와 `apply_all`(already + registry 기록)의
-     판정이 **정면으로 어긋나는** 자리다(설계 개정 1판의 최심각 결함).
-     ★ 검사가 항진식이 아님을 **합성 주입**으로 증명한다 — 그 상태를 손으로 만들어
-       판정기가 실제로 FAIL을 내는지 먼저 보인다(거짓 검사 방지 체크리스트).
-  ③ 토큰 우회 전종 — 무토큰·위조·재사용·만료·타 게임·**scope 혼동**(저장 토큰으로 삭제).
-  ④ 비숫자 appid 거부 · 미등록 거부 · **경로 봉쇄 4종** — 루트 밖 링크 / 루트 안 남의
-     게임 링크 / 이름만 같은 루트 밖 링크(dirname 절반) / **슬롯 레벨 링크**(반려 ①′).
+  ② 중단 상태에서 `main._profile_ready`와 `engine.apply_all`의 판정이 어긋나지 않는지 잰다.
+  ③ 토큰 우회 전종 — 무토큰·위조·타 게임·scope 혼동(저장 토큰으로 삭제)·만료·재사용.
+  ④ 비숫자 appid 거부 · 미등록 거부 · 경로 봉쇄 4종 — 루트 밖 링크 / 루트 안 남의 게임 링크 /
+     이름만 같은 루트 밖 링크(dirname 절반) / 슬롯 레벨 링크.
   ⑤ `last_appid` 정리(그리고 남의 last_appid는 안 건드린다).
   ⑥ TOCTOU — 확인창을 띄운 사이 프로필이 저장되면 삭제 토큰이 무효.
-  ⑦ **meta가 손상돼도 본체는 대피한다**(QA 반려 ② — 본체 탐색을 meta에서 뗀 선택의 잠금).
-     설계 원문대로 meta의 `filename`을 거쳐 찾으면 그 슬롯은 대피 없이 rmtree된다.
-그리고 관통 단언: **게임 설정 파일 원본은 1바이트도 안 바뀐다 · `backups/`는 줄지 않는다.**
+  ⑦ meta가 손상돼도 본체는 대피한다. meta의 `filename`을 거쳐 본체를 찾으면 meta가 안 읽히는
+     슬롯은 대피 없이 rmtree된다 — 탐색을 디렉터리 열거(`store.evacuable_names`)로 뗀 선택을
+     여기서 잠근다.
+게임 100의 재시도 완료 뒤 설정 파일 바이트가 같고, 백업 개수가 최초보다 늘었는지 확인한다.
 
-⑧ **`DELETE_FAILED`가 덮는 두 종류를 갈라 두는 사실 필드**(2026-08-23 QA DEFECT-06).
-   이 코드 하나가 *"삭제 도중 실패 — 일부 지워졌을 수 있다"*와 *"시작 전 거부 — 아무것도 안
-   지웠다"*를 함께 덮는다. 화면은 두 문장으로 갈리고, 그 근거는 `stage`가 **아니라**
-   봉투의 `profile_delete_started`다(같은 `"escape"`를 `restore.py`가 **다른 코드**
+⑧ `DELETE_FAILED`가 덮는 두 종류를 갈라 두는 사실 필드.
+   이 코드 하나가 "삭제 도중 실패 — 일부 지워졌을 수 있다"와 "시작 전 거부 — 아무것도 안
+   지웠다"를 함께 덮는다. 화면은 두 문장으로 갈리고, 그 근거는 `stage`가 아니라 봉투의
+   `profile_delete_started`다(같은 `"escape"`를 `restore.py`가 다른 코드
    `BACKUP_OUT_OF_ROOT`에도 쓴다). 그래서 여기서 넷을 잠근다 —
    ⓐ `meta`·`rmtree` 주입에서 `is True` · ⓑ escape 거부마다 `is False` ·
-   ⓒ escape **전후로** 대상 게임의 registry 항목·프로필 트리 지문이 같음(**백업 링은 제외** —
+   ⓒ escape 전후로 대상 게임의 registry 항목·프로필 트리 지문이 같음(백업 링은 제외 —
    삭제 전 대피가 먼저라 링은 이미 바뀌어 있을 수 있고, `False`는 링까지 부정하지 않는다) ·
-   ⓓ `codes.DELETE_FAILED`의 생성점이 **공통 helper 하나뿐**인지 AST 소스 계약(⑨절).
+   ⓓ `codes.DELETE_FAILED`의 생성점이 공통 helper 하나뿐인지 AST 소스 계약(⑨절).
 
-★ 실데이터에 닿을 수 없다 — `main.py`는 `DECKY_PLUGIN_RUNTIME_DIR`이 없으면 뜨지도 않고,
-  있으면 그것을 `GFXPROFILE_DATA_DIR`에 **무조건 대입**한다. 여기서는 그것이 tmp다.
+실데이터에 닿을 수 없다 — `main.py`는 `DECKY_PLUGIN_RUNTIME_DIR`이 없으면 뜨지도 않고,
+있으면 그것을 `GFXPROFILE_DATA_DIR`에 무조건 대입한다. 여기서는 그것이 tmp다.
 """
 import ast
 import asyncio
@@ -69,7 +65,7 @@ def boot(tmp):
         log=lambda level, fmt="", *args, **kwargs: rec("log")(fmt, *args),
     )
     sys.modules["decky"] = fake
-    os.environ["DECKY_PLUGIN_RUNTIME_DIR"] = str(tmp / "data")   # ← 격리는 이 한 줄이 한다
+    os.environ["DECKY_PLUGIN_RUNTIME_DIR"] = str(tmp / "data")   # 데이터 루트 격리는 이 한 줄이다
     os.environ["GFXPROFILE_HOME"] = str(tmp)
     sys.path.insert(0, str(ROOT))
     sys.path.insert(0, str(ROOT / "py_modules"))
@@ -78,7 +74,7 @@ def boot(tmp):
 
 
 def rpc(main, name, *args, **kwargs):
-    """route는 async다(Decky가 반환값을 await한다). 봉투를 그대로 돌려준다."""
+    """route 래퍼는 async다 — 그래서 `asyncio.run`으로 부른다. 봉투를 그대로 돌려준다."""
     return asyncio.run(getattr(main.Plugin(), name)(*args, **kwargs))
 
 
@@ -106,7 +102,7 @@ def main_test():                                                # noqa: C901  (�
         main = boot(tmp)
         from gfxp import codes, engine, store
         problems = []
-        #: `delete_escape`를 실제로 지난 escape 거부의 라벨. **세지 말고 재라** — 아래 finish()가
+        #: `delete_escape`를 실제로 지난 escape 거부의 라벨. 세지 말고 재라 — 아래 finish()가
         #: 이 목록을 그대로 찍어, 절이 통째로 빠져도 출력에서 드러난다.
         escape_seen = []
 
@@ -114,7 +110,7 @@ def main_test():                                                # noqa: C901  (�
             problems.append(msg)
 
         def finish():
-            """★ 사전 조건이 무너지면 **여기로 빠져나온다.** 그냥 진행하면 뒤 절이
+            """사전 조건이 무너지면 여기로 빠져나온다. 그냥 진행하면 뒤 절이
             traceback으로 죽어 정작 무엇이 깨졌는지가 화면에서 사라진다(진단이 사라지는 실패)."""
             print("개별 삭제 계약 — 순서 3단계 주입 · 중간 상태 소비자 전수 · 토큰 6종 · "
                   "가드 6종(경로 봉쇄 4) · last_appid 2종 · 손상 meta 대피  (데이터: %s)" % tmp)
@@ -144,17 +140,17 @@ def main_test():                                                # noqa: C901  (�
             directory = store.profile_dir(appid, profile)
             if not os.path.isdir(directory):
                 return False
-            # 부산물 판정은 **코드와 같은 문**을 지난다 — 검사가 규칙을 복제해 두면
-            # "목록이 하나"라는 전제가 검사 쪽에서 먼저 깨진다(설계 §14-G ⓑ).
+            # 부산물 판정은 코드와 같은 문을 지난다 — 검사가 규칙을 복제해 두면
+            # "목록이 하나"라는 전제가 검사 쪽에서 먼저 깨진다.
             return any(not store.is_byproduct(n) for n in os.listdir(directory))
 
         def hazardous(appid):
-            """★ "meta 잔존 · 본체 없음" 슬롯. 이 상태가 생기면 소비자 판정이 갈린다."""
+            """meta는 남고 본체만 없는 슬롯. 이 상태가 생기면 소비자 판정이 갈린다."""
             return [p for p in ("dock", "internal")
                     if meta_exists(appid, p) and not body_exists(appid, p)]
 
         def bulk_outcome(appid, profile):
-            """`apply_all`이 그 게임을 뭐라고 판정하는가. **사본에** 돌려 registry를 안 더럽힌다."""
+            """`apply_all`이 그 게임을 뭐라고 판정하는가. 사본에 돌려 registry를 안 더럽힌다."""
             reg = copy.deepcopy(store.load_registry())
             rows = engine.apply_all(reg, profile)
             return next((r["outcome"] for r in rows if r["appid"] == str(appid)), None)
@@ -169,9 +165,9 @@ def main_test():                                                # noqa: C901  (�
             return env.get("code")
 
         def _fp_walk(path, rel, seen, rows):
-            """lstat·내용 지문을 `rows`에 쌓는다. **링크는 따라간다** — 슬롯 링크 너머의 남의
+            """lstat·내용 지문을 `rows`에 쌓는다. 링크는 따라간다 — 슬롯 링크 너머의 남의
             트리가 지워지는 변이도 같은 지문에 걸리게 하려는 것이다. 같은 실경로는 한 번만
-            본다(순환 방지). 링크 자체는 **대상 문자열**로 남으니 링크가 바뀌어도 걸린다."""
+            본다(순환 방지). 링크 자체는 대상 문자열로 남으니 링크가 바뀌어도 걸린다."""
             try:
                 st = os.lstat(path)
             except OSError as exc:
@@ -198,20 +194,20 @@ def main_test():                                                # noqa: C901  (�
                 _fp_walk(os.path.join(path, n), rel + "/" + n, seen, rows)
 
         def escape_fp(appid):
-            """**escape 거부가 안 건드렸어야 하는 것**의 지문 — 그 게임의 registry 항목과
+            """escape 거부가 안 건드렸어야 하는 것의 지문 — 그 게임의 registry 항목과
             프로필 트리(lstat·내용).
 
-            ⚠️ **백업 링은 일부러 뺀다.** 삭제는 *대피 → 삭제* 순서라, 한 슬롯을 대피시킨 뒤
-              다음 슬롯에서 거부되면 링은 **이미 바뀌어 있다.** `profile_delete_started=False`가
+            백업 링은 일부러 뺀다. 삭제는 대피 → 삭제 순서라, 한 슬롯을 대피시킨 뒤
+              다음 슬롯에서 거부되면 링은 이미 바뀌어 있다. `profile_delete_started=False`가
               부정하는 것은 「등록 정보와 프로필 데이터의 삭제 단계」뿐이고, 링까지 비교하면
-              이 검사가 **참인 구현을 FAIL로** 만든다(그리고 그 단언은 원래 거짓이다)."""
+              이 검사가 참인 구현을 FAIL로 만든다(그리고 그 단언은 원래 거짓이다)."""
             entry = store.load_registry()["games"].get(str(appid))
             rows = ["registry|" + json.dumps(entry, sort_keys=True, ensure_ascii=False)]
             _fp_walk(store.profiles_root(appid), "profiles", set(), rows)
             return rows
 
         def drop_link(path):
-            """정리용 — **뒷정리가 진단을 가리지 않게** 한다. 변이를 넣으면 삭제가 성공해
+            """정리용 — 뒷정리가 진단을 가리지 않게 한다. 변이를 넣으면 삭제가 성공해
             링크가 이미 사라져 있는데, 그때 unlink가 터지면 traceback이 FAIL 문구를 덮는다."""
             try:
                 os.unlink(path)
@@ -219,7 +215,7 @@ def main_test():                                                # noqa: C901  (�
                 pass
 
         # ═══════════════════════════════════════════════════════════════════
-        # ② 먼저 **판정기가 항진식이 아님을 증명**한다 (거짓 검사 방지).
+        # ② 먼저 판정기가 항진식이 아님을 증명한다 (거짓 검사 방지).
         #    "본체 없음 · meta 잔존"을 손으로 만들어, hazardous()가 잡고 apply_all이
         #    실제로 already를 보고하는지 본다. 못 잡으면 아래 단언들은 전부 무의미하다.
         # ═══════════════════════════════════════════════════════════════════
@@ -238,7 +234,7 @@ def main_test():                                                # noqa: C901  (�
             P("합성 위험 상태인데 _profile_ready가 참이다 — 두 소비자의 어긋남이 재현되지 않았다")
 
         # ═══════════════════════════════════════════════════════════════════
-        # ① 실행 순서를 **단계별 크래시 주입**으로 잠근다 (게임 100)
+        # ① 실행 순서를 단계별 크래시 주입으로 잠근다 (게임 100)
         # ═══════════════════════════════════════════════════════════════════
         cfg100 = mkgame(tmp, engine, store, "100", "OrderTarget")
         cfg_bytes = cfg100.read_bytes()
@@ -269,7 +265,7 @@ def main_test():                                                # noqa: C901  (�
             return finish()
 
         # ── 2단계 주입: dock meta unlink가 실패한다 ────────────────────────────
-        #    여기서 **대피가 이미 끝나 있어야** 한다 = 순서 1→2의 증거.
+        #    여기서 대피가 이미 끝나 있어야 한다 = 순서 1→2의 증거.
         dockdir = store.profile_dir("100", "dock")
         os.chmod(dockdir, 0o500)
         unchmod.append(dockdir)
@@ -279,8 +275,8 @@ def main_test():                                                # noqa: C901  (�
             P("2단계 주입: meta unlink 실패인데 DELETE_FAILED가 아니다 — %s" % env)
         if (env.get("params") or {}).get("stage") != "meta":
             P("2단계 주입: stage가 meta가 아니다 — 부분 삭제 상태를 진단할 수 없다 (%s)" % env)
-        # ★ (DEFECT-06) 여기는 **삭제 단계 안**이다 — 화면은 "일부 지워졌을 수 있다"를 말해야
-        #   한다. False가 실리면 화면이 **안전을 거짓 단언**한다(실제로는 meta가 하나 지워졌을
+        # 여기는 삭제 단계 안이다 — 화면은 "일부 지워졌을 수 있다"를 말해야
+        #   한다. False가 실리면 화면이 안전을 거짓 단언한다(실제로는 meta가 하나 지워졌을
         #   수 있는 상태다). 이 한 줄이 그 뒤집힘을 잠근다.
         if (env.get("params") or {}).get("profile_delete_started") is not True:
             P("★2단계 주입: profile_delete_started가 True가 아니다 (%r) — 삭제 단계에서 멈췄는데 "
@@ -299,7 +295,7 @@ def main_test():                                                # noqa: C901  (�
             return finish()
 
         # ── 3단계 주입: rmtree가 실패한다 ─────────────────────────────────────
-        #    meta는 **이미 지워져 있어야** 한다 = 순서 2→3의 증거이자 중단 상태 합법성의 근거.
+        #    meta는 이미 지워져 있어야 한다 = 순서 2→3의 증거이자 중단 상태 합법성의 근거.
         proot = store.profiles_root("100")
         os.chmod(proot, 0o500)
         unchmod.append(proot)
@@ -307,7 +303,7 @@ def main_test():                                                # noqa: C901  (�
         os.chmod(proot, 0o700)
         if code_of(env) != codes.DELETE_FAILED or (env.get("params") or {}).get("stage") != "rmtree":
             P("3단계 주입: rmtree 실패가 DELETE_FAILED/stage=rmtree로 안 왔다 — %s" % env)
-        # ★ (DEFECT-06) meta는 이미 지워졌고 본체는 남았다 = **부분 삭제 상태**다.
+        # meta는 이미 지워졌고 본체는 남았다 = 부분 삭제 상태다.
         if (env.get("params") or {}).get("profile_delete_started") is not True:
             P("★3단계 주입: profile_delete_started가 True가 아니다 (%r) — 프로필 기록이 이미 "
               "지워진 상태인데 화면이 「지우지 않았습니다」라고 말한다"
@@ -324,12 +320,12 @@ def main_test():                                                # noqa: C901  (�
         if main._profile_ready("100", "dock"):
             P("3단계 중단 상태인데 _profile_ready가 참이다")
 
-        # ★ 로거 배선 — DELETE_FAILED가 실제로 decky 로그로 흘렀는가 (설계 §5-A)
+        # 로거 배선 — DELETE_FAILED가 실제로 decky 로그로 흘렀는가
         if not any("gfxp.remove" in line and "stage=rmtree" in line and "appid=100" in line
                    for _, line in LOG):
             P("★gfxp 로거 배선이 안 됐다 — remove.py의 진단 로그가 decky 로그에 안 실린다")
 
-        # ── 재시도로 완결된다 (신규 복구 코드 0줄) ────────────────────────────
+        # ── 재시도로 완결된다 — 복구 전용 경로가 따로 없다 ────────────────────
         env = rpc(main, "delete_game", "100", confirm_token=token("100"))
         if not env.get("ok"):
             P("중단 뒤 재시도가 완결되지 않았다 — %s" % env)
@@ -366,7 +362,7 @@ def main_test():                                                # noqa: C901  (�
         if not is_confirm(env) or not registered("500"):
             P("③-c 다른 게임의 토큰으로 삭제가 통과했다 ★계약 위반 (%s)" % env)
 
-        # ③-d scope 혼동 — **저장 토큰으로 삭제**를 시도한다.
+        # ③-d scope 혼동 — 저장 토큰으로 삭제를 시도한다.
         cfg200 = tmp / "game200" / "video.ini"
         cfg200.write_bytes(b"quality=xxxx\nshadows=mid_\nsource=DISK-CHANGED\n")
         env = rpc(main, "save_profile", "200", "dock")              # 덮어쓰기 → 저장 토큰 발급
@@ -397,11 +393,10 @@ def main_test():                                                # noqa: C901  (�
             P("③-e 만료된 토큰이 통과했다 ★계약 위반 (%s)" % env)
 
         # ③-f 재사용 — 낡은 토큰은 다시 통과하지 못한다.
-        #    삭제→같은 내용 재등록을 해도 지문이 **완전히 같지는 않다**: 삭제가 프로필을
-        #    백업으로 대피시켜 백업 개수가 늘고, 그 개수가 delete_fingerprint에 반영된다
-        #    (Codex #4 — 동일 재저장이 토큰을 무효화하지 않던 구멍을 백업 개수로 메웠다).
+        #    삭제→같은 내용 재등록을 해도 지문이 완전히 같지는 않다: 삭제가 프로필을
+        #    백업으로 대피시켜 백업 개수가 늘고, 그 개수가 delete_fingerprint에 반영된다.
         #    그래서 두 번째 제출의 거부 사유는 「소각 또는 지문 변경」 둘 다로 정당하다 —
-        #    route 수준에서는 "낡은 토큰이 통과하지 않는다"만 잰다. **순수 1회용 소각**의
+        #    route 수준에서는 "낡은 토큰이 통과하지 않는다"만 잰다. 순수 1회용 소각의
         #    사유 격리는 바로 아래 유닛 검사(_issue/_consume 직접)가 담당한다.
         tok = token("200")
         env = rpc(main, "delete_game", "200", confirm_token=tok)
@@ -411,7 +406,8 @@ def main_test():                                                # noqa: C901  (�
         env = rpc(main, "delete_game", "200", confirm_token=tok)
         if not is_confirm(env) or not registered("200"):
             P("③-f 낡은 토큰이 재등록 뒤에도 통과했다 ★소각/지문 무효화 실패 (%s)" % env)
-        # 인자 고정 소각도 직접 잰다(행위 수준만 재면 사유가 갈리지 않는다 — 저장 토큰과 같은 판단)
+        # 인자 고정 소각도 직접 잰다 — 행위 수준만 재면 사유가 갈리지 않는다
+        # (`qa/test_save_needs_token.py`도 같은 자리를 같은 방식으로 잰다)
         t = main._issue("999", main._DELETE_SCOPE, "fp", "")
         if not main._consume(t, "999", main._DELETE_SCOPE, "fp", ""):
             P("③-f 방금 발급한 삭제 토큰이 첫 소비에서 거부됐다")
@@ -438,15 +434,15 @@ def main_test():                                                # noqa: C901  (�
         # ④ 형태·존재 가드
         # ═══════════════════════════════════════════════════════════════════
         #
-        # ★★ (2026-08-23 DEFECT-06) 아래 escape 거부들은 **아무것도 지우지 않은 거부**다.
-        #   화면은 그때 *"등록 정보와 프로필 데이터는 지우지 않았습니다"*라고 말한다 —
-        #   그 문장이 참이라는 근거를 **사람 기억이 아니라 이 함수에** 붙들어 둔다.
+        # 아래 escape 거부들은 아무것도 지우지 않은 거부다.
+        #   화면은 그때 "등록 정보와 프로필 데이터는 지우지 않았습니다"라고 말한다 —
+        #   그 문장이 참이라는 근거를 사람 기억이 아니라 이 함수에 붙들어 둔다.
         #   ⓐ 봉투에 `profile_delete_started is False`가 실렸는가
-        #   ⓑ 실제로 대상 게임의 registry 항목·프로필 트리가 **한 바이트도 안 바뀌었는가**
+        #   ⓑ 실제로 대상 게임의 registry 항목·프로필 트리가 한 바이트도 안 바뀌었는가
         #   둘 중 하나만 어긋나도 화면이 거짓을 말하게 된다. escape가 unlink/rmtree나
-        #   registry pop **뒤로 밀리는** 변이는 ⓑ에서, 값을 반대로 싣는 변이는 ⓐ에서 걸린다.
-        #   ⚠️ 지문에 **백업 링은 없다** — `escape_fp` 독스트링의 이유(대피가 삭제보다 먼저다).
-        #   ⚠️ 토큰은 **거부 조건을 걸어 둔 상태에서** 받는다(④′ 주석의 이유 그대로) —
+        #   registry pop 뒤로 밀리는 변이는 ⓑ에서, 값을 반대로 싣는 변이는 ⓐ에서 걸린다.
+        #   지문에 백업 링은 없다 — `escape_fp` 독스트링의 이유(대피가 삭제보다 먼저다).
+        #   토큰은 거부 조건을 걸어 둔 상태에서 받는다(④′ 주석의 이유 그대로) —
         #     지문 불일치로 거부되면 가드가 아니라 TOCTOU를 한 번 더 시험한 것이 된다.
         def delete_escape(appid, label):
             escape_seen.append(label)
@@ -459,12 +455,12 @@ def main_test():                                                # noqa: C901  (�
                   "아무것도 안 지웠는데 화면이 「이미 일부 또는 전부 지워졌을 수 있습니다」라고 "
                   "말한다 (%s)" % (label, started, env_))
 
-            # ★★ registry 축은 **route 밖에서 한 번 더** 잰다.
+            # registry 축은 route 밖에서 한 번 더 잰다.
             #   `delete_game` route는 거부가 나가면 `_save_registry`에 닿지 못한다 — 그래서
-            #   escape가 `reg["games"].pop()` **뒤로 밀려도 디스크 registry는 그대로다.**
+            #   escape가 `reg["games"].pop()` 뒤로 밀려도 디스크 registry는 그대로다.
             #   위 지문만으로는 그 변이를 못 본다(잠근다고 적어 두고 못 잠그는 자리가 된다).
-            #   파괴의 문을 직접 불러 **제자리에서 고치는 그 dict**를 보면 잡힌다.
-            #   덤: 거부가 route가 아니라 **문 안**에 있다는 것도 여기서 함께 잠긴다
+            #   파괴의 문을 직접 불러 제자리에서 고치는 그 dict를 보면 잡힌다.
+            #   덤: 거부가 route가 아니라 문 안에 있다는 것도 여기서 함께 잠긴다
             #   (`reset_all`은 route 검증을 한 번도 지나지 않고 이 문으로 들어온다).
             reg_probe = store.load_registry()
             had = str(appid) in reg_probe["games"]
@@ -500,7 +496,7 @@ def main_test():                                                # noqa: C901  (�
         if code_of(env) != codes.GAME_NOT_REGISTERED:
             P("④ 미등록 appid가 GAME_NOT_REGISTERED로 거부되지 않았다 — %s" % env)
 
-        # ④′ 심볼릭 링크 — profiles/<appid>가 링크면 **링크 밖을 지우면 안 된다**
+        # ④′ 심볼릭 링크 — profiles/<appid>가 링크면 링크 밖을 지우면 안 된다
         mkgame(tmp, engine, store, "700", "SymlinkTarget")
         shutil.rmtree(store.profiles_root("700"))
         outside = tmp / "outside-treasure"
@@ -508,7 +504,7 @@ def main_test():                                                # noqa: C901  (�
         (outside / "dock" / "meta.json").write_text('{"filename":"video.ini","sha1":"x"}')
         (outside / "dock" / "video.ini").write_bytes(DOCK)
         os.symlink(str(outside), store.profiles_root("700"))
-        # ★ 토큰은 **링크를 걸어 둔 상태**에서 받는다 — 지문 불일치로 거부되면 링크 가드를
+        # 토큰은 링크를 걸어 둔 상태에서 받는다 — 지문 불일치로 거부되면 링크 가드를
         #   시험한 것이 아니라 TOCTOU를 한 번 더 시험한 것이 된다(재려던 것에 안 닿는다).
         env = delete_escape("700", "④′")
         if code_of(env) != codes.DELETE_FAILED:
@@ -521,9 +517,8 @@ def main_test():                                                # noqa: C901  (�
             P("④′ 거부인데 registry 항목이 사라졌다")
         drop_link(store.profiles_root("700"))
 
-        # ④″ 데이터 루트 **안**을 가리키는 링크 — prefix 비교만으로는 통과하는 자리다.
-        #    통과하면 2단계 meta unlink가 **남의 게임 meta**를 지운다(교차 피해).
-        #    (이전 `islink` 분기가 잡던 것을 새 검사가 약화시키지 않았는지 보는 절이다.)
+        # ④″ 데이터 루트 안을 가리키는 링크 — prefix 비교만으로는 통과하는 자리다.
+        #    통과하면 2단계 meta unlink가 남의 게임 meta를 지운다(교차 피해).
         mkgame(tmp, engine, store, "710", "InsideLinkSource")
         mkgame(tmp, engine, store, "720", "InsideLinkVictim")
         shutil.rmtree(store.profiles_root("710"))
@@ -535,9 +530,8 @@ def main_test():                                                # noqa: C901  (�
             P("★④″ 남의 게임(720)의 meta가 지워졌다 — 링크를 따라간 교차 피해")
         drop_link(store.profiles_root("710"))
 
-        # ④⁗ 루트 링크인데 **대상의 이름이 appid와 같은** 경우 — `basename`만 비교하는
-        #    구현이면 그대로 통과해 루트 밖을 지운다. 검사의 `dirname` 절반을 잠그는 절이다
-        #    (이 케이스가 없으면 "basename만 비교" 변이가 살아남는다).
+        # ④⁗ 루트 링크인데 대상의 이름이 appid와 같은 경우 — `basename`만 비교하는
+        #    구현이면 그대로 통과해 루트 밖을 지운다. 검사의 `dirname` 절반을 잠그는 절이다.
         mkgame(tmp, engine, store, "760", "SameNameDecoy")
         decoy = tmp / "decoy-root" / "760"
         (decoy / "dock").mkdir(parents=True, exist_ok=True)
@@ -552,8 +546,8 @@ def main_test():                                                # noqa: C901  (�
             P("★④⁗ 루트 밖(이름만 같은 곳)의 파일이 지워졌다 — dirname 비교가 없다")
         drop_link(store.profiles_root("760"))
 
-        # ④‴ **슬롯 레벨** 링크 (QA 반려 ①′) — 루트는 실디렉터리인데 그 안의 dock/internal만
-        #    링크인 경우. 루트 검사만으로는 통과하고, 2단계 meta unlink가 **링크를 따라가**
+        # ④‴ 슬롯 레벨 링크 — 루트는 실디렉터리인데 그 안의 dock/internal만
+        #    링크인 경우. 루트 검사만으로는 통과하고, 2단계 meta unlink가 링크를 따라가
         #    남의 meta.json을 지운다(rmtree는 링크를 안 따라가므로 본체는 고아로 남는다).
         #    (a) dock 슬롯 → 같은 데이터 루트의 다른 게임
         mkgame(tmp, engine, store, "730", "SlotLinkSource")
@@ -569,7 +563,7 @@ def main_test():                                                # noqa: C901  (�
             P("★④‴-a 남의 게임(740)의 dock 본체가 사라졌다")
         drop_link(store.profile_dir("730", "dock"))
 
-        #    (b) internal 슬롯 → **데이터 루트 밖** (대칭 확인)
+        #    (b) internal 슬롯 → 데이터 루트 밖 (대칭 확인)
         mkgame(tmp, engine, store, "750", "SlotLinkOutside")
         out_slot = tmp / "outside-slot"
         out_slot.mkdir(parents=True, exist_ok=True)
@@ -587,16 +581,16 @@ def main_test():                                                # noqa: C901  (�
         drop_link(store.profile_dir("750", "internal"))
 
         # ═══════════════════════════════════════════════════════════════════
-        # ⑦ meta가 손상돼도 **본체는 대피한다** (QA 반려 ② — 이탈 #4의 잠금)
-        #    설계 원문대로 meta의 `filename`을 거쳐 본체를 찾으면, meta가 안 읽히는 슬롯은
-        #    대피 없이 rmtree된다. 그래서 본체 탐색을 meta에서 뗐다 — 그 선택을 여기서 잠근다.
+        # ⑦ meta가 손상돼도 본체는 대피한다
+        #    meta의 `filename`을 거쳐 본체를 찾으면 meta가 안 읽히는 슬롯은 대피 없이
+        #    rmtree된다. 그래서 본체 탐색을 meta에서 뗐다 — 그 선택을 여기서 잠근다.
         # ═══════════════════════════════════════════════════════════════════
         mkgame(tmp, engine, store, "900", "CorruptMetaTarget")
         body900 = os.path.join(store.profile_dir("900", "dock"), "video.ini")
         body_sha = store.sha1_file(body900)
         if not body_sha:
             P("⑦ 사전 조건 실패 — dock 본체 파일을 못 찾았다")
-        # meta.json을 **읽을 수 없게** 만든다(비JSON 바이트). load_meta가 ValueError를 던진다.
+        # meta.json을 읽을 수 없게 만든다(비JSON 바이트). load_meta가 ValueError를 던진다.
         with open(store.profile_meta_path("900", "dock"), "wb") as fh:
             fh.write(b"\x00\xff not json at all \x00")
         env = rpc(main, "delete_game", "900", confirm_token=token("900"))
@@ -631,10 +625,10 @@ def main_test():                                                # noqa: C901  (�
             P("★⑤ 삭제한 게임을 last_appid가 계속 가리킨다 — 등록 목록에 없는 appid를 가리키는 상태")
 
         # ═══════════════════════════════════════════════════════════════════
-        # ⑧ Codex sol high 독립 QA가 잡은 4건 (2026-08-09) — 고친 것을 잠근다
-        #    (반려 ②의 교훈: 방어 코드만 있고 잠그는 테스트가 없으면 되돌려도 안 잡힌다)
+        # ⑧ 독립 QA가 잡은 네 자리를 잠근다 — 방어 코드만 있고 잠그는 검사가 없으면
+        #    되돌려도 안 잡힌다
         # ═══════════════════════════════════════════════════════════════════
-        # ⑧-a (#1 치명) backups/<appid>가 외부 디렉터리 링크 → 대피(make_backup→prune)가
+        # ⑧-a backups/<appid>가 외부 디렉터리 링크 → 대피(make_backup→prune)가
         #    링크 너머를 열거해 초과분을 unlink. 0단계 _paths_in_position이 backups까지 봐야 막힌다.
         mkgame(tmp, engine, store, "810", "BkLinkTarget")
         bk_victim = tmp / "bk-victim-810"
@@ -651,7 +645,7 @@ def main_test():                                                # noqa: C901  (�
               % len(os.listdir(bk_victim)))
         drop_link(store.backups_dir("810"))
 
-        # ⑧-b (#3 높음) 슬롯 **안의 비점 파일**이 외부 파일 링크 → isfile→read_bytes가 링크를
+        # ⑧-b 슬롯 안의 비점 파일이 외부 파일 링크 → isfile→read_bytes가 링크를
         #    따라가 외부 파일을 백업에 복사. ".sav를 열지도 않는다" 경계가 깨진다.
         mkgame(tmp, engine, store, "820", "SlotSubFileLink")
         secret = tmp / "SECRET-820.sav"
@@ -665,7 +659,7 @@ def main_test():                                                # noqa: C901  (�
             P("★⑧-b 슬롯 하위 파일 링크로 외부 파일(SECRET)이 백업에 복사됐다 — 경계 붕괴")
         drop_link(os.path.join(store.profile_dir("820", "dock"), "leak.bin"))
 
-        # ⑧-c (#5 중간) 유효 JSON이지만 비객체(`"text"`)인 meta → `.get()` AttributeError가
+        # ⑧-c 유효 JSON이지만 비객체(`"text"`)인 meta → `.get()` AttributeError가
         #    토큰 발급 전 UNEXPECTED로 새어 게임 하나가 삭제 불가 + 그 하나 때문에 reset도 봉쇄.
         #    비객체 meta를 손상(부재)으로 접으면 정상 흐름(CONFIRM_REQUIRED)이 된다.
         mkgame(tmp, engine, store, "830", "NonDictMeta")
@@ -680,19 +674,16 @@ def main_test():                                                # noqa: C901  (�
         if code_of(env) != codes.CONFIRM_REQUIRED:
             P("★⑧-c 비객체 JSON meta 하나가 전체 초기화 확인창을 봉쇄했다 (실제 %s)" % code_of(env))
 
-        # ⑧-d 확인창을 연 사이 상태가 바뀌면 **낡은 삭제 토큰이 거부돼야 한다.**
+        # ⑧-d 확인창을 연 사이 상태가 바뀌면 낡은 삭제 토큰이 거부돼야 한다.
         #
-        #    ★★ [2026-08-15 R14 #8 재작성] 예전 픽스처는 **재저장 한 번으로 두 신호(meta 파일
-        #      sha · 백업 개수)를 동시에** 움직였다. 그러면 구현에서 meta sha 신호를 빼고 개수만
-        #      남겨도 이 절이 통과한다 — *두 신호를 함께 재는 검사는 어느 쪽도 잠그지 못한다.*
-        #      게다가 그 픽스처는 슬롯 본체를 손으로 깨뜨려 만들었다(정상 API 밖).
-        #    ★ 지금은 **신호를 하나씩만 움직이는 세 갈래**를 정상 API로 만든다. 각 갈래는 다른
-        #      신호에 눈감은 구현에서 **혼자 FAIL한다**(변이 검증 완료 — 아래 주석):
+        #    신호를 하나씩만 움직이는 세 갈래를 정상 API로 만든다. 두 신호를 함께 움직이는
+        #      픽스처는 어느 쪽도 잠그지 못한다 — 구현이 한쪽 신호를 빼도 통과한다.
+        #      각 갈래는 다른 신호에 눈감은 구현에서 혼자 FAIL한다:
         #        -1 슬롯 meta 신호  : 빈 슬롯에 저장 → 링·개수 불변, meta만 바뀜
         #        -2 백업 개수 신호  : 포화 전 링에서 적용 → meta 불변, 개수 +1
-        #        -3 **링 순서 신호** : 포화 링에서 적용 → 개수 10 불변·meta 불변, **대상만 교체**
-        #      -3이 R14 #2가 잡은 자리다: 확인창은 *"이 백업이 지워집니다"*라고 이름을 대는데
-        #      개수·meta는 하나도 안 움직여 예전 지문으로는 **낡은 토큰이 그대로 통과**했다.
+        #        -3 링 순서 신호    : 포화 링에서 적용 → 개수 10 불변·meta 불변, 대상만 교체
+        #      -3이 없으면 확인창이 이름을 댄 백업과 실제로 지워지는 백업이 갈리는데도
+        #      개수·meta 지문으로는 낡은 토큰이 그대로 통과한다.
         cfg850 = mkgame(tmp, engine, store, "850", "TokenSignals", internal=False)
 
         def metas850():
@@ -709,8 +700,8 @@ def main_test():                                                # noqa: C901  (�
             store.save_registry(reg_)
 
         def reapply(data):
-            """정상 적용 한 번 — 디스크가 두 슬롯 어느 것과도 달라 **대피본 1건**이 생긴다.
-            슬롯 meta는 한 바이트도 안 바뀐다(적용은 슬롯을 쓰지 않는다 — A11)."""
+            """정상 적용 한 번 — 디스크가 두 슬롯 어느 것과도 달라 대피본 1건이 생긴다.
+            슬롯 meta는 한 바이트도 안 바뀐다(적용은 슬롯을 쓰지 않는다)."""
             cfg850.write_bytes(data)
             reg_ = store.load_registry()
             engine.apply_profile(reg_, "850", "dock")
@@ -719,7 +710,7 @@ def main_test():                                                # noqa: C901  (�
         for i in range(3):                                     # 링을 3건까지 채운다(포화 전)
             resave(b"quality=r%02d\nshadows=high\nsource=RESAVE-%02d\n" % (i, i))
 
-        # -1 **슬롯 meta 신호만** 움직인다: 빈 슬롯(internal) 첫 저장은 대피가 없다(링 불변).
+        # -1 슬롯 meta 신호만 움직인다: 빈 슬롯(internal) 첫 저장은 대피가 없다(링 불변).
         tok = token("850")
         fp_before, ring_before = main.remove.delete_fingerprint("850"), ring850()
         reg = store.load_registry()
@@ -736,7 +727,7 @@ def main_test():                                                # noqa: C901  (�
         if not registered("850"):
             return finish()          # 토큰이 통과해 게임이 사라졌다 — 다음 갈래는 잴 대상이 없다
 
-        # -2 **백업 개수 신호만** 움직인다: 포화 전 링에서 적용 → +1, 슬롯 meta는 불변.
+        # -2 백업 개수 신호만 움직인다: 포화 전 링에서 적용 → +1, 슬롯 meta는 불변.
         tok = token("850")
         fp_before, metas_before, n_before = main.remove.delete_fingerprint("850"), metas850(), nbackups("850")
         reapply(b"quality=t1__\nshadows=mid_\nsource=THIRD-STATE-1\n")
@@ -754,7 +745,8 @@ def main_test():                                                # noqa: C901  (�
         if not registered("850"):
             return finish()          # 토큰이 통과해 게임이 사라졌다 — 다음 갈래는 잴 대상이 없다
 
-        # -3 **링 순서 신호만** 움직인다: 포화 링에서 적용 → 개수도 meta도 그대로, 대상만 교체.
+        # -3 포화 링을 한 칸 돌린다: meta·개수 지문은 그대로이고 링 이름은 바뀐다.
+        #    이 갈래는 링 지문 변화를 직접 확인한다. 토큰 거부 원인은 축출 지문과 겹칠 수 있다.
         while nbackups("850") < store.BACKUP_KEEP:
             reapply(b"quality=f%02d\nshadows=mid_\nsource=RING-FILL-%02d\n"
                     % (nbackups("850"), nbackups("850")))
@@ -780,10 +772,10 @@ def main_test():                                                # noqa: C901  (�
         if not registered("850"):
             return finish()          # 토큰이 통과해 게임이 사라졌다 — 다음 갈래는 잴 대상이 없다
 
-        # -4 **축출 대상 축만** 움직인다: 슬롯에 본체가 하나 늘면 대피 개수가 커져 **링에서
-        #    잘리는 깊이**가 달라진다. meta 파일도, 백업 개수(10)도, 링의 이름 순서도 하나도
-        #    안 움직이므로 -1·-2·-3이 잠근 세 신호는 전부 눈감는다 — 여기가 §14-G ⓓ가 말한
-        #    자리이고, 승인 목록에 **없던 백업이 지워지는** 방향이다.
+        # -4 축출 대상 축만 움직인다: 슬롯에 본체가 하나 늘면 대피 개수가 커져 링에서
+        #    잘리는 깊이가 달라진다. meta 파일도, 백업 개수(10)도, 링의 이름 순서도 하나도
+        #    안 움직이므로 -1·-2·-3이 잠근 세 신호는 전부 눈감는다 — 승인 목록에 없던
+        #    백업이 지워지는 방향이다.
         #    (앱 자기 경로로는 본체를 쓰면 meta도 같이 쓰므로 도달하지 않는다 = 외부 쓰기 전제.
         #     그래도 잠그는 이유는 `apply_all`·`reset_all`이 이미 같은 것을 묶고 있어서다.)
         tok = token("850")
@@ -811,8 +803,8 @@ def main_test():                                                # noqa: C901  (�
         if not registered("850"):
             return finish()          # 토큰이 통과해 게임이 사라졌다 — 음성 대조군은 잴 대상이 없다
 
-        # -4 **음성 대조군** — 없으면 "항상 거부"도 초록이 된다. 아무것도 안 바꾼 세계에서는
-        #    방금 발급한 토큰이 **통과해야** 하고(같은 상태를 두 번 관측해도 지문이 같아야 한다),
+        # -4 음성 대조군 — 없으면 "항상 거부"도 초록이 된다. 아무것도 안 바꾼 세계에서는
+        #    방금 발급한 토큰이 통과해야 하고(같은 상태를 두 번 관측해도 지문이 같아야 한다),
         #    그때 삭제는 끝까지 간다. 이 게임은 여기서 사라진다 — 마지막 갈래인 이유다.
         env = rpc(main, "delete_game", "850", confirm_token=token("850"))
         if env.get("ok") is not True or registered("850"):
@@ -821,16 +813,16 @@ def main_test():                                                # noqa: C901  (�
               % env)
 
         # ═══════════════════════════════════════════════════════════════════
-        # ⑨ **소스 계약** — `DELETE_FAILED`의 생성점이 공통 helper 하나뿐인가 (DEFECT-06)
-        #    위 ①·④·⑧의 사실 필드 단언은 **지금 실행되는 경로만** 잠근다. 새 거부 자리가
+        # ⑨ 소스 계약 — `DELETE_FAILED`의 생성점이 공통 helper 하나뿐인가
+        #    위 ①·④·⑧의 사실 필드 단언은 지금 실행되는 경로만 잠근다. 새 거부 자리가
         #    helper를 우회해 `raise Refused(code=codes.DELETE_FAILED)`를 직접 쓰면 그 자리는
-        #    `profile_delete_started`를 **안 싣고**, 화면은 보수적 폴백으로 부분 삭제 경고를
-        #    낸다 — 아무것도 안 지웠는데도. 그 우회는 **동적 검사로는 안 보인다**(그 경로를
+        #    `profile_delete_started`를 안 싣고, 화면은 보수적 폴백으로 부분 삭제 경고를
+        #    낸다 — 아무것도 안 지웠는데도. 그 우회는 동적 검사로는 안 보인다(그 경로를
         #    아무도 부르지 않으니까). 그래서 소스를 읽어 잠근다.
         #    문법·대상은 `qa/test_codes.py`의 AST 스캔을 따른다(gfxp/*.py 전량 + 접착층 main.py).
         # ═══════════════════════════════════════════════════════════════════
         def delete_failed_raises(path):
-            """`code=codes.DELETE_FAILED`를 **직접 던지는** 자리 — (파일, 행, 감싼 함수)."""
+            """`code=codes.DELETE_FAILED`를 직접 던지는 자리 — (파일, 행, 감싼 함수)."""
             found = []
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
@@ -858,7 +850,7 @@ def main_test():                                                # noqa: C901  (�
         sites = [row for path in scanned for row in delete_failed_raises(path)]
         outside = [row for row in sites
                    if row[0] != "remove.py" or row[2] != "_delete_failed"]
-        # ★ 음성 대조군 — 스캐너가 아무것도 못 찾으면 아래 단언은 항진식이다.
+        # 음성 대조군 — 스캐너가 아무것도 못 찾으면 아래 단언은 항진식이다.
         if not sites:
             P("★⑨ 계측기 무효 — %d개 파일에서 `codes.DELETE_FAILED` raise를 한 건도 못 찾았다. "
               "스캐너가 죽었으면 이 절은 무엇도 잠그지 못한다" % len(scanned))
@@ -867,7 +859,7 @@ def main_test():                                                # noqa: C901  (�
               "%s · 그 자리는 profile_delete_started를 안 실어, 아무것도 안 지웠어도 화면이 "
               "부분 삭제 경고를 낸다" % (outside,))
 
-        # ⑨-b helper의 **필수 키워드 인자**가 유지되는가 — 기본값이 생기는 순간 「싣는 것을
+        # ⑨-b helper의 필수 키워드 인자가 유지되는가 — 기본값이 생기는 순간 「싣는 것을
         #    잊을 수 있는 자리」가 되살아난다(구조가 아니라 사람 기억에 다시 매달린다).
         sig = inspect.signature(main.remove._delete_failed)
         prm = sig.parameters.get("profile_delete_started")
@@ -876,13 +868,13 @@ def main_test():                                                # noqa: C901  (�
             P("★⑨-b `_delete_failed`의 profile_delete_started가 **기본값 없는 키워드 전용**이 "
               "아니다 %s — 안 실어도 조용히 통과하는 자리가 생긴다" % (sig,))
 
-        # ⑨-c 화면 쪽 계약 — 사실 필드를 읽는가, 그리고 **`stage`로 갈리지 않는가.**
+        # ⑨-c 화면 쪽 계약 — 사실 필드를 읽는가, 그리고 `stage`로 갈리지 않는가.
         #    `stage`는 진단용이다. 같은 `"escape"`를 `restore.py`가 다른 코드
-        #    (`BACKUP_OUT_OF_ROOT`)에도 쓰므로, stage 화이트리스트는 **그 코드까지 안전이라**
+        #    (`BACKUP_OUT_OF_ROOT`)에도 쓰므로, stage 화이트리스트는 그 코드까지 안전이라
         #    말하게 된다. 백엔드만 고치고 화면이 안 읽으면 결함은 그대로 남는다.
-        #    ⚠️ 주석은 먼저 지운다 — 이 절이 잠그려는 것은 **코드가 무엇을 읽는가**이지 주석이
-        #      무엇을 말하는가가 아니다. *"`stage`로 갈리지 않는다"*고 적은 주석이 그 검사에
-        #      걸리면, 검사를 통과시키려고 **설명을 지우게** 된다(고칠 곳이 뒤바뀐다).
+        #    주석은 먼저 지운다 — 이 절이 잠그려는 것은 코드가 무엇을 읽는가이지 주석이
+        #      무엇을 말하는가가 아니다. "`stage`로 갈리지 않는다"고 적은 주석이 그 검사에
+        #      걸리면, 검사를 통과시키려고 설명을 지우게 된다(고칠 곳이 뒤바뀐다).
         #      거친 스트리퍼라 문자열 안의 `//`까지 지울 수 있지만, 여기서는 과삭제가 안전한
         #      방향이다 — 잘못 지우면 「못 찾음」(=FAIL)이 되지 「있는데 통과」가 되지 않는다.
         games_src = (ROOT / "src" / "GamesPopup.tsx").read_text(encoding="utf-8")

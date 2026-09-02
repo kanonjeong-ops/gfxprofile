@@ -1,28 +1,17 @@
 #!/usr/bin/env python3
-"""**적용은 프로필 슬롯을 건드리지 않는다** — 공리 A11 잠금 (설계 §14-A · §15-B ①).
+"""적용 경로가 슬롯의 정규 파일을 바꾸지 않는지 잰다 — 공리 A11.
 
-12판까지 `engine.apply_profile`은 적용 **직전에** 현재 게임 설정 파일을 `last_applied` 슬롯으로
-되썼다(체크인, G3). 그래서 사용자가 게임에서 설정을 바꾼 뒤 같은 프로필을 다시 적용하면
-「방금 바꾼 값 → 그 슬롯 → 다시 디스크」가 되어 **파일이 한 바이트도 안 바뀌었다.**
-실기에서 여섯 번 눌러 여섯 번 다 성공 로그가 찍히고 파일은 그대로였다.
+되쓰기(체크인)가 있으면 현재 게임 설정이 직전 프로필 슬롯에 기록된다. 이 파일은 적용의
+여러 갈래 전후에 두 슬롯의 정규 파일 스냅샷을 비교하고, 되쓰기를 넣은 음성 대조군으로
+계측기가 실제 변경을 잡는지 확인한다.
 
-13판은 그 블록을 삭제했고, 이 파일은 **삭제된 상태가 유지되는지**를 잰다.
-`qa/test_checkin_view.py`(684줄, 관측기 검사)를 대체한다 — 없는 사건의 계측기 대신 **불변식**을 잰다.
+스냅샷 값은 `(name, inode, mtime_ns, sha1)`이다. 같은 바이트 재기록도 inode·mtime_ns로
+잡는다. 디렉터리와 깨진 링크, 링크 자체의 메타데이터는 이 스냅샷의 단언 범위가 아니다.
 
-### 재는 방법 — 슬롯 디렉터리의 (이름, inode, mtime_ns, sha1)
-sha1만 보면 **같은 바이트를 다시 쓴 경우**를 통과시킨다(체크인의 흔한 형태가 정확히 그것이다:
-직전 적용 프로필과 디스크가 같으면 같은 내용을 되쓴다). `store.atomic_write`은 tmp→rename이라
-**inode가 바뀌므로**, inode·mtime_ns를 같이 재면 그 재기록이 잡힌다.
+제품의 적용 경로에는 슬롯 쓰기가 없다. `.applied`는 제품이 만들지 않고 부산물 판정에만
+쓰지만, 테스트 픽스처는 옛 잔재를 만들기 위해 그 이름을 직접 쓸 수 있다.
 
-### 조문에는 예외가 없다
-    *"적용은 슬롯의 어떤 파일도 만들거나 바꾸거나 지우지 않는다."*
-14판까지는 그림자 사본 `.applied` 하나가 예외였다(적용 말미와 already 경로가 의도적으로 갱신했다).
-15판에서 **그 쓰기 자체가 삭제돼**(설계 §14-G ⓖ) 지킬 예외가 사라졌고, 조문은 그만큼 좁아졌다.
-
-### 못 재는 것(정직)
-파일시스템이 ns 해상도를 안 주면(fat32 등) 동일 바이트 재기록은 **inode 변화로만** 잡힌다.
-테스트는 tmp(ext4/tmpfs)에서 도므로 둘 다 유효하다.
-★ 합성 데이터만 쓴다 — `DECKY_PLUGIN_RUNTIME_DIR`이 tmp라 실사용 데이터에 닿을 수 없다.
+합성 데이터만 쓴다 — `DECKY_PLUGIN_RUNTIME_DIR`이 tmp라 실사용 데이터에 닿을 수 없다.
 """
 import asyncio
 import os
@@ -60,10 +49,7 @@ def rpc(main, name, *args, **kwargs):
 
 
 def slot_snapshot(store, appid):
-    """두 슬롯 디렉터리의 **모든** 파일 상태. 빼는 이름은 없다(조문에 예외가 없다).
-
-    값은 `(name, inode, mtime_ns, sha1)`이다 — **같은 바이트 재기록**까지 잡기 위해서다.
-    """
+    """두 슬롯 디렉터리에서 `isfile`인 항목의 `(name, inode, mtime_ns, sha1)` 스냅샷."""
     out = {}
     for profile in ("dock", "internal"):
         directory = store.profile_dir(appid, profile)
@@ -109,7 +95,7 @@ def main_test():                                                # noqa: C901  (�
         cfg = build_world(tmp, engine, store)
 
         def run(label, call, expect_outcome=None, expect_code=None):
-            """한 갈래를 돌리고 **슬롯 불변**을 잰다. 반환은 봉투."""
+            """한 갈래를 돌리고 위 정규 파일 스냅샷의 불변을 잰다. 반환은 봉투."""
             before = slot_snapshot(store, APPID)
             env = call()
             after = slot_snapshot(store, APPID)
@@ -124,26 +110,26 @@ def main_test():                                                # noqa: C901  (�
                 P("[%s] 기대 code=%s인데 봉투가 %s다" % (label, expect_code, env))
             return env
 
-        # ── 4-A 3행: 디스크 == 목표 슬롯 → 무쓰기 성공 ────────────────────────
+        # ── 3행: 디스크 == 목표 슬롯 → 무쓰기 성공 ────────────────────────
         cfg.write_bytes(DOCK)
         run("3행 already", lambda: rpc(main, "apply_profile", APPID, "dock"),
             expect_outcome="already")
 
-        # ── 4-A 4행: 디스크 == 다른 슬롯 → 묻지 않고 적용 ─────────────────────
+        # ── 4행: 디스크 == 다른 슬롯 → 묻지 않고 적용 ─────────────────────
         cfg.write_bytes(INTERNAL)
         run("4행 다른 슬롯과 같음", lambda: rpc(main, "apply_profile", APPID, "dock"),
             expect_outcome="applied")
         if cfg.read_bytes() != DOCK:
             P("4행: 적용됐다는데 설정 파일이 dock 내용이 아니다")
 
-        # ── 4-A 5행: 파일 없음 → 재생 ────────────────────────────────────────
+        # ── 5행: 파일 없음 → 재생 ────────────────────────────────────────
         os.unlink(str(cfg))
         run("5행 파일 없음", lambda: rpc(main, "apply_profile", APPID, "internal"),
             expect_outcome="applied")
         if not cfg.exists() or cfg.read_bytes() != INTERNAL:
             P("5행: 적용이 파일을 재생하지 못했다")
 
-        # ── 4-A 6행: 두 슬롯 모두와 다름 → 확인 요구(무쓰기) → 토큰으로 실행 ──
+        # ── 6행: 두 슬롯 모두와 다름 → 확인 요구(무쓰기) → 토큰으로 실행 ──
         cfg.write_bytes(EDITED)
         env = run("6행 확인 요구", lambda: rpc(main, "apply_profile", APPID, "dock"),
                   expect_code=codes.CONFIRM_REQUIRED)
@@ -153,7 +139,7 @@ def main_test():                                                # noqa: C901  (�
         run("6′행 토큰 실행", lambda: rpc(main, "apply_profile", APPID, "dock", confirm_token=tok),
             expect_outcome="applied")
 
-        # ── 4-A 2행: 실행 중 → 조기 거부 ─────────────────────────────────────
+        # ── 2행: 실행 중 → 조기 거부 ─────────────────────────────────────
         cfg.write_bytes(EDITED)
         real_running = engine.running_game
         engine.running_game = lambda appid: str(appid) == APPID
@@ -163,7 +149,7 @@ def main_test():                                                # noqa: C901  (�
         finally:
             engine.running_game = real_running
 
-        # ── 4-A 8행: 슬롯 손상(본체가 meta와 어긋남) → 엔진 거부 ─────────────
+        # ── 8행: 슬롯 손상(본체가 meta와 어긋남) → 엔진 거부 ─────────────
         body = store.profile_file_path(APPID, "internal")
         with open(body, "wb") as fh:
             fh.write(b"quality=brok\nshadows=brok\nsource=CORRUPTED--\n")   # meta와 어긋난다
@@ -174,13 +160,13 @@ def main_test():                                                # noqa: C901  (�
                                      confirm_token=tok),
             expect_code=codes.PROFILE_CORRUPT)
 
-        # ── 음성 대조군 ⓐ: **체크인을 되살린 엔진**을 꽂으면 이 검사가 반드시 FAIL해야 한다
+        # ── 음성 대조군 ⓐ: 체크인을 되살린 엔진을 꽂으면 이 검사가 반드시 FAIL해야 한다
         #    (실패하지 않으면 이 파일은 아무것도 안 재고 있는 것이다)
         cfg.write_bytes(EDITED)
         real_apply = engine.apply_profile
 
         def checkin_apply(reg, appid, profile):
-            """12판 체크인의 재현 — 적용 전에 현재 디스크를 직전 프로필 슬롯으로 되쓴다."""
+            """체크인의 재현 — 적용 전에 현재 디스크를 직전 프로필 슬롯으로 되쓴다."""
             entry = (reg.get("games") or {}).get(str(appid)) or {}
             previous = entry.get("last_applied")
             path = entry.get("config_path")

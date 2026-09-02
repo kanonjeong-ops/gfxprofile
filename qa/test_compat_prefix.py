@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""`engine.compat_prefix()` — **매니페스트 우선 2패스**를 잠근다 (D20 승인 엔진 수정 1개소).
+"""`engine.compat_prefix()` — 매니페스트 우선 2패스를 잠근다.
 
 무엇을 지키는가:
-    게임을 SD로 옮기면 내장 라이브러리에 **빈 pfx 껍데기**가 남는다. 라이브러리 순서상
-    껍데기가 항상 먼저 잡히므로, 첫 매치를 돌려주던 M1 동작은 SD에 있는 **진짜** 설정 파일을
-    `check_path`(G11)에서 `PATH_OUTSIDE_PREFIX`로 오거부한다. 이 기기의 TEKKEN 7(389730)이
-    실물 사례이고, "새 게임 등록"(P6)이 그 경로에 도달하는 최초의 기능이라 여기서 처음 드러났다.
+    게임을 SD로 옮긴 뒤 앞선 라이브러리에도 같은 appid의 pfx가 남으면 첫 매치 방식은 그쪽을
+    고른다. 이 기기의 appid 389730도 두 라이브러리에 pfx가 있고 SD 쪽에 매니페스트가 있어,
+    현재 2패스는 SD prefix를 고른다.
 
-    → 1차 패스 = `appmanifest_<appid>.acf`가 **있는** 라이브러리의 pfx
-      2차 패스 = 기존 동작(첫 isdir) 그대로 — 매니페스트를 못 찾으면 결과가 M1과 같다.
+    → 1차 패스 = `appmanifest_<appid>.acf`가 있는 라이브러리의 pfx
+      2차 패스 = 라이브러리 순서대로 첫 isdir — 매니페스트를 못 찾으면 1차가 없던 것과 같다.
 
-⚠️ 이 테스트는 **합성 라이브러리**로 판정한다. 실데이터 절(§4)은 registry.json과 디렉터리
-   존재 여부만 읽는 **읽기 전용**이고, 설정 파일을 열지 않는다.
+이 테스트는 합성 라이브러리로 판정한다. 실데이터 절은 registry.json과 디렉터리 존재 여부만
+읽는 읽기 전용이고, 설정 파일을 열지 않는다.
 
-★ 반증(§3): 수정을 무력화한 **소스 사본**(1차 패스 제거)을 별도 모듈로 올려, 그 사본에서
-   §2의 단언이 실제로 FAIL하는지 확인한다. 주입한 줄을 그대로 출력한다 —
-   *"이 단언이 FAIL이 되는 입력이 존재하는가"*에 답하지 못하는 검사는 거짓 검사다.
+반증: 1차 패스를 제거한 소스 사본을 별도 모듈로 올려, 그 사본에서 합성 시나리오가 실제로
+FAIL하는지 확인한다. 주입한 줄은 그대로 출력한다 — "이 단언이 FAIL이 되는 입력이 존재하는가"에
+답하지 못하는 검사는 거짓 검사다.
 """
 import json
 import os
@@ -33,6 +32,7 @@ APPID = "999001"
 ENGINE_SRC = ROOT / "py_modules" / "gfxp" / "engine.py"
 
 #: 반증 주입 — 이 한 줄만 바꾸면 1차(매니페스트) 패스가 통째로 사라진다.
+#:   `INJECT_FROM`은 `engine.compat_prefix`의 2패스 반복문과 바이트 단위로 같아야 한다.
 INJECT_FROM = "    for want_manifest in (True, False):"
 INJECT_TO = "    for want_manifest in (False,):   # ★반증 주입: 매니페스트 패스 제거"
 
@@ -42,7 +42,7 @@ def home():
     return pwd.getpwuid(os.getuid()).pw_dir
 
 
-# ── §1. 합성 라이브러리 ───────────────────────────────────────────────────────
+# ── §2. 합성 라이브러리와 시나리오 ────────────────────────────────────────────
 
 def build_libs(base, manifest_in, pfx_in):
     """라이브러리 2개를 만든다. `manifest_in`/`pfx_in`은 1-기반 번호 집합."""
@@ -71,11 +71,11 @@ def call(module, libs, appid=APPID):
 
 #: (설명, 매니페스트 위치, pfx 위치, 기대 라이브러리 번호)
 SCENARIOS = [
-    # ★ 본 사건. 1번 = 내장 껍데기(pfx만) / 2번 = 진짜(매니페스트+pfx).
+    # 본 사건. 1번 = 내장 껍데기(pfx만) / 2번 = 진짜(매니페스트+pfx).
     ("SD 이동 재현 — 1번은 껍데기, 2번에 매니페스트", {2}, {1, 2}, 2),
     # 순서를 뒤집어도 '매니페스트가 있는 쪽'을 고르는가 (= 단순히 마지막을 고르는 게 아니다)
     ("매니페스트가 1번에 있으면 1번", {1}, {1, 2}, 1),
-    # 매니페스트가 없으면 **기존 동작 그대로**(첫 isdir) — 2차 패스 폴백
+    # 매니페스트가 없으면 2차 패스로 내려간다 — 라이브러리 순서대로 첫 isdir
     ("매니페스트 없음 — 기존 폴백(첫 매치)", set(), {1, 2}, 1),
     # 매니페스트는 2번인데 pfx가 1번에만 있다 → 1차 패스가 비어 2차로 내려간다
     ("매니페스트 쪽에 pfx가 없으면 2차 폴백", {2}, {1}, 1),
@@ -116,7 +116,7 @@ def load_mutant():
     mod.__file__ = str(ENGINE_SRC) + "(mutant)"
     sys.modules["gfxp._engine_mutant"] = mod
     exec(compile(mutant, mod.__file__, "exec"), mod.__dict__)   # noqa: S102 — 반증 전용
-    # 주입 증거 — 사본이 **실제로 컴파일한 소스**에서 그 줄을 뽑는다.
+    # 주입 증거 — 사본이 실제로 컴파일한 소스에서 그 줄을 뽑는다.
     # (`inspect.getsource`는 디스크에 없는 사본을 못 읽는다. 여기서는 우리가 원문을 들고 있다.)
     mod._injected_lines = [ln for ln in mutant.splitlines() if "want_manifest in" in ln]
     if mod.compat_prefix is engine.compat_prefix:
@@ -127,7 +127,7 @@ def load_mutant():
 # ── §4. 실데이터 대조 (읽기 전용) ─────────────────────────────────────────────
 
 def single_pass(appid):
-    """수정 **전**(M1) 동작을 그대로 재현한 대조군 — 첫 isdir."""
+    """1차 패스가 없을 때의 동작을 재현한 대조군 — 첫 isdir."""
     for root in engine.steam_libraries():
         path = os.path.join(root, "steamapps", "compatdata", str(appid), "pfx")
         if os.path.isdir(path):
@@ -142,12 +142,11 @@ REGISTRIES = (
 
 
 def check_real_registries():
-    """등록된 게임 전부에 대해 **수정 전후를 대조**하고 불변식을 확인한다.
+    """등록된 게임 전부에서 2패스와 1패스를 대조한다.
 
-    ① 불변식: `compat_prefix()`는 그 게임의 `config_path`의 **조상**이어야 한다.
-       (아니면 G11이 정상 파일을 거부한다 — 이 수정이 고치려는 바로 그 증상)
-    ② 수정 전후가 **달라진 게임은 반드시 정당해야 한다**: 옛 값은 조상이 아니었고 새 값은 조상이다.
-       이 조항이 있어야 "실데이터 무영향"이 *"아무것도 안 봤다"*가 아니라는 것이 증명된다.
+    ① `config_path` 문자열이 2패스 prefix의 실경로와 구분자 접두로 맞아야 한다.
+       이 검사는 `config_path` 자체를 실경로화하지 않으므로 일반적인 조상 판정은 아니다.
+    ② 둘의 답이 달라졌다면 1패스 값은 이 접두 조건을 만족하지 않고 2패스 값은 만족해야 한다.
     """
     bad, seen, changed, unchanged = [], 0, [], 0
     for label, path in REGISTRIES:

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""G14/G15 — 거부 5갈래(코드 4종) · 경고 2종 · 정상 통과를 전부 잠근다.
+"""G14/G15 — 등록 후보 거부 5갈래(코드 4종), 정상 통과, 백업 경계 거부를 검증한다.
 
-이 테스트가 지키는 것은 P4다: **`.sav`는 절대 열지 않는다.**
-M1에서 P4는 선언뿐이고 강제 코드가 0줄이었다. v2는 파일 선택기를 붙여 임의 경로가
-백엔드에 도달하므로, 그 선언을 코드로 못박고 여기서 잠근다.
+등록 route는 `config_path`를 별도로 판정하지 않고 `engine.add_game`에 넘긴다. 엔진은 먼저
+`check_path`로 대상 자체의 링크와 허용 경계 밖 실경로를 거부한 뒤, `assert_config_candidate`로
+등록 후보가 될 수 없는 이름과 경로 성분을 거부한다.
 
-⚠️ 이 테스트는 **경로 문자열만** 다룬다. 실제 `.sav` 파일을 만들지도 열지도 않는다 —
-   G14는 파일을 읽기 전에 거부하므로 실물이 필요 없다.
+이 파일의 CASES는 뒤쪽 G14만 직접 부른다. 실제 파일을 만들거나 열지 않으며, 경고
+(`engine.config_candidate_warnings`)와 G11은 검증하지 않는다. G15는 백업 루트 밖 경로 한 건을 건다.
 """
 import json
 import pathlib
@@ -16,7 +16,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "py_modules"))
 from gfxp import codes, engine  # noqa: E402
 
-APPID = "3489700"   # 경로 판정에만 쓴다. prefix 조회는 실패해도 무방하다.
+APPID = "3489700"   # 이 값으로 prefix를 찾지 않는다 — G14·G15는 경로 문자열만 본다.
 
 # (설명, 경로, 기대 code)  — code가 None이면 "통과해야 함"
 CASES = [
@@ -35,7 +35,7 @@ CASES = [
     ("언리얼 엔진 보일러플레이트",
      "/home/deck/x/pfx/drive_c/users/steamuser/AppData/Local/G/Saved/Config/Engine.ini",
      codes.ENGINE_BOILERPLATE_REFUSED),
-    # ★ 오탐 방지 — 이것들은 **통과해야** 한다
+    # 오탐 방지 — 이것들은 통과해야 한다
     ("정상 UE 설정",
      "/home/deck/x/pfx/drive_c/users/steamuser/AppData/Local/SB/Saved/Config/GameUserSettings.ini",
      None),
@@ -45,8 +45,9 @@ CASES = [
     ("이름에 backup이 들어간 **파일**(폴더가 아님)",
      "/home/deck/x/pfx/drive_c/users/steamuser/Documents/G/settings.backup.ini",
      None),
-    # ★ 예약 이름(설계 §14-G ⓒ) — 슬롯이 이미 쓰는 이름은 등록도 막는다.
-    #   거르는 집합과 등록 가능한 집합이 겹치면 그 교집합이 곧 ⓑ가 고친 결함이다.
+    # 예약 이름 — 슬롯이 이미 쓰는 이름은 등록도 막는다.
+    #   대피에서 거르는 집합과 등록 가능한 집합이 어긋나면, 그 차집합의 프로필이 대피 없이 사라진다.
+    #   목록의 정본은 `store.is_byproduct` 하나다.
     ("슬롯 기록 이름 meta.json",
      "/home/deck/x/pfx/drive_c/users/steamuser/Documents/G/meta.json",
      codes.RESERVED_NAME_REFUSED),
@@ -56,8 +57,8 @@ CASES = [
     ("쓰다 죽은 잔재 이름 .gfxprofile-tmp-*",
      "/home/deck/x/pfx/drive_c/users/steamuser/Documents/G/.gfxprofile-tmp-ab12",
      codes.RESERVED_NAME_REFUSED),
-    # ★ 봉쇄가 아니라는 증거 — 점으로 시작하는 **정상** 설정 파일은 그대로 등록된다.
-    #   여기서 막으면 리눅스 네이티브 게임이 통째로 막힌다(설계 2051-2053행).
+    # 봉쇄가 아니라는 증거 — 점으로 시작하는 정상 설정 파일은 그대로 등록된다.
+    #   `is_byproduct`가 막는 것은 점이 아니라 우리가 그 자리에 이미 쓰는 이름뿐이다.
     ("점으로 시작하는 리눅스 게임 설정 .gamerc",
      "/home/deck/x/pfx/drive_c/users/steamuser/Documents/G/.gamerc",
      None),
@@ -91,7 +92,7 @@ def check_backup_root():
 
 
 def check_real_registry():
-    """실사용 9게임이 하나도 막히지 않는가. **읽기 전용**(registry.json만 읽는다)."""
+    """실사용 등록 게임이 하나도 막히지 않는가. 읽기 전용(registry.json만 읽는다)."""
     reg_path = pathlib.Path.home() / ".local/share/gfxprofile/registry.json"
     if not reg_path.exists():
         print("  (실사용 registry 없음 — 이 항목 건너뜀)")

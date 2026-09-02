@@ -1,10 +1,9 @@
 """설치된 게임과 설정 파일 후보를 자동으로 찾는다.
 
-**왜 필요한가**: Game Mode에서는 온스크린 키보드가 자동으로 뜨지 않는다(Valve 버그).
-그래서 appid와 경로를 손으로 입력하게 만들면 Game Mode에서 사실상 못 쓴다.
-**타이핑을 없애는 것이 목적**이고, 그러려면 목록에서 고르게 해야 한다.
+Game Mode에는 온스크린 키보드가 자동으로 뜨지 않는다. appid와 경로를 손으로 치게 만들면
+핸드헬드에서 못 쓰는 화면이 되므로, 목록에서 고르게 하는 것이 이 모듈의 존재 이유다.
 
-판정은 보수적으로 한다 — 확실한 것만 '확실'로 올리고, 애매하면 후보를 늘어놓고 사용자가 고르게 한다.
+판정은 보수적으로 한다 — 확실한 것만 확실로 올리고, 애매하면 후보를 늘어놓고 사용자가 고른다.
 잘못 잡은 경로로 파일을 덮어쓰는 것보다 한 번 더 묻는 쪽이 싸다.
 """
 
@@ -17,14 +16,14 @@ from . import engine
 # tier 1 = 확실. Unreal Engine 표준 경로의 GameUserSettings.ini.
 _STRONG = re.compile(r"/Saved/Config/Windows[^/]*/GameUserSettings\.ini$", re.I)
 
-# tier 2 = 게임별로 확인된 이름들 (RESEARCH-2026-08-01.md의 전수조사 결과)
+# tier 2 = 알려진 설정 파일 이름
 _KNOWN_NAMES = {
-    "gameusersettings.ini",          # UE 계열 (비표준 경로에 있는 경우)
-    "video.ini",                     # Assetto Corsa
-    "video.videosettings",           # Assetto Corsa EVO (바이너리)
-    "hardware_settings_config.xml",  # DiRT Rally 2.0
-    "userconfigselections",          # Forza Horizon 6 (XML, 확장자 없음)
-    "settings.nuts",                 # It Takes Two (JSON)
+    "gameusersettings.ini",
+    "video.ini",
+    "video.videosettings",
+    "hardware_settings_config.xml",
+    "userconfigselections",
+    "settings.nuts",
     "graphicsoptions.xml",
     "graphicssettings.ini",
     "videoconfig.txt",
@@ -91,7 +90,7 @@ def _classify(path):
 
 
 def _scan_prefix(prefix):
-    """prefix 안에서 설정 파일 후보를 찾는다. 훑는 범위를 좁게 제한한다."""
+    """prefix 안의 설정 파일 후보 — `{path, tier, reason, size, mtime}` 목록."""
     found = []
     for relative in _SCAN_ROOTS:
         root = os.path.join(prefix, relative)
@@ -125,16 +124,14 @@ def _scan_prefix(prefix):
                     "path": path, "tier": tier, "reason": reason,
                     "size": info.st_size, "mtime": info.st_mtime,
                 })
-    # 같은 tier 안에서는 **최근에 수정된 것이 위로** 온다.
-    # 게임이 실제로 쓰고 있는 파일이 가장 최근에 수정된 것이기 때문이다 — ETS2처럼 같은 이름의
-    # 설정 파일이 여러 군데 있는 경우(네이티브 시절 잔재·프로필 폴더·현재 prefix) 현재 쓰는 것을
-    # 맨 위로 올려준다. **자동 확정은 여전히 하지 않는다** — 순서만 돕고 판단은 사용자가 한다.
+    # 같은 tier에서는 mtime 내림차순, 그다음 경로 길이순으로 정렬한다.
+    # 순서만 돕는 휴리스틱이며 자동 확정에는 쓰지 않는다.
     found.sort(key=lambda item: (item["tier"], -item["mtime"], len(item["path"])))
     return found
 
 
 def mtime_label(candidate):
-    """후보의 수정 날짜. 어느 것이 '요즘 쓰는 파일'인지 눈으로 판단할 근거가 된다."""
+    """후보의 수정 날짜."""
     stamp = candidate.get("mtime")
     return time.strftime("%Y-%m-%d", time.localtime(stamp)) if stamp else "-"
 
@@ -143,7 +140,7 @@ def discover(known_appids=()):
     """설치된 게임별 설정 파일 후보 목록.
 
     반환: [{appid, name, library, candidates[], confident, registered}] — 이름순 정렬.
-    `confident`가 True면 tier 1 후보가 정확히 하나라 자동으로 잡아도 되는 경우다.
+    `confident`의 정의는 둘이다: tier 1이 정확히 하나거나, tier 1이 없고 tier 2 이하가 정확히 하나.
     """
     results = []
     for library in engine.steam_libraries():

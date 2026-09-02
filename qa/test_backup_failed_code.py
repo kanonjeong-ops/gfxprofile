@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""**대피 실패는 어느 경로에서든 같은 사유로 보고된다** — `BACKUP_FAILED` (R14 #7).
+"""대피 실패는 어느 경로에서든 같은 사유로 보고된다 — `BACKUP_FAILED`.
 
-백업(대피)이 실패하면 이 툴은 쓰기를 멈춘다(G13). 그런데 **같은 실패가 경로마다 다른 코드로**
-화면에 도착했다: 적용·등록 해제는 `BACKUP_FAILED`, 저장은 `PROFILE_META_CORRUPT`(접착층이
-`OSError`를 meta 손상으로 오인), 복원은 `UNEXPECTED`. 코드가 곧 화면 문구이므로 사용자는
-**원인과 다른 복구 안내**를 받는다("프로필 정보가 손상됐습니다" ← 실제로는 백업 폴더 쓰기 실패).
+백업(대피)이 실패하면 이 툴은 쓰기를 멈춘다(G13). 코드가 곧 화면 문구라, 같은 실패가 경로마다
+다른 코드로 도착하면 사용자는 원인과 다른 복구 안내를 받는다 — `PROFILE_META_CORRUPT`는 화면에
+"프로필 정보를 읽지 못했습니다"로 나오는데 실제 원인은 백업 폴더 쓰기 실패다.
 
 이 파일이 잠그는 것:
-  ⓐ 저장 · ⓑ 슬롯 복원 · ⓒ 설정 파일 복원 · ⓓ 등록 해제 · ⓔ 적용 — **전부 `BACKUP_FAILED`**
-  ⓕ 그때 **아무것도 안 바뀐다**(슬롯·설정 파일 sha1 불변)
-  ⓖ 음성 대조군 — 계측기를 떼면 같은 호출이 **성공**한다(항진식이 아님을 보인다)
+  ⓐ 저장 · ⓑ 슬롯 복원 · ⓒ 설정 파일 복원 · ⓓ 등록 해제 · ⓔ 적용 — 전부 `BACKUP_FAILED`
+  ⓕ 그때 아무것도 안 바뀐다(슬롯 meta·본체 sha1 · 게임 설정 파일 바이트 · registry 항목)
+  ⓖ 음성 대조군 — 계측기를 떼면 같은 호출이 성공한다(항진식이 아님을 보인다)
 
-★ 계측기는 `store.make_backup`을 실패시키는 것 하나다. **좁게 잡는가**를 재려면 그래야 한다 —
+계측기는 `store.make_backup`을 실패시키는 것 하나다. 좁게 잡는가를 재려면 그래야 한다 —
   대피 호출만 실패하고 나머지 경로는 멀쩡한 상태에서 코드가 무엇인지 보는 것이 이 검사다.
-★ 합성 데이터만 쓴다 — `DECKY_PLUGIN_RUNTIME_DIR`이 tmp라 실사용 데이터에 닿을 수 없다.
+합성 데이터만 쓴다 — `DECKY_PLUGIN_RUNTIME_DIR`이 tmp라 실사용 데이터에 닿을 수 없다.
 """
 import asyncio
 import os
@@ -68,7 +67,7 @@ def main_test():                                                # noqa: C901  (�
             return (env.get("params") or {}).get("confirm_token")
 
         def mkgame(appid, name):
-            """두 슬롯 + **두 종류의 백업 행**을 정상 API로 만든다.
+            """두 슬롯 + 두 종류의 백업 행을 정상 API로 만든다.
 
             빈 슬롯 첫 저장은 대피본을 만들지 않으므로(잃을 것이 없다), 행을 만들려면
             ① 덮어쓰기 저장 → `profile_dock` 행 ② 고유 내용 적용 → `disk` 행이 필요하다.
@@ -78,9 +77,9 @@ def main_test():                                                # noqa: C901  (�
             cfg.parent.mkdir(parents=True, exist_ok=True)
             cfg.write_bytes(A)
             engine.add_game(reg, appid, str(cfg), name=name)
-            engine.save_profile(reg, appid, "dock")              # dock = A
+            engine.save_profile(reg, appid, "dock")
             cfg.write_bytes(B)
-            engine.save_profile(reg, appid, "internal")          # internal = B
+            engine.save_profile(reg, appid, "internal")
             cfg.write_bytes(EDITED)
             engine.save_profile(reg, appid, "dock")              # dock = EDITED · 대피본 = A
             cfg.write_bytes(THIRD)
@@ -159,7 +158,7 @@ def main_test():                                                # noqa: C901  (�
                 if cfg.read_bytes() != OTHER:
                     P("★ⓕ 복원 대피 실패인데 게임 설정 파일이 바뀌었다")
 
-        # ── ⓓ 등록 해제 · ⓔ 적용 (이미 BACKUP_FAILED였다 — 기준선으로 같이 잰다) ──
+        # ── ⓓ 등록 해제 · ⓔ 적용 (기준선으로 같이 잰다) ──────────────────────
         main._CONFIRM_TOKENS.clear()
         env = rpc(main, "delete_game", "700")
         env = with_failing_backup(lambda: rpc(main, "delete_game", "700", confirm_token=token(env)))

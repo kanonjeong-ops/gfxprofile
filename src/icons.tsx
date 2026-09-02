@@ -1,24 +1,17 @@
 /**
- * 자작 인라인 SVG 아이콘 13종 (설계 §11 / A7).
+ * 자작 인라인 SVG 아이콘 13종. 공통 규격은 1em·viewBox 0 0 36 36·currentColor다.
+ * `IconChip`과 `IconGear`의 작은 크기 식별성은 [미확인]이다.
  *
- * ★ react-icons를 쓰지 않는다 — 이 프로젝트·이 `@decky/ui` 버전 어디에도 번들돼 있지 않고
- *   (`R0-DECKY-COMPONENTS-2026-08-10.md` §2), `@decky/ui`는 `icon?: ReactNode` 슬롯만 준다.
- *   인라인 SVG 직접 삽입이 이 생태계의 유일한 실증 경로다.
+ * react-icons를 쓰지 않는다 — 의존에 없고, `@decky/ui`가 주는 것은 `icon?: ReactNode` 슬롯뿐이라
+ *   인라인 SVG를 직접 넣는다.
  *
  * 규격
- *   - viewBox 0 0 36 36  : Steam Gamepad UI 표준 좌표계(본체 아이콘 실측 492건으로 1위)
- *   - 색은 **호출부가 준다** — 내부는 `currentColor`뿐이다. 하드코딩 색상값 0건
+ *   - 색은 호출부가 준다 — 내부는 `currentColor`뿐이다. 하드코딩 색상값 0건
  *   - 배경 불투명 요소 없음 · `opacity` 미사용 — 단색 실루엣으로 성립한다
- *   - 크기 지정 없음(`1em`) — 주변 글자 크기를 따라간다
- *   - 획 4.5~5단위(36 기준) — Steam 본체 실측값 5.0과 같은 대역
+ *   - 획은 4.5와 5 두 값뿐이다(36 기준)
  *
- * 출처: `icons-workshop/minimal-bold/svg/` (정본 소스). 시안 비교 후 사용자 확정(2026-08-11).
- * 선(stroke) 기반이 섞여 있어 Steam 36세트 관례(96% 면 기반)와는 다르나 **의도된 선택**이다.
- * 경위·비교 이미지는 `icons-workshop/SYNTHESIS-ICON-STYLE-2026-08-11.md` §9~10.
- *
- * ⚠️ 알려진 한계: `IconChip`과 `IconGear`가 같은 화면(QAM 세로 스택)에 선다. 13px에서
- *   실루엣이 갈리는 것을 확인했으나(칩=각진 링 / 톱니=둥근 덩어리), 실기에서 재확인할 것.
- *   보완이 필요하면 **다른 세트로 갈아타지 말고 이 세트를 개선**한다(사용자 지정).
+ * 소스 경로: `icons-workshop/minimal-bold/svg/` — 다시 뽑을 때 여기서 가져온다. 보완이 필요하면
+ *   다른 세트로 갈아타지 말고 이 세트를 개선한다.
  *
  * Steam의 path를 복사하지 않았다 — 자작이다. i18n 무관(가시 문자열 아님).
  */
@@ -31,8 +24,8 @@ const box = {
   width: "1em",
   height: "1em",
   viewBox: "0 0 36 36",
-  // 면 기반 path는 fill을 상속한다 — 없으면 SVG 기본값(검정)으로 굳어 다크 UI에서 안 보인다
-  // (P12 게이트 C5). 선 기반 그룹은 fill="none"으로 스스로 덮으므로 무영향.
+  // 면 기반 path는 fill을 상속한다 — 없으면 SVG 기본값(검정)으로 굳어 다크 UI에서 안 보인다.
+  // 선 기반 그룹은 fill="none"으로 스스로 덮으므로 무영향.
   fill: "currentColor",
   // 인라인 요소의 baseline 정렬 흔들림을 없앤다(라벨과 같은 줄에 서므로).
   display: "block",
@@ -60,7 +53,7 @@ export const IconCheck = ({ style }: IconProps) => (
   </svg>
 );
 
-/** 초기화 경고 블록 · 상태박스 문제 결과 줄(색은 호출부에서 주황) */
+/** 상태박스 문제 결과 줄 — 색은 호출부에서 준다(성공 줄과 같은 자리, 다른 색) */
 export const IconWarn = ({ style }: IconProps) => (
   <svg {...box} style={style}>
     <path fillRule="evenodd" d="M15.4 4.5a3 3 0 0 1 5.2 0l13 22.6a3 3 0 0 1-2.6 4.5H5a3 3 0 0 1-2.6-4.5l13-22.6ZM18 11a2.2 2.2 0 0 0-2.2 2.4l.7 7.1a1.5 1.5 0 0 0 3 0l.7-7.1A2.2 2.2 0 0 0 18 11Zm0 16.2a2.3 2.3 0 1 0 0-4.6 2.3 2.3 0 0 0 0 4.6Z" clipRule="evenodd"/>
@@ -81,14 +74,14 @@ export const IconList = ({ style }: IconProps) => (
   </svg>
 );
 
-/** 전역 [설정] 전용 — 행 버튼에 쓰지 말 것(H4) */
+/** 전역 [설정] 전용 — 행 버튼에 쓰지 말 것 */
 export const IconGear = ({ style }: IconProps) => (
   <svg {...box} style={style}>
     <path fillRule="evenodd" d="M15.2 2.5h5.6l1 4a13 13 0 0 1 2.6 1.1L28 5.4l4 4-2.2 3.5a13 13 0 0 1 1.1 2.7l4.1 1v5.7l-4.1 1a13 13 0 0 1-1.1 2.6l2.2 3.5-4 4-3.6-2.2a13 13 0 0 1-2.6 1.1l-1 4.1h-5.6l-1-4.1a13 13 0 0 1-2.6-1.1L8 33.4l-4-4 2.2-3.5a13 13 0 0 1-1.1-2.6l-4.1-1v-5.7l4.1-1a13 13 0 0 1 1.1-2.7L4 9.4l4-4 3.6 2.2a13 13 0 0 1 2.6-1.1l1-4Zm2.8 9a7.9 7.9 0 1 0 0 15.8 7.9 7.9 0 0 0 0-15.8Zm0 4.5a3.4 3.4 0 1 1 0 6.8 3.4 3.4 0 0 1 0-6.8Z" clipRule="evenodd"/>
   </svg>
 );
 
-/** 행 상세 진입 버튼(H4) */
+/** 행 상세 진입 버튼 */
 export const IconChevron = ({ style }: IconProps) => (
   <svg {...box} style={style}>
     <g fill="none" stroke="currentColor" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round"> <path d="m13.5 7.5 10.5 10.5-10.5 10.5"/> </g>
@@ -123,7 +116,7 @@ export const IconTrash = ({ style }: IconProps) => (
   </svg>
 );
 
-/** 뒤로가기 */
+/** 뒤로가기 — 지금 이 아이콘을 그리는 화면은 없다(export만 서 있다) */
 export const IconBack = ({ style }: IconProps) => (
   <svg {...box} style={style}>
     <g fill="none" stroke="currentColor" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round"> <path d="M30 18H7"/> <path d="m15 9-9 9 9 9"/> </g>

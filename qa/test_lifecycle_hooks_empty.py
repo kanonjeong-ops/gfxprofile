@@ -1,35 +1,37 @@
 #!/usr/bin/env python3
-"""생명주기 훅 `_uninstall`·`_migration`이 **비어 있음**을 AST로 잠근다 — P7 완료 기준 ②.
+"""생명주기 훅 `_uninstall`·`_migration`이 비어 있음을 AST로 잠근다.
 
 왜 필요한가:
-    로더는 제거 시 `Plugin._uninstall()`을, 로드 시 `Plugin._migration()`을 **있으면 그대로
-    실행한다**(`decky_loader/plugin/sandboxed_plugin.py`, hasattr 확인 후 await). 즉 이 두
-    함수 본문에 파일을 지우거나 옮기거나 쓰는 코드가 한 줄이라도 들어가면, **플러그인을 지웠을
-    뿐인데 사용자의 registry·profiles·backups가 함께 날아간다.** 완료 기준의 "`_uninstall`이
-    비어 있음"은 사람 눈으로만 지켜지고 있었다(설계 REV2 E19 / RESEARCH-P7 §B-2, §C-1-a).
+    로더는 제거 시 `Plugin._uninstall()`을, 로드 시 `Plugin._migration()`을 있으면 그대로
+    실행한다(`decky_loader/plugin/sandboxed_plugin.py` — hasattr 확인 후 코루틴으로 돌린다).
+    즉 이 두 함수 본문에 파일을 지우거나 옮기거나 쓰는 코드가 한 줄이라도 들어가면, 플러그인을
+    지웠을 뿐인데 사용자의 registry·profiles·backups가 함께 날아간다. 이 검사가 없으면
+    "`_uninstall`이 비어 있음"은 사람 눈으로만 지켜진다.
 
-무엇을 잠그는가 — **함수 본문이 위험 동작(파일 삭제·이동·쓰기)을 하지 않는다**:
+무엇을 잠그는가 — 함수 본문이 위험 동작(파일 삭제·이동·쓰기)을 하지 않는다:
     L1 구조 허용목록: 본문에 올 수 있는 문(statement)은 `pass` · 문자열 리터럴(독스트링) ·
-       `decky.logger.<level>(...)` 호출 **셋뿐**이다. 대입·with·import·try·조건문 전부 위반.
+       `decky.logger.<임의 속성>(...)` 형태의 3단계 호출 셋뿐이다(실제 로그 level 집합은
+       검사하지 않는다). 대입·with·import·try·조건문 전부 위반.
     L2 위험 호출 스캔: 본문 어디에 있든(로그 인자 안에 숨겨도) 허용 로거 호출이 아닌 Call은
        전부 위반이고, 그중 파일 삭제·이동·쓰기·프로세스 실행·`migrate_*`는 이유를 따로 붙인다.
+       람다·컴프리헨션도 같은 자리에서 잡는다 — 지연 실행으로 감싼 우회 표면이다.
+    잠그는 대상은 `HOOKS`의 두 함수뿐이다. 같은 클래스의 `_main`·`_unload`는 이 검사 밖이다.
 
-⚠️ 중복 아님: `build.sh grep`의 AST 검사는 **`decky.migrate_*`를 이름으로 호출하는지**를
-   프로젝트 전역에서 본다(0건). 이 검사는 **이 두 함수의 본문이 무슨 일을 하는지**를 본다 —
-   `shutil.rmtree(...)`는 저쪽 검사에 안 걸리고 여기서만 걸린다.
+중복 아님: `build.sh grep`의 AST 검사는 `decky.migrate_*`를 이름으로 호출하는지를 백엔드
+   전역(`main.py`와 `py_modules` 아래 전량)에서 본다(0건). 이 검사는 이 두 함수의 본문이 무슨 일을
+   하는지를 본다 — `shutil.rmtree(...)`는 저쪽 검사에 안 걸리고 여기서만 걸린다.
 
-⚠️ 주석·독스트링 grep 금지: 이 프로젝트에서 문자열 검색이 주석에 오탐한 사고가 두 번 있었다.
-   판정은 전부 `ast`로만 한다.
+주석·독스트링 문자열 검색 금지: 문자열 검색은 산문까지 잡아 오탐하므로 판정은 AST로만 한다.
 
 반증(매 실행마다 실제로 돌린다 — 문서가 아니라 실행으로 증명한다):
     R1  `_uninstall`에 `shutil.rmtree(...)` 주입      → 검출해야 한다
     R2  `_migration`에 `decky.migrate_settings()` 주입 → 검출해야 한다
-    R3  로거 호출의 **인자 안에** `shutil.rmtree(...)` 숨김 → 검출해야 한다
+    R3  로거 호출의 인자 안에 `shutil.rmtree(...)` 숨김 → 검출해야 한다
     N1  (음성 대조군) `_uninstall`에 로그 한 줄 추가    → 검출하면 안 된다
     N2  (음성 대조군) `_migration`을 `pass` 그대로 둠   → 검출하면 안 된다
     N1·N2가 없으면 "무엇이든 FAIL"인 무의미한 검사와 구별되지 않는다.
 
-허용 범위를 **의도적으로** 넓혀야 한다면 ALLOWED_LOGGER를 고치는 것이 유일한 문이다.
+허용 범위는 ALLOWED_LOGGER와 is_allowed_logger_call에서 정한다.
 """
 import ast
 import pathlib
@@ -40,7 +42,8 @@ MAIN = ROOT / "main.py"
 CLASS = "Plugin"
 HOOKS = ("_uninstall", "_migration")
 
-# 허용되는 유일한 호출: decky.logger.<level>(...)
+# 허용되는 유일한 호출: decky.logger.<임의 속성>(...) 형태의 3단계 호출.
+# 실제 로그 level 집합은 검사하지 않는다.
 ALLOWED_LOGGER = ("decky", "logger")
 
 # 위반 사유를 구체적으로 붙일 이름들(허용목록 밖이면 어차피 전부 위반이다 — 이건 진단용 라벨).
@@ -136,7 +139,7 @@ def analyze(tree):
 
 
 def inject(hook, snippet):
-    """실제 main.py를 파싱해 hook 본문 끝에 snippet을 넣은 **사본 트리**를 만든다."""
+    """실제 main.py를 파싱해 hook 본문 끝에 snippet을 넣은 사본 트리를 만든다."""
     tree = ast.parse(MAIN.read_text(), filename=str(MAIN))
     fn = find_hook(tree, hook)
     if fn is None:

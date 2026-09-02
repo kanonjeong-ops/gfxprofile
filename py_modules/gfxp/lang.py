@@ -1,14 +1,11 @@
 """Steam UI 언어 판정.
 
-**신호는 `LANG` 환경변수가 아니라 Steam UI 언어다.** 이 기기가 반례다 —
-Steam은 `koreana`인데 `LANG=en_US.UTF-8`이다. `LANG`을 보면 한국어 사용자에게 영어가 뜬다.
+Steam UI 언어를 우선한다. OS locale과 Steam UI 언어는 서로 다른 신호다.
 
-★ 참조 구현(SimpleDeckyTDP)을 베끼지 말 것. 그쪽은 `steamglobal`을 부분문자열로 지우려 하는데
-  실물 키는 `Steamsteamglobal`이라 **이 기기에서 무동작**이다. 지금 두 값이 다 `koreana`라
-  결과만 우연히 맞는다.
+VDF 키는 부분문자열이 아니라 정확 일치로 따라간다. `qa/test_lang_detect.py`는 형제 키
+`Steamsteamglobal`이 먼저 나와도 `Steam` 경로만 선택하는지 검사한다.
 
-이 모듈은 `decky`를 import하지 않는다 — 엔진 계층은 Decky 없이도 import되고 테스트돼야 한다.
-로그는 호출자(main.py)가 남긴다.
+이 모듈은 `decky`를 import하지 않는다. 로그는 호출자가 남긴다.
 """
 
 import locale
@@ -18,8 +15,7 @@ import re
 #: 토크나이저: 따옴표 문자열 / { / } 세 종류뿐. VDF에 필요한 전부다.
 _TOK = re.compile(r'"((?:[^"\\]|\\.)*)"|(\{)|(\})')
 
-#: 경로 튜플 — 실물 최상위 키 `Registry`를 포함한다.
-#: 1판은 `HKCU`부터 시작해 실물에서 None을 냈고, 폴백이 영어를 띄워 **버그가 조용히 숨었다.**
+#: 경로 튜플. `Registry`로 감싼 VDF와 `HKCU`부터 시작하는 변형을 차례로 지원한다.
 _VDF_PATHS = (
     ("Registry", "HKCU", "Software", "Valve", "Steam", "language"),
     ("HKCU", "Software", "Valve", "Steam", "language"),      # 래퍼 없는 변형 대비
@@ -30,10 +26,10 @@ SUPPORTED = ("en", "ko")
 
 
 def _walk(text, path):
-    """path 튜플을 **키 정확 일치**로 따라간다.
+    """path 튜플을 키 정확 일치로 따라간다.
 
     '정확 일치'가 이 함수의 존재 이유다 — `Steamsteamglobal`은 `Steam`이 아니다.
-    비교는 casefold로 하되 **부분문자열 비교는 절대 하지 않는다.**
+    비교는 casefold로 하되 부분문자열 비교는 절대 하지 않는다.
     """
     want = [p.casefold() for p in path]
     depth, cursor, pending = 0, 0, None
@@ -55,10 +51,10 @@ def _walk(text, path):
         else:
             depth -= 1
             if depth < cursor:
-                # ★ 0으로 바닥을 친다. 짝이 안 맞는 닫는 중괄호가 오면 depth가 음수가 되고,
+                # 0으로 바닥을 친다. 짝이 안 맞는 닫는 중괄호가 오면 depth가 음수가 되고,
                 #   그대로 cursor에 넣으면 다음 루프의 want[cursor]가 IndexError를 낸다
-                #   (여분 중괄호 8개로 실제 재현했다). 설계는 이걸 "호출부 try/except"로 덮으라
-                #   했지만, **불변식(cursor ≥ 0)을 대입 지점에서 지키면 예외 자체가 안 생긴다.**
+                #   (`qa/test_lang_detect.py`의 여분 닫는 중괄호 케이스가 그 입력이다).
+                #   불변식(cursor ≥ 0)을 대입 지점에서 지키면 예외 자체가 안 생긴다.
                 cursor = max(0, depth)                        # 형제 섹션으로 나왔다 — 되감기
             pending = False
     return None
@@ -78,7 +74,7 @@ def registry_candidates(home=None):
     home = home or os.environ.get("DECKY_USER_HOME") or os.path.expanduser("~")
     return (
         os.path.join(home, ".steam", "registry.vdf"),
-        # flatpak Steam(Bazzite 후보). 이 기기엔 부재함을 실측했다 — U13으로 열려 있다.
+        # flatpak Steam 설치의 registry.vdf 자리. 없으면 `detect`가 다음 후보로 넘어간다.
         os.path.join(home, ".var", "app", "com.valvesoftware.Steam", ".steam", "registry.vdf"),
     )
 
@@ -90,12 +86,11 @@ def _to_ui(value):
 
 
 def detect(home=None):
-    """(lang, source)를 돌려준다. **예외를 밖으로 내보내지 않는다.**
+    """(lang, source)를 돌려준다.
 
-    언어 판정 실패로 플러그인이 안 뜨는 것이 훨씬 나쁘므로 마지막에는 반드시 "en"으로 떨어진다
-    (fail-open). 대신 **어느 단계가 이겼는지를 source로 반드시 남긴다** — 그것이 이 결함의
-    재발 방지 장치다. `source`가 `steam-registry:*`가 아니면 판정이 실패한 것이고,
-    완료 기준은 그것을 불합격으로 본다.
+    registry 파일 열기 실패와 locale 판정의 예상 오류는 폴백한다. Steam registry에서 값을
+    얻지 못하면 `LANGUAGE`·`LANG`·locale 순으로 내리고, 마지막에는 `("en", "default")`를
+    돌려준다. `source`는 어느 단계가 값을 냈는지 밝힌다.
     """
     for path in registry_candidates(home):
         try:

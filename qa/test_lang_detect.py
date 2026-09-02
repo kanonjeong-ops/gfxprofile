@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""언어 판정 — VDF 워커의 정확 일치와 폴백 사슬을 잠근다.
+"""언어 판정 — VDF 워커의 정확 일치를 잠근다.
 
-1판이 여기서 깨졌다. 경로 튜플이 실물 최상위 키(`Registry`)를 빠뜨려 항상 None을 냈고,
-폴백이 영어를 띄워 **버그가 조용히 숨었다.** 완료 기준도 "영어면 통과"라 못 잡았다.
-그래서 이 테스트는 값뿐 아니라 **어느 단계가 이겼는지(source)** 를 함께 잠근다.
+경로 튜플이 실물 최상위 키(`Registry`)를 빠뜨리면 워커는 늘 None을 내고, 그러면 폴백이 영어를
+띄워 고장이 조용히 숨는다. 값만 보는 완료 기준("영어면 통과")으로는 그 상태를 잡을 수 없다.
+그래서 이 테스트는 값뿐 아니라 어느 단계가 이겼는지(source)를 함께 본다.
 
-★ 픽스처 (a)는 **실물 `registry.vdf`를 직접 읽는다.** 설계는 "실물을 복사해 픽스처로 만들라"고
-  했으나, 그 파일에는 계정 정보가 섞여 있고 이 프로젝트는 배포물이다. 직접 읽으면
-  "발췌를 손으로 재작성해 버그가 통과하는" 위험은 똑같이 막으면서 개인 데이터를 넣지 않는다.
-  실물이 없는 환경에서는 건너뛴다(그 사실을 출력한다 — 조용히 통과시키지 않는다).
+폴백은 사슬 전체가 아니라 한 성질만 잰다 — registry가 없으면 source가 `steam-registry`가
+아니어야 하고 값이 `lang.SUPPORTED` 안이어야 한다. `LANGUAGE`→`LANG`→locale→`("en","default")`
+라는 순서 자체를 잠그는 검사는 여기 없다.
+
+픽스처 (a)는 실물 `registry.vdf`를 직접 읽는다. 설계는 "실물을 복사해 픽스처로 만들라"고
+  했으나, 그 파일에는 계정 정보가 섞여 있고 이 프로젝트는 배포물이다. 직접 읽으면 "발췌를
+  손으로 재작성해 버그가 통과하는" 위험은 똑같이 막으면서 개인 데이터를 넣지 않는다.
+  실물이 없으면 건너뛰는 것은 (a)뿐이다 — 파일 끝의 실환경 `detect()` 절은 그대로 돌아
+  FAIL한다. 즉 이 파일은 HOME의 registry.vdf 후보에서 유효한 언어 값을 읽을 수 있는
+  환경에서만 통과한다.
 """
 import pathlib
 import sys
@@ -37,9 +43,9 @@ CASES = [
     ("(b) 형제 Steamsteamglobal + HKLM 경쟁값", FIX_B, "koreana",
      "Registry/HKCU/Software/Valve/Steam/language"),
     ("(c) Steam 섹션 없음", FIX_C, None, None),
-    # (d)(g) malformed — **값이 무엇이든 예외가 밖으로 나오지 않는 것**이 요건이다.
-    #   3판이 "malformed는 언제나 폴백한다"는 일반 주장을 철회했다: 깨진 지점보다 앞에 값이
-    #   있으면 정상적으로 찾는 것이 맞다. expect를 ANY로 두고 예외만 잡는다.
+    # (d)(g) malformed — 값이 무엇이든 예외가 밖으로 나오지 않는 것이 요건이다.
+    #   "malformed면 언제나 폴백한다"까지는 요구하지 않는다: 깨진 지점보다 앞에 값이 있으면
+    #   정상적으로 찾는 것이 맞다. expect를 ANY로 두고 예외만 잡는다.
     ("(d) 닫는 중괄호 부족", FIX_D, ANY, ANY),
     ("(g) 여분의 닫는 중괄호 — IndexError가 났던 케이스", FIX_G, ANY, ANY),
     ("(e) HKLM에만 language — 집지 않는다", FIX_E, None, None),
@@ -61,7 +67,7 @@ def main():
             problems.append("(a) 실물에서 언어를 못 읽었다 — 1판의 버그가 재현된 것이다")
         elif not where.startswith("Registry/"):
             problems.append(f"(a) 실물 최상위 키가 Registry가 아니다: {where}")
-        # 1판 경로(래퍼 없음)가 실물에서 None이어야 한다 = 버그 재현 확인
+        # 래퍼 없는 경로는 실물에서 None이어야 한다 — 값이 나오면 이 대조의 전제가 무너진다
         if lang._walk(text, ("HKCU", "Software", "Valve", "Steam", "language")):
             problems.append("(a) 1판 경로가 실물에서 값을 냈다 — 이 테스트의 전제가 틀렸다")
     else:
@@ -78,7 +84,7 @@ def main():
         if value != expect_v or (expect_w and where != expect_w):
             problems.append(f"{label}: 기대 ({expect_v}, {expect_w}) / 실제 ({value}, {where})")
 
-    # 폴백 사슬 — Steam이 없으면 env로 내려가고, source가 그것을 밝힌다
+    # 폴백 — registry가 없으면 source가 steam-registry 밖으로 내려가고 값이 지원 언어인지 본다
     l1, s1 = lang.detect(home="/nonexistent-home-for-test")
     if s1 == "steam-registry" or s1.startswith("steam-registry:"):
         problems.append(f"폴백: registry가 없는데 source가 steam-registry다 ({s1})")
@@ -86,7 +92,7 @@ def main():
         problems.append(f"폴백: 지원하지 않는 언어를 냈다 ({l1})")
     print(f"  폴백 사슬(registry 없음) → {l1!r} @ {s1}")
 
-    # 실환경 detect — P1 완료 기준이 보는 값
+    # 실환경 detect — 폴백이 아니라 registry가 이겨야 한다(폴백이 이기면 고장이 여기서 숨는다)
     l2, s2 = lang.detect()
     print(f"  실환경 detect() → {l2!r} @ {s2}")
     if not s2.startswith("steam-registry:"):

@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
-"""P6 접착층 route 3개(`discover_games`·`register_confident`·`add_game`)의 계약을 잠근다.
+"""접착층 route 3개(`discover_games`·`register_confident`·`add_game`)의 계약을 잠근다.
 
-★★ 측정 기준 (2026-08-07 재게이트에서 **표면 → 효과**로 옮겼다):
-   T1은 호출 이름을, T3는 고정 표본 9개를, T5는 대표 예외 하나를 봤다. 셋 다 더 정교한
-   변이(별칭 쓰기 / 표본 밖 문자열 정책 / 한 종만 재던지기)에 뚫렸다. **검사를 한 겹 더 쌓는
-   대신 무엇을 재는지를 바꿨다** — 자세한 근거와 잔여 표면은 각 절 머리 주석에 있다.
-     T1  이름 매칭      → **합성 세계 스냅샷 대조 + 쓰기 원시함수 가로채기**
-     T3  고정 표본      → **랜덤 퍼징(매 실행 새 시드) + 모듈 전체 소스 리터럴 수확**
-     T5  대표 예외 1종  → **런타임 전수 주입**(`Exception.__subclasses__()` 재귀)
-   3회차에서 T3의 수확 범위(함수 본문 → 모듈 전체)와 T5의 표본(유한 행렬 8종 → 전수)을
-   다시 넓혔다 — 둘 다 *"경계를 어디에 그었나"*가 우회 지점이었고, 경계 자체를 없앴다.
+측정 기준은 표면이 아니라 효과다. 호출 이름 매칭은 import 전에 저장된 별칭 호출을, 고정
+표본은 표본 밖 문자열을 노리는 정책을, 대표 예외 하나는 다른 종류만 재던지는 구현을
+보장하지 못한다. 검사를 한 겹 더 쌓는 대신 무엇을 재는지를 바꿨다 — 근거와 남은 구멍은
+각 절 머리 주석에 있다.
+     T1   합성 세계 스냅샷 대조 + 쓰기 원시함수 가로채기
+     T3b  랜덤 퍼징(`GFXP_FUZZ_SEED`가 없으면 실행마다 새 시드) + 모듈 전체 소스 리터럴 수확
+     T5b  수집 시점의 예외형 중 씨앗 또는 두 생성식으로 만들 수 있는 표본을 주입
 
 잠그는 것:
-    T1 **`discover`는 아무것도 쓰지 않는다** — 탐지 route를 눌러서 데이터가 바뀌는 일은 없다
-    T2 **일괄 등록 route는 appid 목록을 받지 않는다**(D20) — `_validate`가 리스트 원소를 못 보므로,
-       목록을 받는 순간 경로 조각 주입이 되살아난다. **인자를 없애 그 상황 자체를 없앴다**
-    T3 **경로 인자는 접착층이 검증하지 않는다** — 가드는 엔진 G11/G14 하나뿐이다.
+    T1 합성 세계의 종료 상태와 실행 중 설치된 probe를 통과한 쓰기 호출을 검사한다 —
+       import 전에 저장된 별칭과 probe 밖 쓰기는 검사 범위 밖이다
+    T2 일괄 등록 route는 appid 목록을 받지 않는다 — `_validate`가 리스트 원소를 못 보므로,
+       목록을 받는 순간 경로 조각 주입이 되살아난다. 인자를 없애 그 상황 자체를 없앴다
+    T3·T3b 경로 인자는 접착층이 검증하지 않는다 — 가드는 엔진 G11/G14 하나뿐이다.
        `_VALIDATORS`에 `config_path`가 들어가면 이중 판정이 되고 실패 code가 엉뚱해진다
-    T4 **`warnings`는 `add_game` 성공 뒤에만 조회한다** — 순서를 어기면 거짓 경고가 난다(D20)
-    T5 **하나가 실패해도 나머지는 계속**하고 봉투는 `ok:true`다(`apply_all`과 같은 불변식)
-    T6 **`save_registry`는 루프 밖 1회**이고 **감사 로그가 그보다 먼저** 나간다(QA R4)
+    T4 `warnings`는 `add_game` 성공 뒤에만 조회한다 — 순서를 어기면 거짓 경고가 난다
+    T5·T5b 하나가 실패해도 나머지는 계속하고 봉투는 `ok:true`다(`apply_all`과 같은 불변식)
+    T6 `save_registry`는 루프 밖 1회이고 감사 로그가 그보다 먼저 나간다
+    T7 합성 제외 상태에서 두 route의 `excluded` 관측 결과가 일치한다 — 봉투의 모양까지
+       보되, 공통 헬퍼를 쓰는지 자체는 검사하지 않는다
 
-★ 반증(§B): 위 단언들이 **깨진 구현에서 실제로 FAIL하는지** 대조군으로 확인한다.
-   "이 단언이 FAIL이 되는 입력이 존재하는가"에 답하지 못하는 검사는 거짓 검사다.
+반증(§B)이 대조군으로 확인하는 것은 T1·T2·T3b·T4·T5b뿐이다. T6의 저장 1회·로그 순서와 T7에는
+   대조군이 없다 — 그만큼 약한 검사이고, 깨진 구현을 통과시킬 수 있다.
 
-⚠️ 실데이터를 쓰지 않는다 — 데이터 루트를 임시 폴더로 격리하고 탐지 결과는 합성한다.
+실데이터를 쓰지 않는다 — 데이터 루트를 임시 폴더로 격리하고 탐지 결과는 합성한다.
 """
 import ast
 import asyncio
@@ -43,16 +44,15 @@ import types
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 GFXP = ROOT / "py_modules" / "gfxp"
 
-#: 경로 퍼저의 시드 — **매 실행 새로 뽑고 출력한다.** 고정 시드면 표본이 고정되고,
-#: 고정 표본은 그것만 피하는 정책에 다시 뚫린다(그게 이번 반려 사유였다).
-#: 실패를 재현하려면 출력된 시드를 `GFXP_FUZZ_SEED`로 넣으면 된다.
+#: `GFXP_FUZZ_SEED`가 없으면 실행마다 새 시드를 뽑아 출력한다.
+#: 실패 재현 시에는 출력된 시드를 환경변수로 고정한다.
 FUZZ_SEED = int(os.environ.get("GFXP_FUZZ_SEED") or random.SystemRandom().randrange(2 ** 32))
 
 _TMP = tempfile.mkdtemp(prefix="gfxp-p6routes-")
 os.environ["DECKY_PLUGIN_RUNTIME_DIR"] = _TMP          # main.py가 이걸로 데이터를 격리한다
 os.environ["DECKY_PLUGIN_DIR"] = str(ROOT)
 
-#: decky 스텁 — 로그를 삼키지 않고 **순서까지** 붙잡는다(T6이 그 순서를 잰다).
+#: decky 스텁 — 로그를 삼키지 않고 순서까지 붙잡는다(T6이 그 순서를 잰다).
 LOG = []
 _decky = types.ModuleType("decky")
 
@@ -80,20 +80,19 @@ import main  # noqa: E402
 
 
 def call(fn, *args, owner=None, **kwargs):
-    """`owner`를 주면 그 모듈의 `Plugin`으로 부른다 — §B의 **main.py 변이 사본**이 쓴다."""
+    """`owner`를 주면 그 모듈의 `Plugin`으로 부른다 — §B의 main.py 변이 사본이 쓴다."""
     return asyncio.run(fn((owner or main.Plugin)(), *args, **kwargs))
 
 
 def load_mutant_main(replacements, tag):
-    """`main.py`의 **실물 사본**에 변이를 주입해 별도 모듈로 올린다.
+    """`main.py`의 실물 사본에 변이를 주입해 별도 모듈로 올린다.
 
-    ★ 왜 필요한가 (2026-08-07 QA R3): 대조군을 손으로 흉내 내면 **자기 판정**이 된다.
-      예전 B2는 `KeyboardInterrupt`(route가 원래 안 잡는 예외)로 "중단됨"을 확인했는데,
-      그건 *"일반 예외 격리가 사라진 구현"*을 재현하지 않아 T5의 회귀 잠금 근거가 못 됐다.
-      여기서는 **진짜 소스의 그 줄**을 고친 사본을 올려 돌린다.
+    대조군을 손으로 흉내 내면 자기 판정이 된다 — route가 원래 안 잡는 예외로 「중단됨」을
+      확인해 봐야 「일반 예외 격리가 사라진 구현」을 재현하지 못한다. 진짜 소스의 그 줄을
+      고친 사본을 올려 돌리는 이유다.
 
-    앵커가 정확히 1개가 아니면 예외를 던진다 — **주입되지 않은 채로 "못 잡았다"고 말하는 것이
-    가장 나쁜 실패**다(변이가 안 붙었는데 대조군이 성립했다고 착각한다).
+    앵커가 정확히 1개가 아니면 예외를 던진다 — 주입되지 않은 채로 「못 잡았다」고 말하는 것이
+    가장 나쁜 실패다(변이가 안 붙었는데 대조군이 성립했다고 착각한다).
     `gfxp` 모듈은 `sys.modules`를 공유하므로 `Patch`가 이 사본에도 그대로 걸린다.
     """
     src = (ROOT / "main.py").read_text()
@@ -126,7 +125,7 @@ def synth(n=4, prefix="/synth"):
 
 
 class Patch:
-    """탐지·등록을 합성으로 갈아끼운다. **원복을 보장한다**(다음 검사가 오염되지 않게)."""
+    """탐지·등록을 합성으로 갈아끼운다. 원복을 보장한다(다음 검사가 오염되지 않게)."""
 
     def __init__(self, entries=None, add_game=None):
         self.entries = entries
@@ -161,30 +160,15 @@ class Patch:
         return False
 
 
-# ── T1. discover 순수성 — **효과로 잰다** ────────────────────────────────────
+# ── T1. discover 순수성 — 효과로 잰다 ────────────────────────────────────────
 #
-# ★★ 2026-08-07 재게이트 R3: 예전 판정은 **호출 이름 매칭**(`_write_calls`)이었다. 그래서
-#    `qa_writer = Path(...).open` 처럼 **별칭에 담아 부르면** 이름이 `qa_writer`라 놓쳤다
-#    (Codex가 실제로 그렇게 뚫었다). 이름을 더 모으는 방식은 다음 별칭에 또 뚫린다 —
-#    `getattr`·`operator.methodcaller`·`exec`·subprocess까지 가면 열거가 원리적으로 끝나지 않는다.
-#
-#    → **무엇으로 썼는지를 묻지 않고, 쓰였는지를 본다.** 측정을 문법에서 효과로 옮긴다:
-#      ① 합성 세계(임시 폴더)의 파일 목록 + 내용 해시를 실행 전후로 떠서 대조한다.
-#         별칭이든 `os.write`든 subprocess든 **그 안에 쓰면 반드시 잡힌다.**
-#      ② 세계 **밖**으로 쓰는 것은 스냅샷으로 못 본다. 그래서 쓰기 원시함수를 실행 동안
-#         가로채(intercept) 호출을 기록한다. 별칭은 **패치된 뒤에** 만들어지므로 같이 잡힌다.
-#
-# ⚠️ 정직한 잔여 표면(닫히지 않은 것):
-#    - 우리가 감싸기 **전에** 모듈 최상위에서 만들어 둔 별칭(`_o = open` at import)으로
-#      합성 세계 **밖**에 쓰는 경우 — ②를 우회한다(①의 범위 밖이라 ①도 못 본다)
-#    - `ctypes`로 syscall 직접 호출, `mmap` 쓰기 — 감싼 API를 안 거친다
-#    - 합성 세계 밖 경로에 subprocess로 쓰는 경우
-#    이 셋은 "잴 수 없다"고 적는다. **못 재는 것을 통과로 세지 않기 위해서다.**
+# 합성 세계의 실행 전후 내용 상태와 probe를 지난 쓰기 호출을 함께 본다. 실행 전 별칭·
+# 직접 syscall·합성 세계 밖 subprocess 쓰기는 남은 구멍이다.
 
-#: 실행 동안 감싸는 쓰기 원시함수. 이름 목록이지만 **판정 기준이 아니라 계측 지점**이다 —
-#: 여기 없는 이름으로 불러도 결국 이 함수들을 거치면 잡힌다(별칭·getattr 포함).
+#: 아래 이름은 계측 지점이다. probe 설치 뒤 조회되어 래퍼를 지난 호출만 기록한다.
 def _install_write_probe(record):
-    """쓰기 원시함수를 감싸고 `(원복 함수)`를 돌려준다. **읽기는 그대로 통과시킨다.**"""
+    """쓰기 원시함수를 감싸고 원복 함수를 돌려준다. `open` 계열의 읽기 모드는 기록하지 않으며,
+    subprocess 호출은 명령 내용과 무관하게 기록한다."""
     import builtins
     import io
     import shutil
@@ -240,7 +224,9 @@ def _install_write_probe(record):
 
 
 def _snapshot(root):
-    """합성 세계의 **상태 전량**. 경로 → (크기, 내용 sha1). 디렉터리 자체도 항목으로 센다."""
+    """합성 세계의 내용 상태. 경로 → (크기, 내용 sha1)이고 디렉터리 자체도 항목으로 센다.
+    권한·시각은 뜨지 않는다 — 내용을 안 바꾸는 변경(`chmod`·`utime`)은 여기가 아니라
+    쓰기 원시함수 가로채기가 잡는다."""
     state = {}
     for current, dirs, files in os.walk(root):
         for name in dirs:
@@ -257,7 +243,7 @@ def _snapshot(root):
 
 
 def _build_world(root):
-    """`discover`가 실제로 훑는 모양의 합성 라이브러리. **읽을 것이 있어야 측정이 공허하지 않다.**"""
+    """`discover`가 실제로 훑는 모양의 합성 라이브러리. 읽을 것이 있어야 측정이 공허하지 않다."""
     library = root / "library"
     for i, appid in enumerate(("500100", "500101", "500102")):
         prefix = library / "steamapps" / "compatdata" / appid / "pfx"
@@ -275,10 +261,10 @@ def _build_world(root):
 
 
 def load_mutant_discover(replacements, tag):
-    """`discover.py`의 **실물 사본**에 변이를 주입해 별도 패키지로 올린다.
+    """`discover.py`의 실물 사본에 변이를 주입해 별도 패키지로 올린다.
 
     `from . import engine`가 있어서 패키지 문맥이 필요하다 — 임시 패키지를 만들고 그 안의
-    `engine`을 **진짜 `gfxp.engine`으로 미리 묶어** 준다(엔진은 손대지 않는다).
+    `engine`을 진짜 `gfxp.engine`으로 미리 묶어 준다(엔진은 손대지 않는다).
     """
     src = (GFXP / "discover.py").read_text()
     applied = []
@@ -301,7 +287,7 @@ def load_mutant_discover(replacements, tag):
 
 
 def t1_discover_pure(module=None):
-    """`discover()`를 합성 세계에서 **실제로 돌리고** 세계가 변했는지 본다.
+    """`discover()`를 합성 세계에서 실제로 돌리고 세계가 변했는지 본다.
 
     `module`을 주면 그 사본을 돌린다 — §B의 변이 대조군이 쓴다.
     """
@@ -322,7 +308,7 @@ def t1_discover_pure(module=None):
         main.engine.steam_libraries = real_libraries
     after = _snapshot(root)
 
-    # ★ 측정이 대상에 닿았는가 — 아무것도 못 읽었으면 "안 썼다"는 공허한 참이다.
+    # 측정이 대상에 닿았는가 — 아무것도 못 읽었으면 「안 썼다」는 공허한 참이다.
     if len(results) != 3:
         bad.append(f"합성 세계에서 게임 {len(results)}개를 봤다(3개여야 한다) — 검사가 대상에 닿지 못했다")
     elif not all(e["candidates"] for e in results):
@@ -363,7 +349,7 @@ def t2_no_appid_list():
         elif params != ["self"]:
             bad.append(f"{name}이 인자를 받는다: {params} ★D20 위반 — "
                        "리스트 원소는 _validate를 통과하지 않는다(경로 조각 주입 부활)")
-    # 동작으로도 확인한다: 목록을 보내면 **아무것도 등록되지 않는다**
+    # 동작으로도 확인한다: 목록을 보내면 아무것도 등록되지 않는다
     with Patch(entries=synth()) as p:
         env = call(main.Plugin.register_confident, ["../../etc"])
         if env.get("ok"):
@@ -388,8 +374,8 @@ def t3_path_not_validated():
     env = call(main.Plugin.add_game, "999999", "/etc/passwd")
     if env.get("ok") or env.get("code") not in ("PATH_OUTSIDE_PREFIX", "PATH_OUTSIDE_HOME"):
         bad.append(f"홈·prefix 밖 경로가 엔진 code로 거부되지 않는다 — {env}")
-    # ⚠️ G11이 G14보다 먼저 돈다 — 홈 밖 경로면 `.sav`에 닿기도 전에 걸린다.
-    #   G14를 실제로 재려면 **홈 안**의 경로여야 한다(`$HOME`이 아니라 pwd로 구한다).
+    # G11이 G14보다 먼저 돈다 — 홈 밖 경로면 `.sav`에 닿기도 전에 걸린다.
+    #   G14를 실제로 재려면 홈 안의 경로여야 한다(`$HOME`이 아니라 pwd로 구한다).
     home = pwd.getpwuid(os.getuid()).pw_dir
     env = call(main.Plugin.add_game, "999999", os.path.join(home, "x/pfx/y/SaveGames/a.sav"))
     if env.get("code") != "SAV_REFUSED":
@@ -398,22 +384,23 @@ def t3_path_not_validated():
     return bad
 
 
-# ── T3b. route의 독자 경로 정책 — **구조화 랜덤 퍼징 + 소스 리터럴 수확** ────
+# ── T3b. route의 독자 경로 정책 — 구조화 랜덤 퍼징 + 소스 리터럴 수확 ────────
 #
-# ★★ 2026-08-07 재게이트 R3: 예전 판정은 **고정 표본 9개**(`_ODD_PATHS`)였다. Codex가
-#    `endswith(".qa_policy")` 정책을 넣자 표본에 그 문자열이 없어 그대로 통과했다.
-#    표본을 늘리는 방식은 원리적으로 끝나지 않는다 — 정책이 노리는 문자열은 무한하다.
+# 고정 경로 표본은 표본 밖 문자열을 노리는 정책을 보장하지 못한다.
+#    `endswith(".qa_policy")` 같은 정책을 넣으면 표본에 그 문자열이 없어 그대로 통과한다.
+#    표본을 늘리는 방식은 끝나지 않는다 — 정책이 노리는 문자열은 무한하다.
 #
 #    → 두 축으로 옮긴다.
-#      ① **랜덤 퍼징**: 매 실행 새 시드(출력한다)로 경로를 N≥200개 생성한다. 깊이·길이·
-#         확장자·문자 계열(공백·탭·유니코드·제어문자·점)을 조합해 *모양의 공간*을 훑는다.
-#      ② **소스 리터럴 수확**: route가 경로를 두고 하는 판단은 결국 **그 소스에 쓰인 문자열**로
-#         표현된다. `add_game` 본문의 문자열 상수를 전부 뽑아 접미·중간 세그먼트로 심는다.
-#         `.qa_policy` 같은 특정 문자열 정책은 **열거가 아니라 구성으로** 걸린다.
+#      ① 랜덤 퍼징: 환경변수가 없으면 새 시드를 뽑아(출력한다) 경로를 `_FUZZ_N`개
+#         생성한다. 깊이·길이·확장자·문자 계열(공백·탭·유니코드·제어문자·점)을 조합해
+#         모양의 공간을 훑는다.
+#      ② 소스 리터럴 수확: route가 경로를 두고 하는 판단은 결국 그 소스에 쓰인 문자열로
+#         표현된다. `_route_string_literals`가 모듈의 문자열 상수를 전부 뽑아 접미·중간
+#         세그먼트로 심는다. 특정 문자열을 노리는 정책은 열거가 아니라 구성으로 걸린다.
 #
-# ⚠️ 정직한 잔여 표면: 소스 리터럴로 표현되지 않고 퍼저의 모양 공간에도 안 걸리는 정책
+# 정직한 잔여 표면: 소스 리터럴로 표현되지 않고 퍼저의 모양 공간에도 안 걸리는 정책
 #    (예: `len(path) > 4096`, 해시 기반 판정, 정규식 문자 클래스 조합). 길이·깊이는 넓게
-#    흔들지만 **전수가 아니다.** 이 한계는 닫지 못했다고 적는다.
+#    흔들지만 전수가 아니다. 이 한계는 닫지 못했다고 적는다.
 
 _FUZZ_N = 240
 _SEGMENT_ALPHABETS = (
@@ -427,14 +414,14 @@ _SEGMENT_ALPHABETS = (
 _FUZZ_EXTENSIONS = ("", ".ini", ".cfg", ".xml", ".json", ".INI", ".tar.gz", ".", ".sav", ".bak")
 
 
-#: 입력 도메인의 **퇴화 경계**. 퍼저는 확률적이라 빈 문자열·공백만·루트 같은 극단을 어쩌다
+#: 입력 도메인의 퇴화 경계. 퍼저는 확률적이라 빈 문자열·공백만·루트 같은 극단을 어쩌다
 #: 못 밟을 수 있다 — 경계는 고정으로 반드시 포함한다(특정 변이를 노린 열거가 아니라,
-#: *"경계를 밟았음"*을 보장하는 퍼징의 기본 의무다).
+#: 「경계를 밟았음」을 보장하는 퍼징의 기본 의무다).
 _BOUNDARY_PATHS = ("", " ", "   ", "\t", "\n", "/", ".", "..", "/.", "//", "/ /", "x", "/" + "a" * 512)
 
 
 def _fuzz_paths(rng, extra_literals, count=_FUZZ_N):
-    """경로 **모양의 공간**을 훑는 표본. 고정 목록이 아니라 매 실행 다시 만든다."""
+    """경로 모양의 공간을 훑는 표본. 고정 목록이 아니라 매 실행 다시 만든다."""
     paths = list(_BOUNDARY_PATHS)
     for _ in range(count):
         depth = rng.randint(0, 12)
@@ -464,16 +451,16 @@ def _fuzz_paths(rng, extra_literals, count=_FUZZ_N):
 
 
 def _route_string_literals(module):
-    """그 모듈의 문자열 상수 **전량**. 경로 정책은 어디에 적히든 여기에 흔적을 남긴다.
+    """그 모듈의 문자열 상수 전량(독스트링 제외, 40자 이하 한 줄짜리).
+    경로 정책은 같은 파일 어디에 적히든 여기에 흔적을 남긴다.
 
-    ★★ 2026-08-07 3회차: 예전에는 `add_game` **함수 본문**만 훑었다. Codex가 정책 문자열을
-      **모듈 상수**로 빼자(`QA_FINAL_SUFFIX = ".p6module_constant"`) 본문에는 식별자만 남아
-      수확 범위를 벗어났다 — `.qa_policy`와 효과가 같은 접미 정책인데 통과했다.
-      "함수 본문"이라는 경계 자체가 임의였다. 모듈 전체로 넓히면 **상수를 어디로 옮기든**
+    함수 본문만 훑으면 정책 문자열을 모듈 상수로 뺀 구현을 잡지 못한다 — 본문에는
+      식별자만 남아 수확 범위를 벗어나고, 접미 정책의 효과는 같은데 통과할 수 있다.
+      「함수 본문」이라는 경계 자체가 임의다. 모듈 전체로 넓히면 상수를 어디로 옮기든
       (모듈 상수·클래스 속성·다른 함수·기본 인자) 같은 파일에 있는 한 수확된다.
 
-    ⚠️ 남는 것: **다른 모듈**에 둔 상수. 다만 이 프로젝트에서 route가 참조하는 모듈은
-      `codes`·`confirm`·`engine`·`store`뿐이고 앞의 둘은 검사가 따로 잠근다.
+    남는 것: 다른 모듈에 둔 상수. `add_game` route가 참조하는 `codes`·`confirm`·`engine`·
+      `exclude`·`restore`·`store`는 `_route_string_literals`의 수확 범위 밖이다.
     """
     source = pathlib.Path(module.__file__).read_text()
     tree = ast.parse(source)
@@ -495,15 +482,15 @@ def _route_string_literals(module):
 
 
 def t3b_route_adds_no_path_policy(mod, seed=None):
-    """route와 엔진의 **수락 집합이 같은가** — 차등 판정.
+    """route와 엔진의 수락 집합이 같은가 — 차등 판정.
 
-    엔진 스텁이 경로 해시로 수락/거부를 갈라 **양방향**을 다 잰다:
-      · 엔진이 수락한 것을 route가 거부 → route에 **추가 정책**이 생겼다(문이 둘)
-      · 엔진이 거부한 것을 route가 수락 → route가 거부를 **삼켰다**
+    엔진 스텁이 경로 해시로 수락/거부를 갈라 양방향을 다 잰다:
+      · 엔진이 수락한 것을 route가 거부 → route에 추가 정책이 생겼다(문이 둘)
+      · 엔진이 거부한 것을 route가 수락 → route가 거부를 삼켰다
       · code가 다름                     → route가 사유를 갈아치웠다
 
-    ⚠️ 대상은 **경로 정책**뿐이다. appid마다 새 값을 써서 `ALREADY_REGISTERED`(R2)와 섞이지
-      않게 한다 — 그건 경로가 아니라 등록 상태에 대한 정책이고, 백엔드에 있는 것이 맞다.
+    대상은 경로 정책뿐이다. appid마다 새 값을 써서 `ALREADY_REGISTERED`와 섞이지 않게
+      한다 — 그건 경로가 아니라 등록 상태에 대한 정책이고, 백엔드에 있는 것이 맞다.
     """
     bad = []
     rng = random.Random(seed)
@@ -511,7 +498,7 @@ def t3b_route_adds_no_path_policy(mod, seed=None):
     decided = {"accept": 0, "refuse": 0}
 
     def judge(path):
-        """엔진의 판정 — 경로 해시로 갈라 **거부 쪽도** 표본에 들어가게 한다."""
+        """엔진의 판정 — 경로 해시로 갈라 거부 쪽도 표본에 들어가게 한다."""
         return hashlib.sha1(path.encode("utf-8", "surrogatepass")).digest()[0] % 4 == 0
 
     def stub(reg, appid, path, name=None):
@@ -612,7 +599,7 @@ def t5_bulk_continues(exc_report=None):
         order = [kind for kind, *_ in LOG if kind in ("log", "save")]
         if order[-2:] != ["log", "save"]:
             bad.append(f"감사 로그가 save_registry보다 먼저 나가지 않았다: {order} ★QA R4 위반")
-        # 거부 사유가 로그에 남는가 — 남기지 않으면 "무엇이 왜 안 됐나"가 어디에도 없다
+        # 거부 사유가 로그에 남는가 — 남기지 않으면 「무엇이 왜 안 됐나」가 어디에도 없다
         audit = [m for k, _, m in LOG if k == "log" and "register_confident" in m]
         if not audit or failed_appid not in audit[-1] or "FILE_NOT_FOUND" not in audit[-1]:
             bad.append(f"감사 로그에 실패 게임의 사유가 없다: {audit[-1:]!r}")
@@ -631,7 +618,7 @@ class _QaCustomError(Exception):
     """사용자 정의 예외 — 표준 계층 밖의 종류도 격리되는지 본다."""
 
 
-#: 손으로 고른 대표 8종. **바닥이지 전부가 아니다** — 아래 전수 수집이 본체다.
+#: 손으로 고른 대표 8종. 바닥이지 전부가 아니다 — 아래 전수 수집이 본체다.
 _SEED_EXCEPTIONS = (
     ValueError("합성 ValueError"),
     TypeError("합성 TypeError"),
@@ -645,23 +632,11 @@ _SEED_EXCEPTIONS = (
 
 
 def _all_exception_instances():
-    """지금 프로세스에 **존재하는 `Exception` 하위형 전부**를 인스턴스로 만든다.
+    """호출 시점의 `Exception` 하위형을 재귀로 수집한다. 씨앗 8종과 `()` 또는 문자열 인자
+    하나로 생성되는 형만 인스턴스로 반환하며, 나머지는 `skipped`에 기록한다.
 
-    ★★ 2026-08-07 3회차: 예전에는 손으로 고른 **8종 행렬**이었다. Codex가 행렬에 없는
-      `NotImplementedError` 한 종만 재던지자 그대로 통과했다 — *"한 종을 고르면 그 칸에서
-      걸린다"*는 주장은 **유한 행렬 밖 하위형에는 성립하지 않았다.** 목록을 늘리는 것은
-      다음 하위형에 또 뚫린다.
-      → 목록을 **런타임에 전수로** 만든다. `Exception.__subclasses__()`를 재귀로 훑으면
-        그 시점에 import된 모든 예외형이 나온다. 구현이 **기존 타입 중 무엇을 고르든**
-        그 칸이 표본에 있다.
-
-    ⚠️ 정직한 잔여 표면(이제 이것만 남는다):
-      · **변이 자신이 정의한 커스텀 타입**을 스스로 던지고 스스로 재던지는 경우 —
-        수집 시점에 그 클래스가 아직 없을 수 있다. 다만 이는 *"실수로 격리가 깨진다"*는
-        이 검사의 위협 모델(유지보수 사고) 밖이고, 그렇게 하려면 **의도적 공모**가 필요하다.
-      · `BaseException` 직계(`KeyboardInterrupt`·`SystemExit`) — route가 원래 안 잡고
-        **잡아서도 안 된다**(중단 신호). 의도적 제외다.
-      · 인스턴스화에 실패해 건너뛴 형 — **개수를 출력한다**(0건 함정 방지).
+    유한 대표 목록만 쓰면 특정 하위형 재던지기를 놓친다. 이 수집은 그 표면을 넓히지만,
+    늦게 정의된 형·다른 생성 인자가 필요한 형·`BaseException` 직계형은 범위 밖이다.
     """
     seen, ordered = set(), []
 
@@ -686,7 +661,7 @@ def _all_exception_instances():
                 str(candidate)                 # note 문자열을 만들 수 있어야 한다
                 made = candidate
                 break
-            except Exception:                  # noqa: BLE001  인스턴스화 불가 — 던질 수도 없다
+            except Exception:                  # noqa: BLE001  두 생성식으로 못 만든 형은 표본에서 제외한다
                 continue
         if made is None:
             skipped.append(cls.__name__)
@@ -696,15 +671,10 @@ def _all_exception_instances():
 
 
 def t5b_general_exception_isolated(mod, report=None):
-    """**어떤 예외가 나도** 중간 게임 뒤가 계속 처리되는가 — **런타임 전수**로 잰다.
+    """수집된 예외 표본 각각에서 중간 게임 뒤 처리가 계속되는지 잰다.
 
-    ★★ 2026-08-07 재게이트 R3: 예전 T5b는 `ValueError` **한 종류**만 넣었다. 그래서
-      `except Exception as exc: if isinstance(exc, TypeError): raise` 처럼 **한 종만 골라
-      재던지는** 구현을 놓쳤다(Codex가 그렇게 뚫었다). 대표 하나로는 *"종류에 무관하다"*를
-      잴 수 없다 — 무관함은 **여러 종류에 대해 같은 결과**로만 보인다.
-
-    ⚠️ 정직한 잔여 표면: `BaseException`(`KeyboardInterrupt`·`SystemExit`)은 행렬에 넣지 않는다.
-      route의 `except Exception`은 원래 그것들을 잡지 않고, 잡아서도 안 된다(중단 신호다).
+    한 종류만 재던지는 변이는 §B의 B2-b가 대조한다. 늦게 정의된 형, 생성하지 못한 형,
+    `BaseException` 직계형은 이 검사의 범위 밖이다.
     """
     bad = []
     instances, skipped = _all_exception_instances()
@@ -728,9 +698,9 @@ def t5b_general_exception_isolated(mod, report=None):
             rows = {r["appid"]: r for r in env["data"]["results"]}
             if len(rows) != 3:
                 bad.append(f"[{kind}] 예외 뒤에 처리가 멈췄다 — 시도 {len(rows)}개(3개여야 한다)")
-            # ★ 엔진의 `Refused`/`RegistryError`는 **설계상 다른 자리**로 간다(`refused` + code).
+            # 엔진의 `Refused`/`RegistryError`는 설계상 다른 자리로 간다(`refused` + code).
             #   전수 수집이 그 둘까지 끌어오므로 여기서 갈라 준다 — 둘을 `error`로 요구하면
-            #   **정상 계약을 위반으로 세는 오탐**이 된다.
+            #   정상 계약을 위반으로 세는 오탐이 된다.
             expected = "refused" if isinstance(exc, (main.engine.Refused, main.store.RegistryError)) \
                 else "error"
             outcome = rows.get(boom_appid, {}).get("outcome")
@@ -753,13 +723,13 @@ def t5b_general_exception_isolated(mod, report=None):
     return bad
 
 
-# ── T7. 감지 제외 봉투 — 두 route가 같은 목록을 본다 (A9 · 설계 §8-C·§8-D) ──
+# ── T7. 감지 제외 봉투 — 두 route가 같은 목록을 본다 ──────────────────────────
 def t7_excluded_envelope():
-    """제외 필터는 `_discover_entries` **한 곳**이라, 화면 목록(`discover_games`)과 일괄 등록
-    (`register_confident`)이 구조적으로 같은 것을 본다. 두 곳에서 거르면 *"화면에 안 뜬 게임이
-    등록되는"* 어긋남이 언젠가 생긴다 — 여기서 그 한 곳이 두 route 모두에 듣는지 잰다.
+    """현재 구현은 `_discover_entries`와 `_excluded_rows`를 공유한다. 이 테스트가 강제하는
+    것은 합성 제외 상태에서 두 route의 관측 결과가 일치하는 것뿐이며, 공통 헬퍼 사용
+    자체는 검사하지 않는다.
 
-    (제외의 전 계약은 `qa/test_discover_exclude.py`가 잠근다. 이 절은 **P6 route 봉투**의 몫만.)
+    (제외의 전 계약은 `qa/test_discover_exclude.py`가 잠근다. 이 절은 route 봉투의 몫만.)
     """
     bad = []
     entries = synth(4)
@@ -795,14 +765,16 @@ def t7_excluded_envelope():
 
 # ── §B. 반증 — 깨진 구현에서 실제로 FAIL하는가 ───────────────────────────────
 def falsify():
-    """각 단언을 **고의로 깨뜨린 대조군**에 걸어 본다. 통과하면 그 검사는 거짓 검사다."""
+    """T1·T2·T3b·T4·T5b를 고의로 깨뜨린 대조군에 걸어 본다. 통과하면 그 검사는 거짓 검사다.
+    T5의 저장 1회·로그 순서(T6)와 T7에는 대조군이 없다 — 아직 못 세운 것이지 면제가 아니다.
+    """
     report, bad = [], []
 
     # B1: warnings를 먼저 부르는 구현 → T4가 잡아야 한다
     real_add = main.engine.add_game
 
     def wrong_order(reg, appid, path, name=None):
-        main.engine.config_candidate_warnings(appid, path)      # ★ 순서 위반 주입
+        main.engine.config_candidate_warnings(appid, path)      # 순서 위반 주입
         raise main.engine.Refused("합성 거부", code="PATH_OUTSIDE_PREFIX")
 
     with Patch(entries=synth(), add_game=wrong_order) as p:
@@ -812,9 +784,9 @@ def falsify():
     if not caught:
         bad.append("B1 반증 실패 — 순서를 어겨도 T4가 못 잡는다")
 
-    # B2: 일반 예외 격리를 좁힌 **main.py 실물 사본** → T5b가 잡아야 한다
-    #     ★ 예전 B2는 `KeyboardInterrupt`가 뚫는 것을 "검출"로 셌다 — 그건 자기 판정이라
-    #       *"`except Exception`이 좁아진 구현"*의 대조군이 되지 못했다(2026-08-07 QA R3).
+    # B2: 일반 예외 격리를 좁힌 main.py 실물 사본 → T5b가 잡아야 한다
+    #     route가 원래 안 잡는 예외로 「검출」을 세면 자기 판정이라
+    #       「`except Exception`이 좁아진 구현」의 대조군이 되지 못한다.
     narrowed, applied = load_mutant_main(
         [("            except Exception as exc:                       # noqa: BLE001",
           "            except RuntimeError as exc:                    # QA MUTATION")],
@@ -826,7 +798,7 @@ def falsify():
     if not caught:
         bad.append("B2 반증 실패 — except를 좁혀도 T5가 못 잡는다")
 
-    # B2-b: **한 종류만** 골라 재던지는 사본 → 행렬이 아니면 원리적으로 못 잡는다
+    # B2-b: 한 종류만 골라 재던지는 사본 → 표본이 전수가 아니면 원리적으로 못 잡는다
     selective, applied = load_mutant_main(
         [("            except Exception as exc:                       # noqa: BLE001",
           "            except Exception as exc:                       # QA MUTATION\n"
@@ -839,7 +811,7 @@ def falsify():
     if not caught:
         bad.append("B2-b 반증 실패 — 한 종만 재던져도 T5가 못 잡는다(행렬이 대표 하나로 퇴화했다)")
 
-    # B2′: route가 독자 경로 정책을 끼워 넣은 **실물 사본** → T3b가 잡아야 한다
+    # B2′: route가 독자 경로 정책을 끼워 넣은 실물 사본 → T3b가 잡아야 한다
     policy, applied = load_mutant_main(
         [("        reg = store.load_registry()\n\n        known = confirm.already_registered(reg, appid)",
           "        if not str(config_path).strip():                   # QA MUTATION\n"
@@ -853,8 +825,8 @@ def falsify():
     if not caught:
         bad.append("B2′ 반증 실패 — route에 독자 경로 정책을 넣어도 T3가 못 잡는다")
 
-    # B2″: **특정 확장자**를 노리는 정책 → 고정 표본으로는 원리적으로 못 잡는다.
-    #      소스 리터럴 수확이 그 문자열을 경로로 되돌려 심어 **구성으로** 잡는다.
+    # B2″: 특정 확장자를 노리는 정책 → 고정 표본으로는 원리적으로 못 잡는다.
+    #      소스 리터럴 수확이 그 문자열을 경로로 되돌려 심어 구성으로 잡는다.
     suffix, _applied = load_mutant_main(
         [("        reg = store.load_registry()\n\n        known = confirm.already_registered(reg, appid)",
           "        if str(config_path).endswith('.qa_policy'):       # QA MUTATION\n"
@@ -868,10 +840,10 @@ def falsify():
     if not caught:
         bad.append("B2″ 반증 실패 — 특정 문자열을 노리는 정책을 T3가 못 잡는다")
 
-    # B3: discover.py에 쓰기를 넣은 **실물 사본**을 실제로 돌린다 → T1(효과 측정)이 잡아야 한다
-    #     ★ 판정이 문법에서 효과로 옮겨졌으므로 대조군도 *소스를 훑는 것*이 아니라
-    #       *돌려서 세계가 변했는가*가 된다. 아래 4종은 **쓰는 수단이 전부 다르다** —
-    #       이름 매칭으로는 b·c·d를 못 잡는다(b가 Codex가 뚫은 그 형태다).
+    # B3: discover.py에 쓰기를 넣은 실물 사본을 실제로 돌린다 → T1(효과 측정)이 잡아야 한다
+    #     판정이 문법이 아니라 효과이므로 대조군도 소스를 훑는 것이 아니라 돌려서
+    #       세계가 변했는가가 된다. 아래 4종은 쓰는 수단이 전부 다르다 — 이름 매칭으로는
+    #       별칭 우회·import 시점 별칭·저수준 `os.open`을 못 잡는다.
     anchor = "    results.sort(key=lambda item: item[\"name\"].lower())"
     outside = os.path.join(_TMP, "b3-outside-write")
     mutants = {
@@ -917,7 +889,9 @@ def falsify():
     if clean_bad:
         bad.append(f"B3′ 음성 대조군 실패 — 원본이 위반으로 잡혔다: {clean_bad}")
 
-    # B4: register_confident가 appid 목록을 받는 구현 → T2가 잡아야 한다
+    # B4: T2의 판정 기준(파라미터 목록이 `["self"]`인가)만 손으로 쓴 소스에 걸어 본다.
+    #     다른 대조군과 달리 main.py 실물 사본도, `route_params`도, `t2_no_appid_list`도
+    #     지나지 않는다 — 기준식만 확인하는 자기 판정이라 T2 자체의 대조군은 아니다.
     fake = "class X:\n    def register_confident(self, appids=None):\n        pass\n"
     params = [a.arg for n in ast.walk(ast.parse(fake))
               if isinstance(n, ast.FunctionDef) and n.name == "register_confident"
@@ -959,8 +933,8 @@ def main_():
     problems += t7_excluded_envelope()
     print("T7 감지 제외 — 두 route가 같은 목록을 본다 · discover_games 봉투의 excluded 모양")
 
-    # ★ 앵커가 사라지면 **크래시가 아니라 FAIL**이다. 크래시는 위에서 모은 problems를 못 찍고
-    #   죽어서 "무엇이 걸렸는지"를 통째로 가린다 — 진단 가능성이 안전만큼 중요하다.
+    # 앵커가 사라지면 크래시가 아니라 FAIL이다. 크래시는 위에서 모은 problems를 못 찍고
+    #   죽어서 「무엇이 걸렸는지」를 통째로 가린다 — 진단 가능성이 안전만큼 중요하다.
     try:
         report, fals_bad = falsify()
     except AssertionError as exc:
