@@ -15,11 +15,12 @@ import os
 
 from . import codes, engine, store
 
-# `disk_state` 4분류. 현재 분류는 파일 존재 여부와 SHA-1 산출 여부를 완전히 갈라내지 않는다.
+# `disk_state` 4분류. ★ 19판(F4-7) — 파일 존재 여부와 SHA-1 산출 여부를 이제 갈라낸다:
+#   `exists`가 참인데 sha1이 없으면(읽기 실패) `MISSING`이 아니라 `LOOKUP_FAILED`다.
 OTHER_PROFILE = "other_profile"   # 디스크 내용과 일치한 슬롯 디렉터리 이름을 같이 싣는다
 UNKNOWN = "unknown"               # SHA-1은 읽었지만 어느 슬롯 본체와도 일치하지 않는다
-MISSING = "missing"               # SHA-1이 없다 — 파일 없음뿐 아니라 기존 파일의 읽기 실패도 여기로 접힌다
-LOOKUP_FAILED = "lookup_failed"   # `engine.disk_state` 호출 자체가 포착된 예외로 실패했다
+MISSING = "missing"               # 파일이 없다(SHA-1도 없다). 읽기 실패는 여기가 아니라 LOOKUP_FAILED로 간다
+LOOKUP_FAILED = "lookup_failed"   # 조회 실패 — `disk_state` 호출 예외, 또는 파일은 있는데 읽기 실패(sha1 None)
 
 
 def _state_fp(meta_sha1, disk_sha1, ring):
@@ -549,4 +550,8 @@ def _classify(state):
         return OTHER_PROFILE
     if state.get("sha1"):
         return UNKNOWN
+    # ★ 19판(F4-7) — 파일은 있는데 sha1이 없으면 읽기 실패다(권한·EIO). `MISSING`으로 접으면
+    #   확인창이 "설정 파일이 없습니다"라면서 동시에 "백업 한 칸을 씁니다"라고 말한다(모순, r6(b)).
+    if state.get("exists"):
+        return LOOKUP_FAILED
     return MISSING
