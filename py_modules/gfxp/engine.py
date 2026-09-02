@@ -485,6 +485,12 @@ def apply_profile(reg, appid, profile):
         )
 
     target_meta = store.load_meta(appid, profile)
+    # meta가 truthy 비-dict(손상 JSON: `[..]`·`"str"`·`42`)면 「미저장」이 아니라 손상이다(§14-E″ ⓑ).
+    #   `store.profile_file_path`가 isinstance 게이트로 `None`을 주므로 아래 PROFILE_MISSING으로
+    #   샐 수 있는데, 그것은 실재하는 손상을 「아직 저장 안 됨」으로 오표기한다. 여기서 가른다.
+    if target_meta and not isinstance(target_meta, dict):
+        raise Refused("거부: 프로필 '%s'의 기록이 손상되었습니다 (저장소 손상)." % profile,
+                      code=codes.PROFILE_CORRUPT)
     target_file = store.profile_file_path(appid, profile)
     if not (target_meta and target_file and os.path.exists(target_file)):
         raise Refused("거부: 프로필 '%s'이 없습니다. 먼저 save 하십시오." % profile, code=codes.PROFILE_MISSING)

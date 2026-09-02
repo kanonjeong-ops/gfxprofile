@@ -23,7 +23,7 @@
 | 400 | meta만 잔존·본체 삭제 | refused(PROFILE_MISSING) | cannot_apply |
 | 500 | 본체 변조(sha 불일치) | refused(PROFILE_CORRUPT) | cannot_apply |
 | 600 | meta.json 손상(비JSON) | error | cannot_apply |
-| 650 | meta가 유효 JSON이지만 비객체 | error | cannot_apply |
+| 650 | meta가 유효 JSON이지만 비객체 | refused(PROFILE_CORRUPT) | cannot_apply |
 | 660 | 등록 항목에 `config_path` 키 없음 | refused(REGISTRY_ENTRY_CORRUPT) | cannot_apply |
 | 670 | `config_path`가 비-문자열(예: 123) | refused(REGISTRY_ENTRY_CORRUPT) | cannot_apply |
 | 680 | `config_path`가 빈 문자열 | refused/error(빈 경로 가드) | cannot_apply |

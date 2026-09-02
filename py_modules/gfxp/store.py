@@ -378,9 +378,17 @@ def load_meta(appid, profile):
 
 
 def profile_file_path(appid, profile):
-    """프로필이 담고 있는 설정 파일의 경로. 원본 파일명을 그대로 유지한다."""
+    """프로필이 담고 있는 설정 파일의 경로. 원본 파일명을 그대로 유지한다.
+
+    JSON 파싱 결과가 dict가 아니면(유효 JSON이지만 비객체 — 예: `"str"`·`[..]`·`42`) `None`을
+    돌려준다 — 그러지 않으면 아래 `meta["filename"]`이 truthy 비-dict에서 `TypeError`로 죽어
+    `UNEXPECTED`가 된다(§14-E″ ⓑ). 비JSON 손상은 `load_meta`의 `json.load()`가 먼저 예외를 내
+    이 게이트에 닿지 않는다(그쪽은 error로 나간다).
+    손상을 「없음」과 가르는 것은 이 함수가 아니라 `engine.apply_profile`이 한다(비-dict meta는
+    `PROFILE_CORRUPT`, `None`/빈 meta는 `PROFILE_MISSING`).
+    """
     meta = load_meta(appid, profile)
-    if not meta:
+    if not isinstance(meta, dict) or not meta:
         return None
     return os.path.join(profile_dir(appid, profile), meta["filename"])
 
