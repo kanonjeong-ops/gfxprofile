@@ -205,10 +205,12 @@ def delete_preview(reg, appid):
         # 문에서 escape로 남긴다. 확인창은 이 게임을 빈 것으로 표시한다.
         # 경로도 말하지 않는다: 이 게임은 화면이 정상적으로 안내할 수 있는 상태가 아니다.
         # 지문도 아무 파일도 읽지 않는 고정 센티널이다(양쪽 칸 모두).
-        # 이 갈래의 params에는 `evicted`가 없다 — 봉투 계약(`DeleteConfirmParams`)에서는 필수
-        # 필드다. 화면은 없는 값을 빈 목록처럼 다루지만, 계약과 어긋난 자리라는 것은 알고 있어야 한다.
+        # ★ 19판(F4-4) — `evicted`는 봉투 계약(`DeleteConfirmParams`)의 필수 필드다. 이 갈래는
+        #   아무 파일도 읽지 않으므로 지울 백업도 없다 — 빈 목록이 의미상 참이다. 예전엔 이 키가
+        #   빠져 계약과 어긋났다(화면은 없는 값을 빈 목록처럼 다뤘을 뿐).
         return ({"appid": appid, "name": name, "has_dock": False, "has_internal": False,
-                 "saved_at": {p: "" for p in PROFILES}, "backups": 0, "config_path": ""},
+                 "saved_at": {p: "" for p in PROFILES}, "backups": 0, "config_path": "",
+                 "evicted": []},
                 (_UNSAFE_FP, _UNSAFE_FP))
     from . import restore                       # 순환 회피 — `restore`가 이 모듈을 최상단에서 import한다
     metas, digests = {}, []
