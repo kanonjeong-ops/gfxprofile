@@ -122,7 +122,8 @@ def main():
         if len(states) != 4:
             problems.append(f"disk_state 4분류가 서로 다르지 않다({states}) — 두 뜻이 한 값에 뭉쳤다")
 
-        print(f"needs_confirm 분기 {len(seen)}종 (M1 동치표 5행 + disk_state 4분류)")
+        print(f"needs_confirm 분기 {len(seen)}종 (M1 동치표 5행 + disk_state 4분류; "
+              "항목 손상은 REGISTRY_ENTRY_CORRUPT 조기 거부로 이 표 밖 — F1-c)")
         print("  " + " / ".join(seen))
         if problems:
             print("\nFAIL")

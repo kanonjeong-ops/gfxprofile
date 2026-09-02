@@ -193,7 +193,12 @@ def delete_preview(reg, appid):
     지문이 화면 봉투로 샌다.
     """
     appid = str(appid)
-    entry = engine.game_or_fail(reg, appid)
+    # 삭제 계열(§8-D): 손상 항목을 치우는 것이 이 경로의 존재 이유다. 검증을 우회하고
+    #   (`require_intact=False`) 비-dict를 `{}`로 접어, `{}`·비-dict 항목도 등록 해제로 빠져
+    #   나갈 수 있게 한다(미등록 None만 `GAME_NOT_REGISTERED`로 남는다).
+    entry = engine.game_or_fail(reg, appid, require_intact=False)
+    if not isinstance(entry, dict):
+        entry = {}
     name = entry.get("name") or ("appid %s" % appid)
     if not _paths_in_position(appid):
         # 안전하지 않은 키 — 외부를 읽지 않는다. "지울 프로필 없음"으로 보고하고, 실제 삭제
@@ -466,7 +471,12 @@ def delete_game_data(reg, appid):
     `profile_delete_started` 한 필드다.
     """
     appid = str(appid)
-    entry = engine.game_or_fail(reg, appid)
+    # 삭제 계열(§8-D): 파괴의 문이지만 손상 항목도 치울 수 있어야 한다 — 검증을 우회하고
+    #   (`require_intact=False`) 비-dict를 `{}`로 접는다. 경로 봉쇄는 아래 `_paths_in_position`이
+    #   따로 지키므로 안전 경계는 그대로다.
+    entry = engine.game_or_fail(reg, appid, require_intact=False)
+    if not isinstance(entry, dict):
+        entry = {}
     name = entry.get("name") or ("appid %s" % appid)
     root = store.profiles_root(appid)
 

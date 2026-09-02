@@ -24,7 +24,9 @@
 | 500 | 본체 변조(sha 불일치) | refused(PROFILE_CORRUPT) | cannot_apply |
 | 600 | meta.json 손상(비JSON) | error | cannot_apply |
 | 650 | meta가 유효 JSON이지만 비객체 | error | cannot_apply |
-| 660 | 등록 항목에 `config_path` 키 없음 | error(UNEXPECTED) | cannot_apply |
+| 660 | 등록 항목에 `config_path` 키 없음 | refused(REGISTRY_ENTRY_CORRUPT) | cannot_apply |
+| 670 | `config_path`가 비-문자열(예: 123) | refused(REGISTRY_ENTRY_CORRUPT) | cannot_apply |
+| 680 | `config_path`가 빈 문자열 | refused/error(빈 경로 가드) | cannot_apply |
 | 700 | 실행 중 · 디스크 = 프로필 | already | already |
 | 800 | 실행 중 · 디스크 ≠ 프로필 | refused(GAME_RUNNING) | running_refused |
 
@@ -35,7 +37,7 @@
 
 ### 이 파일이 잠그는 것
   ① 게임별 버킷 ↔ outcome 대응(위 표 전수). 이것을 "1:1"이라 부르지 않는다: `cannot_apply`는
-     `refused`(GAME_RUNNING 제외)와 `error`를 함께 받는다. 잠그는 것은 표의 10게임 각각이
+     `refused`(GAME_RUNNING 제외)와 `error`를 함께 받는다. 잠그는 것은 표의 12게임 각각이
      기대 버킷 하나에 들고, 그 실행 outcome이 해당 버킷의 허용 집합에 드는가이다.
   ② 격리 계약 — meta 손상 2건이 섞여 있어도 나머지 게임이 정상 분류된다.
      격리가 없으면 미리보기가 통째로 죽어 `CONFIRM_REQUIRED`가 영영 안 나오고
@@ -43,9 +45,13 @@
   ③ 미리보기가 파일을 1바이트도 안 바꾼다(합성 세계 전 파일 sha1 전수 대조).
   ④ 버킷 합 = 등록 수(어느 게임도 빠지거나 두 번 세지 않는다).
 
-660: `entry["config_path"]`가 없으면 엔진은 `error`, 미리보기는 `cannot_apply`여야 한다.
+660: `entry["config_path"]`가 없으면 엔진은 `refused(REGISTRY_ENTRY_CORRUPT)`다(★ 19판 — 그
+  전에는 `KeyError`가 게임별 외곽 try에 잡혀 `error`였다), 미리보기는 `cannot_apply`여야 한다.
   미리보기가 그 자리를 안 보면 `would_apply`로 센다 — "적용된다 해 놓고 안 되는" 어긋남이다.
-  미러가 그 판정을 갖고 있는지를 이 세계가 잠근다.
+  미러가 그 판정을 갖고 있는지를 이 세계가 잠근다(670의 비-문자열도 같은 술어가 잡고, 680의
+  빈 문자열은 술어에 안 걸려 뒤의 빈 경로 가드가 잡는다 — 셋 다 `cannot_apply` 한 칸이다).
+  버킷은 그대로다 — `cannot_apply`가 `refused`와 `error`를 함께 받으므로, 이 검사가 잠그는 것은
+  봉투 코드가 아니라 버킷 대응이다.
   (남은 어긋남 하나 — `config_path`가 심볼릭 링크여서 G11이 거부하는 경우 — 는 설계가
    선언한 한계다: 실행 시점 가드는 미리보기가 예측하지 않는다. 방향은 같은 쪽으로 안전하다.)
 
@@ -140,6 +146,12 @@ def build_world(tmp, engine, store):
     add("660", "NoConfigPath").write_bytes(INTERNAL)
     reg["games"]["660"].pop("config_path", None)          # 손상·수동 편집된 등록 항목
 
+    add("670", "NonStrConfigPath").write_bytes(INTERNAL)
+    reg["games"]["670"]["config_path"] = 123              # 비-문자열 — 손상 술어가 잡는다
+
+    add("680", "EmptyConfigPath").write_bytes(INTERNAL)
+    reg["games"]["680"]["config_path"] = ""               # 빈 문자열 — 술어엔 안 걸리나 빈 경로 가드가 잡는다
+
     add("700", "RunningAlready").write_bytes(DOCK)        # 실행 중 · 디스크==dock
     add("800", "RunningDiffer").write_bytes(INTERNAL)     # 실행 중 · 디스크≠dock
 
@@ -155,7 +167,9 @@ EXPECTED = {
     "500": "cannot_apply",
     "600": "cannot_apply",
     "650": "cannot_apply",
-    "660": "cannot_apply",     # config_path 없음 → 엔진은 error
+    "660": "cannot_apply",     # config_path 없음 → 엔진은 refused(REGISTRY_ENTRY_CORRUPT)
+    "670": "cannot_apply",     # config_path 비-문자열 → 손상 술어 → refused(REGISTRY_ENTRY_CORRUPT)
+    "680": "cannot_apply",     # config_path 빈 문자열 → 빈 경로 가드 → refused/error
     "700": "already",          # already가 G5보다 먼저다 — 실행 중이어도 already
     "800": "running_refused",
 }

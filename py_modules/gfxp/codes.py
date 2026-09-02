@@ -34,9 +34,15 @@ BACKUP_FILE_MISSING = "BACKUP_FILE_MISSING"
 # ── 레지스트리 (store.RegistryError) ─────────────────────────────────────────
 REGISTRY_UNREADABLE = "REGISTRY_UNREADABLE"
 REGISTRY_MALFORMED = "REGISTRY_MALFORMED"
-# 이 데이터를 더 새 버전의 플러그인이 만들었다. 낡은 코드가 모르는 스키마 위에 쓰면 조용히
-# 뭉개므로, 읽기는 그대로 두고 바꾸는 동작만 막는다 (접착층 `main.py`의 `_guard_not_newer`).
+# 이 데이터를 더 새 버전의 플러그인이 만들었다. 미지 키 자체는 `load_registry`의 `setdefault`와
+# `save_registry`의 전체 직렬화 사이에서 보존된다 — 「모르는 필드가 통째로 사라진다」가 근거가
+# 아니다. 낡은 코드가 모르는 스키마의 의미를 지킬 수 없으므로, 읽기는 그대로 두고 바꾸는
+# 동작만 막는다 (접착층 `main.py`의 `_guard_not_newer`).
 REGISTRY_NEWER = "REGISTRY_NEWER"
+# 등록된 항목 하나의 기록이 손상됐다(비-dict 항목 · `config_path`가 문자열이 아님).
+# 그 항목 위에서 쓰기를 하면 무엇을 덮는지 모르므로 이름 있는 거부로 멈춘다 — 항목 하나가
+# 화면·목록 전체를 죽이지 않게 조회·삭제 계열은 통과시킨다(§8-D 정규화 규칙 · §14-H).
+REGISTRY_ENTRY_CORRUPT = "REGISTRY_ENTRY_CORRUPT"
 
 # ── 등록 후보·백업 경로 가드 ──────────────────────────────────────────────────────
 SAV_REFUSED = "SAV_REFUSED"                          # .sav 및 savegames 폴더

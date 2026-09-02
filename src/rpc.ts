@@ -41,8 +41,9 @@ export interface OverviewGame {
   has_internal: boolean;
   /**
    * 지금 게임 설정 파일과 같은 내용인 슬롯 전부. 두 프로필 내용이 같으면 둘 다 실린다.
-   * detail=false이거나 포착된 조회 실패면 빈 배열이다. 등록 항목에 config_path가 없어서 나는
-   * KeyError는 현재 포착하지 않아 get_overview 자체가 실패할 수 있다.
+   * detail=false이거나 포착된 조회 실패면 빈 배열이다. ★ 19판 — 등록 항목 손상도 포착 대상이
+   * 됐다(백엔드가 REGISTRY_ENTRY_CORRUPT로 거부하고 래퍼가 그것을 접는다). 손상 항목은 이
+   * 배열이 비고, 목록의 나머지 게임은 그대로 온다.
    */
   disk_matches: Profile[];
   /**
@@ -441,6 +442,8 @@ export interface AddGameConfirmParams {
  *
  * 이미 등록된 appid는 ALREADY_REGISTERED로 거부된다. 엔진 add_game이 기존 config_path를 조용히
  *   갈아치우면 다음 적용이 엉뚱한 파일을 덮어쓰기 때문이다. 경로 변경은 아직 지원하지 않는다.
+ * ★ 19판 — 등록 기록이 손상된 항목은 REGISTRY_ENTRY_CORRUPT로 거부된다(그 봉투에는
+ *   name·config_path가 실리지 않는다 — 못 믿는 값이다). 화면은 두 코드를 각자의 문구로 그린다.
  */
 export const addGame = rpc<
   [appid: string, config_path: string, name?: string, confirm_token?: string],

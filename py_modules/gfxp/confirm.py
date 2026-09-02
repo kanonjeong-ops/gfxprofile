@@ -120,7 +120,17 @@ def needs_confirm(reg, appid, profile):
     #   아래 `config_name`이 그 둘과 같은 값이다. 값 비교를 두 벌 적으면 언젠가 갈린다.
     # `state`가 `None`(조회 실패)이면 `disk_sha1`도 `None`이라 `slot_holds`가 곧바로 거짓이다 —
     #   따로 `state is not None` 가드를 두지 않아도 모르면 묻는 쪽으로 접힌다.
-    entry = store.game(reg, appid) or {}
+    # 실행·판정 계열(§8-D): 이 함수는 `game_or_fail`을 직접 부르지 않고(위 `disk_state` 경유의
+    #   `Refused`는 자기 `except`가 삼킨다) 여기서 entry를 직접 읽는다. 반환이 truthy든 falsy든
+    #   비-dict거나 `config_path`가 비-문자열이면 같은 이름 있는 거부를 낸다 — `or {}`가 falsy
+    #   비-dict(`0`·`""`·`[]`)를 「미등록」으로 오진하던 갈래도 함께 닫힌다. 미등록(None) 계약은
+    #   불변이라 None은 거르지 않는다.
+    entry = store.game(reg, appid)
+    if entry is not None and engine.entry_corrupt(entry):
+        raise engine.Refused(
+            "거부: appid %s의 등록 정보가 손상되었습니다 — 항목 값 %r." % (appid, entry),
+            code=codes.REGISTRY_ENTRY_CORRUPT, appid=str(appid))
+    entry = entry or {}
     config_name = os.path.basename(entry.get("config_path") or "")
     if store.slot_holds(appid, profile, disk_sha1, config_name):
         return False, {}, None                # 내용이 이미 같다 — 덮어써도 달라지는 것이 없다
@@ -346,6 +356,15 @@ def already_registered(reg, appid):
     entry = (reg.get("games") or {}).get(str(appid))
     if entry is None:
         return None
+    # 실행·판정 계열(§8-D · §14-H ⓙ): 이 함수는 `game_or_fail`을 지나지 않고 entry를 직접
+    #   읽으며 그 뒤 `entry.get(...)`이 비-dict에서 죽는다. 손상 항목이면 「이미 등록됨」은 참이
+    #   아니고(등록 기록이 깨진 것이다), 못 믿는 `name`·`config_path`를 화면 봉투에 실어선 안
+    #   되므로 이름 있는 거부를 낸다. 이 문이 `engine.add_game`의 `entry.update` 사망점도 함께
+    #   막는다 — 그래서 엔진 쪽에는 술어를 심지 않는다(재등록 복구 길을 열어 둔다).
+    if engine.entry_corrupt(entry):
+        raise engine.Refused(
+            "거부: appid %s의 등록 정보가 손상되었습니다 — 항목 값 %r." % (appid, entry),
+            code=codes.REGISTRY_ENTRY_CORRUPT, appid=str(appid))
     return {"appid": str(appid),
             "name": entry.get("name") or ("appid %s" % appid),
             "config_path": entry.get("config_path") or ""}
@@ -408,12 +427,20 @@ def _preview_one(reg, appid, profile, running):
         state = {}
     if state.get("sha1") and state["sha1"] == meta.get("sha1"):
         return "already"
-    # `config_path`가 없는 등록 항목(손상·수동 편집)은 엔진이 error를 낸다 —
-    #   `apply_profile`이 `entry["config_path"]`에서 KeyError를 내고 그 예외가 엔진의 게임별
-    #   외곽 try에 잡힌다. 그 첨자가 G5보다 먼저라(경로를 먼저 읽는다) 실행 중이어도 error다.
-    #   이 줄이 없으면 미리보기는 `would_apply`라고 세고 실행은 실패한다 — "적용된다 해 놓고
-    #   안 되는" 어긋남이다.
-    if not (reg.get("games") or {}).get(str(appid), {}).get("config_path"):
+    # 손상된 등록 항목(비-dict · `config_path` 비-문자열)은 엔진이 `refused(REGISTRY_ENTRY_CORRUPT)`를
+    #   낸다(★ 19판 — 그 전에는 `entry["config_path"]`의 `KeyError`가 게임별 외곽 try에 잡혀
+    #   `error`였다). 거부는 `apply_profile`의 첫 줄 `game_or_fail`에서 나므로 여전히 G5보다
+    #   먼저다 — 실행 중이어도 이 갈래가 이긴다.
+    #   아래 조건은 엔진의 두 사실을 함께 미러한다: 손상 술어의 거부(비-문자열)와, 빈 경로가
+    #   뒤에서 맞는 실패(빈 문자열 — 그 값은 손상 술어에 안 걸린다)를 한 줄로 접는다. 둘 다
+    #   화면에서는 「적용 불가」 한 칸이다. 이 줄이 없으면 미리보기는 `would_apply`라고 세고
+    #   실행은 거부된다 — "적용된다 해 놓고 안 되는" 어긋남이다.
+    #   **조건의 순서가 계약이다** — 술어 호출이 앞이라야 truthy 비-dict entry에서 `.get`이
+    #   단축 평가로 건너뛰어진다. 엔진 술어를 여기 다시 적지 않고 `engine.entry_corrupt`를
+    #   부른다(그래서 그 헬퍼가 모듈 공개다). 버킷은 `cannot_apply` 그대로다(그 버킷이
+    #   `refused`와 `error`를 함께 받는다).
+    entry = (reg.get("games") or {}).get(str(appid))
+    if engine.entry_corrupt(entry) or not entry.get("config_path"):
         return "cannot_apply"
     if str(appid) in running:
         return "running_refused"           # G5 — 디스크≠프로필일 때만 여기 온다

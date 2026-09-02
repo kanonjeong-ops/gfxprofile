@@ -11,9 +11,10 @@
 
 빈 값은 오류가 아니라 기본 이름 복귀로 처리한다. 공백만·제어문자·과길이·비문자열도 거부가
 아니라 `normalize`의 대상이다 — 거부로 만들면 화면에 오류 분기가 생기고 "이름 지우기"를 할
-방법도 사라진다. 다만 무예외는 이름 값에 한한 성질이다: `reg` 자체가 dict가 아니면
-`stored`·`set_name`·`custom_count`가 다 `AttributeError`를 낸다. `settings`만 비-dict일
-때는 `stored`는 접고 `set_name`은 터진다. 그 전제는 `store.load_registry`가 지킨다.
+방법도 사라진다. 다만 무예외는 이름 값에 한한 성질이다: `reg`나 `settings`가 dict가 아니면
+`stored`·`set_name`·`custom_count`가 `AttributeError`를 낼 수 있다. 그러나 그 입력은 이
+함수들에 닿지 않는다 — `store.load_registry`가 최상위 비-dict와 `settings` 비-dict를 각각
+`REGISTRY_MALFORMED`로 거른다(§14-F′ ⓑ — 19판부터 무조건). 그 전제는 로더가 지킨다.
 """
 import re
 

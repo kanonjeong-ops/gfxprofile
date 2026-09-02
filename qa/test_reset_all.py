@@ -385,8 +385,11 @@ def main_test():                                                # noqa: C901  (�
             row = rows.get(key) or {}
             if row.get("outcome") != "refused" or row.get("code") != codes.DELETE_FAILED:
                 P("⑤ 탈출 키(%s)의 outcome이 refused/DELETE_FAILED가 아니다 — %s" % (label, row))
-            if row.get("code") == codes.DELETE_FAILED and key not in store.load_registry()["games"]:
-                P("⑤ 거부된 탈출 키(%s)가 registry에서 사라졌다 — 실패분은 남아야 한다" % label)
+            # E59(19판): 비-숫자 appid 키는 되심기에서 제외한다 — 개별 삭제로도 초기화로도
+            #   청소할 수 없어 영구히 남던 항목이라, 거부(DELETE_FAILED)됐어도 registry에서
+            #   빠진다. 탈출 키(REL·ABS)는 둘 다 비-숫자다.
+            if key in store.load_registry()["games"]:
+                P("⑤ 거부된 비-숫자 탈출 키(%s)가 registry에 남았다 — E59: 되심기에서 제외돼야 한다" % label)
         # 불변식은 여기서도 그대로다: 하나가 막혀도 정상 게임은 지워진다.
         if (rows.get("999") or {}).get("outcome") != "deleted":
             P("★⑤ 탈출 키가 막히자 정상 게임까지 안 지워졌다 — %s" % rows.get("999"))
@@ -398,7 +401,8 @@ def main_test():                                                # noqa: C901  (�
         # ═══════════════════════════════════════════════════════════════════
         # ⑥ 레지스트리 버전 가드 (U5) — 더 새 버전이 만든 데이터를 만났을 때
         #
-        #   낡은 플러그인이 모르는 스키마 위에 쓰면 그 필드는 통째로 사라진다. 그래서
+        #   미지 키 자체는 `load_registry`의 setdefault와 전체 재직렬화가 보존한다 — 「통째로
+        #   사라진다」가 근거가 아니다. 낡은 플러그인이 모르는 스키마의 의미를 지킬 수 없으므로
         #   바꾸는 동작만 막고, 읽기와 탈출로(전체 초기화)는 열어 둔다.
         #   그 셋에 「거부하고도 안 쓴다」를 더해 넷을 한자리에서 잰다 — 하나만 보면 나머지가
         #   무너진 것을 못 본다(막기만 하면 화면이 안 뜨고, 열기만 하면 데이터가 뭉개지고,

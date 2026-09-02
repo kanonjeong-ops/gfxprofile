@@ -292,10 +292,26 @@ def detect_cloud_synced(appid, config_path):
 
 # ---------------------------------------------------------------- 조회
 
-def game_or_fail(reg, appid):
+def entry_corrupt(entry):
+    """그 registry 항목의 기록이 손상됐는가 — 비-dict이거나 `config_path`가 문자열이 아니다.
+
+    실행 계열의 문(`game_or_fail`)과 정책층 미러(`confirm._preview_one`)가 같은 술어를 부른다 —
+    두 벌로 적으면 언젠가 갈린다. 그래서 이름 앞에 밑줄을 두지 않고 모듈 공개로 둔다.
+    빈 문자열 `""`은 손상이 아니다(문자열이다) — 빈 경로의 처리는 경로 가드·미러의 truthiness
+    조건이 맡는다. `None`(미등록)은 이 술어의 밖이다: 부르는 쪽이 그 계약을 먼저 가른다.
+    """
+    if not isinstance(entry, dict):
+        return True
+    return not isinstance(entry.get("config_path"), str)
+
+
+def game_or_fail(reg, appid, require_intact=True):
     entry = store.game(reg, appid)
-    if not entry:
+    if entry is None:
         raise Refused("거부: appid %s가 등록되어 있지 않습니다. 먼저 add 하십시오." % appid, code=codes.GAME_NOT_REGISTERED)
+    if require_intact and entry_corrupt(entry):
+        raise Refused("거부: appid %s의 등록 정보가 손상되었습니다 — 항목 값 %r." % (appid, entry),
+                      code=codes.REGISTRY_ENTRY_CORRUPT, appid=str(appid))
     return entry
 
 
@@ -547,8 +563,12 @@ def apply_all(reg, profile):
     """
     results = []
     for appid in sorted(reg["games"]):
-        entry = reg["games"].get(appid) or {}
-        row = {"appid": appid, "name": entry.get("name") or appid,
+        entry = reg["games"].get(appid)
+        # row 조립은 게임별 try 밖이다. 비-dict 항목에서 `entry.get`이 여기서 죽으면 루프가
+        #   통째로 무너지므로 이름만 안전하게 접는다 — 손상 판정·거부는 try 안의
+        #   `game_or_fail`이 `Refused(REGISTRY_ENTRY_CORRUPT)`로 낸다(§14-H).
+        name = entry.get("name") if isinstance(entry, dict) else None
+        row = {"appid": appid, "name": name or appid,
                "outcome": "error", "note": "", "code": None}
         results.append(row)
 
@@ -590,11 +610,14 @@ def apply_all(reg, profile):
             row["code"] = exc.code
         except Exception as exc:
             # 일부러 넓게 잡는다. 이 함수의 존재 이유는 "하나가 실패해도 나머지는 계속 간다"이고,
-            # 그 약속은 예외 종류에 따라 깨지면 안 된다. 좁게 잡으면 레지스트리 항목 손상
-            # (`KeyError: config_path`) 하나에 전체 루프가 죽고, 결과 창조차 못 뜬다.
-            # 사람이 읽을 문장을 앞에 두고 예외는 괄호로 남긴다. 앞부분이 없으면 사용자는
-            # `KeyError: 'config_path'`만 보고 무엇을 해야 할지 알 수 없고, 뒷부분이 없으면
-            # 원인을 못 찾는다 — Game Mode엔 터미널이 없어 이 note가 유일한 단서다.
+            # 그 약속은 예외 종류에 따라 깨지면 안 된다.
+            # ★ 19판 — 이 자리에서 가장 흔했던 예외가 사라졌다: 레지스트리 항목 손상
+            #   (`config_path` 결손·비-dict)은 이제 `game_or_fail`이 `Refused(REGISTRY_ENTRY_CORRUPT)`로
+            #   내고, 그것은 위의 `except Refused` 갈래가 받아 `refused` + 그 코드로 보고한다
+            #   (익명 `error`가 아니다). 이 절을 그래도 넓게 두는 이유는 남은 미지의 예외
+            #   때문이다 — 알려진 사건을 자기 코드로 빼내는 것과 최후 그물을 없애는 것은 다른
+            #   일이다(§15-D E52 ⓑ). 사람이 읽을 문장을 앞에 두고 예외는 괄호로 남긴다 —
+            #   Game Mode엔 터미널이 없어 이 note가 유일한 단서다.
             row["outcome"] = "error"
             row["note"] = ("이 게임의 등록 정보를 처리하지 못했습니다. 다시 등록해 보십시오. "
                            "(%s: %s)" % (type(exc).__name__, exc))

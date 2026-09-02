@@ -208,17 +208,36 @@ class RegistryError(Exception):
 
 
 def load_registry():
+    """읽어서 dict로 만드는 데까지 책임진다(§14-F′). 확정적으로 실패하는 세 자리를 이름 있는
+    `RegistryError`로 봉투화한다 — 새 코드는 만들지 않는다(둘 다 기존 코드다).
+
+    검사 순서가 계약이다: ①최상위 dict → ②default 결손 키 setdefault → ③ⓑ·ⓒ 형태 검사 →
+      ④settings 내부 setdefault. ③을 ②보다 앞에 두면 `{}`·키 결손 registry를 불필요하게
+      거부하고, ④보다 뒤에 두면 ⓑ가 검사에 닿기 전에 `AttributeError`로 죽는다.
+    항목 단위 손상(비-dict 항목·`config_path` 결손)은 여기서 막지 않는다 — 제품의 명문 설계가
+      항목 단위 격리다(§8-D 정규화 규칙). 처분은 소비자 층이 한다.
+    """
     path = registry_path()
     if not os.path.exists(path):
         return default_registry()
     try:
         with open(path, "r", encoding="utf-8") as fh:
             reg = json.load(fh)
+    except OSError as exc:
+        # ⓐ 파일을 열지(읽지) 못했다 — 권한·EIO·디렉터리 등. 버전 무관 무조건.
+        #   errno·경로를 메시지 문자열에 직접 넣는다: route의 RegistryError 갈래는 traceback을
+        #   남기지 않아 봉투 변환 뒤 `__cause__`가 운영 로그에서 사라진다.
+        raise RegistryError(
+            "거부: 레지스트리 파일을 열지 못했습니다 — %s [errno=%s] 파일: %s"
+            % (exc.strerror or exc, exc.errno, path),
+            code=codes.REGISTRY_UNREADABLE)
     except (ValueError, UnicodeDecodeError) as exc:
         # 손상된 레지스트리로 계속 진행하지 않는다 (fail-closed). 자동 삭제도 하지 않는다.
+        # `.bak`이 있으면 손으로 되살릴 경로만 남긴다 — 오진 시 파괴를 유도하던 "rm" 안내는
+        #   19판이 지웠다(인앱 탈출로가 §7-4′에서 그 일을 대신하고, `.bak`은 사람이 손으로
+        #   되살릴 마지막 재료로 남는다).
         backup = path + ".bak"
-        hint = ("  복구: mv %s %s" % (backup, path)) if os.path.exists(backup) else \
-               ("  초기화: rm %s  (등록 정보만 사라지고 프로필·백업은 남습니다)" % path)
+        hint = ("  복구: mv %s %s" % (backup, path)) if os.path.exists(backup) else ""
         raise RegistryError(
             "거부: 레지스트리가 손상되어 읽을 수 없습니다.\n"
             "  파일: %s\n  원인: %s\n%s" % (path, exc, hint),
@@ -228,6 +247,24 @@ def load_registry():
     base = default_registry()
     for key, value in base.items():
         reg.setdefault(key, value)
+    # ⓑ settings 비-dict → 무조건 거부. 현행 로더가 이 자리에서 이미 `AttributeError`로 죽던
+    #   것이라 U5 반례가 없다(순이득).
+    if not isinstance(reg["settings"], dict):
+        raise RegistryError(
+            "거부: 레지스트리 형식이 올바르지 않습니다 — settings가 dict가 아닙니다 (%s). 파일: %s"
+            % (type(reg["settings"]).__name__, path),
+            code=codes.REGISTRY_MALFORMED)
+    # ⓒ games 비-dict → `type(version) is int and version <= REGISTRY_VERSION`일 때만 거부한다.
+    #   U5 계약(읽기는 허용): 미래 registry의 `games`(예: `[]`)는 통과해야 `discover_games`가
+    #   membership 집합으로 유의미하게 읽는다. 비-int version도 통과시킨다 — 판정은 route 층이
+    #   한다. 문법은 `main._registry_newer`의 `type(...) is int`를 승계한다(`isinstance`면
+    #   `version: true`가 int로 새어 두 자리 판정이 갈린다).
+    version = reg.get("version")
+    if type(version) is int and version <= REGISTRY_VERSION and not isinstance(reg["games"], dict):  # noqa: E721
+        raise RegistryError(
+            "거부: 레지스트리 형식이 올바르지 않습니다 — games가 dict가 아닙니다 (%s). 파일: %s"
+            % (type(reg["games"]).__name__, path),
+            code=codes.REGISTRY_MALFORMED)
     for key, value in base["settings"].items():
         reg["settings"].setdefault(key, value)
     return reg
@@ -236,7 +273,10 @@ def load_registry():
 def save_registry(reg):
     """직전 레지스트리를 .bak으로 남기고 저장한다.
 
-    .bak이 있어야 손상 시 안내가 실제 복구 경로가 된다 (없으면 안내가 거짓말이 된다).
+    ★ 19판 — `.bak`은 이제 사람이 손으로 되살릴 마지막 재료다. `load_registry`가 안내하던
+    rm/복구 문구는 지워졌고 인앱 탈출로(§7-4′)가 그 일을 대신하므로, `.bak`의 존재 이유는
+    「안내를 참으로 만드는 것」이 아니라 「손상 이전의 정상본을 남기는 것」이다 — 그래서 fresh
+    갈래(`save_fresh_registry`)가 `.bak`을 건드리지 않는 것이 계약이다.
     """
     path = registry_path()
     if os.path.exists(path):

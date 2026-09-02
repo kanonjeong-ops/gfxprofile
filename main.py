@@ -439,9 +439,10 @@ def _disk_state_safe(reg, appid):
     """`engine.disk_state`의 `Refused`·`OSError`·`ValueError`·`AttributeError`·`TypeError`를
     빈 dict(「알 수 없음」)로 접는 래퍼.
 
-    비-dict meta는 `store.slot_holds`가 걸러 낸다. 미등록·경로 타입·파일 조회 실패는 이 래퍼가
-    접지만, 등록 항목에 `config_path` 키가 없어서 나는 `KeyError`는 현재 잡지 않는다. 따라서 이
-    래퍼만으로 `get_overview(detail=True)` 전체 실패를 막는다고 약속할 수 없다.
+    비-dict meta는 `store.slot_holds`가 걸러 낸다. 미등록·경로 타입·파일 조회 실패를 이 래퍼가
+    접는다. ★ 19판 — 등록 항목 손상도 여기 들어왔다(`engine.disk_state`가
+    `Refused(REGISTRY_ENTRY_CORRUPT)`를 낸다). 다만 이 래퍼가 지키는 것은 `disk_matches` 한
+    칸이다 — 목록 조립 자체의 항목 격리는 `get_overview`의 게임별 접기가 한다.
 
     안전하지 않은 슬롯은 `remove.slot_in_position`으로 진입 전에 접고, 두 슬롯 모두를 요구한다."""
     if not all(remove.slot_in_position(appid, p) for p in remove.PROFILES):
@@ -616,8 +617,16 @@ class Plugin:
         try:
             running = _running_appids()          # /proc을 1회만 훑는다 — 근거는 `_running_appids` 독스트링
             games = []
-            for appid in sorted(reg["games"], key=lambda a: reg["games"][a].get("name", a)):
+            for appid in sorted(reg["games"], key=lambda a: (
+                    reg["games"][a].get("name", a)
+                    if isinstance(reg["games"][a], dict) else a)):
                 entry = reg["games"][appid]
+                if not isinstance(entry, dict):
+                    # 조회 격리(§8-D · §14-H ⓘ): 손상 항목도 목록에 뜬다. ★ 실사망점은 정렬
+                    #   키다 — 비-dict 항목 하나가 위 `sorted(...)`의 `.get`에서 루프 시작 전에
+                    #   죽인다. 정렬 키(위)와 이 접기는 함께 있어야 한다: 하나만 고치면 다른
+                    #   자리에서 그대로 죽는다.
+                    entry = {}
                 # 슬롯 상태와 마지막 저장 시각을 같이 꺼낸다(meta 읽기 1회 — `_slot_view`).
                 dock_ready, dock_saved, dock_sha = _slot_view(appid, "dock")
                 intl_ready, intl_saved, intl_sha = _slot_view(appid, "internal")
@@ -1041,7 +1050,10 @@ class Plugin:
             피한 확인창 지옥이 등록 경로에 재현된다.
 
         이미 등록된 appid는 `codes.ALREADY_REGISTERED`로 거부한다. 경로 변경 기능은 아직 없다.
-          판정은 `confirm.already_registered`가 한다.
+          판정은 `confirm.already_registered`가 한다. ★ 19판 — 그 항목의 등록 기록이 손상돼
+          있으면 `REGISTRY_ENTRY_CORRUPT`가 대신 나간다(§8-D 정규화 규칙): 「이미 등록됨」은 그
+          기록을 믿을 수 있을 때만 참인 진술이고, 못 믿는 `name`·`config_path`를 화면 봉투에
+          실어 보내지 않기 위해서다.
 
         검증 단계에서 엔진 문을 복제하지 않는다. `reg`의 일회용 사본에 진짜 `engine.add_game`을
           통과시켜 G11/G14를 그대로 받는다 — 문은 여전히 하나이고, 사본은 버려지므로 실제
@@ -1215,8 +1227,12 @@ class Plugin:
 
         results = []
         for appid in sorted(reg["games"]):                 # sorted가 사본이라 순회 중 pop해도 안전
-            entry = reg["games"].get(appid) or {}
-            row = {"appid": appid, "name": entry.get("name") or appid,
+            entry = reg["games"].get(appid)
+            # row 조립은 게임별 try 밖이다 — 비-dict 항목에서 `entry.get`이 여기서 죽으면 루프가
+            #   무너지므로 이름만 안전하게 접는다(§8-D · §14-H ⓘ). 손상 항목의 삭제 자체는
+            #   아래 `delete_game_data`(require_intact=False)가 우회로 처리한다.
+            name = entry.get("name") if isinstance(entry, dict) else None
+            row = {"appid": appid, "name": name or appid,
                    "outcome": "deleted", "code": None, "note": ""}
             results.append(row)
             try:
@@ -1238,7 +1254,11 @@ class Plugin:
         #   profiles/가 남은" 유령 상태가 된다.
         #   `delete_game_data`가 성공분만 pop했으므로 지금 `reg["games"]`가 곧 실패분이다.
         fresh = store.default_registry()
-        fresh["games"] = dict(reg["games"])
+        # E59(§14-H ⓘ): 되심기에서 비-숫자 appid 키를 제외한다 — 그 키는 개별 삭제(appid 숫자
+        #   검증 거부)로도 초기화(되심기)로도 청소할 수 없어 영구히 남던 항목이다. 숫자 키의
+        #   실패분만 되살려 심는다. `add_game`은 비-숫자 키를 만들지 않으므로 정상 데이터는
+        #   영향이 없다.
+        fresh["games"] = {k: v for k, v in reg["games"].items() if str(k).isdigit()}
         # 감사 로그는 `save_registry`보다 먼저 — 전 게임 outcome을 남긴다.
         #   문제 행만 사유를 싣는다(정상은 code가 없어 자동으로 빠진다).
         problems = {r["appid"]: {"code": r["code"], "note": r["note"][:200]}
@@ -1282,7 +1302,9 @@ class Plugin:
         판정이 두 곳으로 갈리고, 그 순간 화면이 실제와 다른 것을 말한다.
         """
         reg = store.load_registry()
-        engine.game_or_fail(reg, appid)                 # 미등록 → GAME_NOT_REGISTERED
+        # 조회 계열(§8-D · §14-H ⓘ): 반환 entry를 쓰지 않으므로 검증만 끄면 된다(접기 불요).
+        #   손상 항목에서도 백업 목록이 뜬다 — 그 항목의 백업 파일은 멀쩡히 남아 있다.
+        engine.game_or_fail(reg, appid, require_intact=False)   # 미등록 → GAME_NOT_REGISTERED
         return _ok(backups=restore.backup_rows(reg, appid))
 
     @route

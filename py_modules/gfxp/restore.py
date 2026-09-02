@@ -258,8 +258,14 @@ def target_sha1(reg, appid, target):
     모르면 `None`이라 배지는 안 그려지고 `already`도 성립하지 않는다(안전한 방향).
     """
     if target == TARGET_CONFIG:
-        entry = (reg.get("games") or {}).get(str(appid)) or {}
-        return store.sha1_file(entry.get("config_path") or "")
+        # 조회 계열(§8-D · §14-H ⓚ): 손상 항목은 「모름」(`None`)에 합류시킨다 — 목록이 뜨고
+        #   `already`·배지가 안 켜지는 안전한 방향이다. `sha1_file("")`의 우연한 접힘에 기대지
+        #   않고 형을 직접 본다(비-dict entry는 `.get`이 죽으므로 isinstance로 먼저 가른다).
+        entry = (reg.get("games") or {}).get(str(appid))
+        config_path = entry.get("config_path") if isinstance(entry, dict) else None
+        if not isinstance(config_path, str):
+            return None
+        return store.sha1_file(config_path)
     meta = _slot_meta(appid, target)
     name = meta.get("filename") if meta else None
     if not isinstance(name, str) or not name:
@@ -318,8 +324,9 @@ def _assert_in_position(appid):
 def _disk_state(reg, appid):
     """`engine.disk_state` 조회 중 아래 예외 목록에 든 실패는 `None`으로 접는다.
 
-    registry 항목에 `config_path`가 없을 때의 `KeyError`는 현재 잡지 않으므로, 모든 손상 상태를
-    복구 가능한 조회 실패로 접는 경계는 아니다.
+    ★ 19판 — 그 경계가 닫혔다. 등록 항목 손상은 `engine.disk_state`의 `game_or_fail`이
+    `Refused(REGISTRY_ENTRY_CORRUPT)`로 내고, 아래 `except`의 `engine.Refused`가 그것을 잡는다.
+    즉 이 래퍼가 이제 항목 손상까지 「조회 실패」로 접는다.
     """
     try:
         return engine.disk_state(reg, appid)
@@ -369,7 +376,13 @@ def needs_confirm(reg, appid, backup_id):
     """
     appid = str(appid)
     _assert_in_position(appid)                       # 0단계
-    entry = engine.game_or_fail(reg, appid)          # 미등록 → GAME_NOT_REGISTERED
+    # 보존 계열(§8-D · §14-H ⓚ): 비-dict + 슬롯 대상에서 오늘 나가던 `already` 성공을 지킨다 —
+    #   검증을 끄고(`require_intact=False`) 비-dict를 `{}`로 접는다. 접기 뒤 config 갈래는 `""`
+    #   → `os.path.exists("")` 거짓 → `proceed`로 나가고, 실제 쓰기는 여전히
+    #   `engine.restore_backup`(`require_intact=True`)이 `REGISTRY_ENTRY_CORRUPT`로 거부한다.
+    entry = engine.game_or_fail(reg, appid, require_intact=False)   # 미등록 → GAME_NOT_REGISTERED
+    if not isinstance(entry, dict):
+        entry = {}
 
     info = store.parse_backup_id(backup_id)
     target = _TARGET_OF_KIND.get(info["kind"], TARGET_CONFIG)
