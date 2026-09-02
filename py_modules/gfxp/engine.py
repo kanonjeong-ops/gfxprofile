@@ -709,8 +709,18 @@ def restore_backup(reg, appid, backup_path, target="config"):
                                   % exc, code=codes.BACKUP_FAILED)
         # 슬롯 본체의 이름은 그 슬롯이 이미 쓰던 이름을 유지한다(모르면 설정 파일 이름 —
         # `save_profile`이 쓰는 값과 같다). 이름을 갈면 옛 본체가 고아로 남는다.
-        store.write_profile(appid, target, old_name or os.path.basename(path),
-                            data, src=backup_path)
+        # 슬롯 쓰기 실패만 좁게 감싼다(§14-E″ ⓐ) — `save_profile`의 그 코드와 같은 문구·같은
+        #   사건이다. 함수 전체를 감싸면 위 백업 파일 읽기 실패(`read_bytes(backup_path)`)까지
+        #   「프로필 저장 실패」로 오분류된다(Codex NARROW). config 갈래의 `atomic_write`는 여기
+        #   넣지 않는다 — 그 코드의 주어가 「프로필 저장」이라 게임 설정 파일 쓰기 실패에 붙이면
+        #   오표기다(백로그, 재론: 실보고 1건). 읽기 실패·`_save_registry` 실패는 기존 갈래 그대로.
+        try:
+            store.write_profile(appid, target, old_name or os.path.basename(path),
+                                data, src=backup_path)
+        except OSError as exc:
+            raise Refused(
+                "거부: 프로필을 저장하지 못했습니다 (저장 공간이나 파일 권한을 확인해 주세요) — %s"
+                % exc, code=codes.PROFILE_WRITE_FAILED) from exc
         return {"restored": backup_path}
     if os.path.exists(path):
         try:
