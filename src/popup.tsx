@@ -488,39 +488,6 @@ function useCloseOnce(closeModal?: () => void) {
 }
 
 /**
- * 중첩 확인창의 비활성 OK 라벨 면 — 폴백의 `overlayButtonStyle`과 같은 값이다.
- * 두 렌더러가 같은 것을 그린다는 계약은 잠긴 모습에도 적용되는데, 같게 만드는 것은 적어 넣는
- * 숫자가 아니라 화면에 나오는 값이다.
- * 왜 0.25인가: Steam `Disabled` 클래스가 버튼 전체에 `opacity:0.4`를 곱하므로, 곱해질 것을
- *   미리 나눠 둔다 — `0.25 × 0.4 = 0.10` 유효. 이 곱셈은 관측 당시 Steam 빌드의 실기 결과이며
- *   현행 런타임은 코드만으로 확인할 수 없다. 폴백도 같은 `DialogButton disabled`라 같은
- *   dimming이 걸린다고 보고 같은 0.25를 쓴다.
- *   폴백의 dimming은 미검증 가정이다(그 경로는 `showModal`이 죽었을 때만 진입해 실기에서
- *      재보지 못했다). 폴백에 dimming이 없으면 그쪽만 두 배 밝게 보이고, 확인되면 폴백만
- *      0.10으로 되돌린다.
- * 여기엔 `opacity`를 걸지 않는다 — Steam이 이미 흐리게 그린다. 문제는 흐린 것이 아니라 면이
- *   없는 것이었으므로, 또 흐리게 하면 이중으로 죽는다.
- */
-const OK_DISABLED_FACE_STYLE = {
-  display: "inline-block",
-  background: "rgba(255,255,255,0.25)",
-  padding: "2px 10px",
-  borderRadius: "4px",
-} as const;
-
-/**
- * 중첩 모드의 OK 라벨 — 비활성일 때만 면을 가진 span으로 감싼다.
- * 미완 상태의 파괴 버튼이 배경 대비 면 없이 "죽은 텍스트"로 읽혀, 라벨 자리에 면을 그린다
- *   (버튼 자체는 Steam `ConfirmModal` 내부라 손이 안 닿지만 `strOKButtonText`가 `ReactNode`를 받는다).
- * 활성일 때는 문자열 그대로 돌려준다 — 평소 모습을 바꾸지 않는 것이 이 수정의 조건이다.
- * 이것은 실험이다 — 면이 라벨 자리에만 생겨 버튼 전체 면과 다르게 보일 수 있다. 판정은 실기
- *   스샷이고, 불충분하면 "중첩 모드 비활성 Primary 시각은 Steam 소유"를 알려진 한계로 등재하고 종결한다.
- */
-function okFace(label: string, disabled: boolean): ReactNode {
-  return disabled ? <span style={OK_DISABLED_FACE_STYLE}>{label}</span> : label;
-}
-
-/**
  * 일반 확인창의 기본 포커스를 [취소]로 옮긴다.
  * 파괴 동작인 OK에 처음부터 포커스가 있으면 A 한 번의 관성 입력으로 승인될 수 있다.
  * `ConfirmModal`에는 초기 포커스 대상을 넘기는 통로가 없어, 우리가 준 취소 라벨로 버튼을 찾고
@@ -572,7 +539,7 @@ export function SpecConfirmModal({
       strDescription={
         <div ref={bodyRef} style={specWrapStyle(spec)}>{specBody(spec, gate.value, gate.setValue)}</div>
       }
-      strOKButtonText={okFace(spec.okText, gate.okDisabled)}
+      strOKButtonText={spec.okText}
       strCancelButtonText={spec.cancelText ?? t("CANCEL")}
       /* 결과 팝업은 OK 하나다 — Steam의 알림 다이얼로그 모드. */
       bAlertDialog={spec.noCancel}
@@ -592,18 +559,19 @@ export function SpecConfirmModal({
  * 본문을 감쌌을 때다 — 그 관용구는 usePopupGate 주석이 정본이다.
  */
 /**
- * 폴백 확인창 푸터 버튼의 시각 — 비활성이어도 면을 유지한다.
- * 미완 상태의 파괴 버튼이 면 없이 흐린 글자만으로 렌더돼 "죽은 텍스트"로 읽히므로, `disabled`
- * 기본 스타일에 기대지 않고 면을 우리가 그린다.
- * 값은 중첩(`OK_DISABLED_FACE_STYLE`)과 같은 0.25다 — 산술과 미검증 가정은 그쪽 주석이 정본.
- * 두 렌더러의 잠김 시각이 같아야 한다는 계약은 적힌 숫자가 아니라 화면에 나온 값으로 지켜진다.
- * `opacity`를 걸지 않는 이유도 그쪽과 같다(Steam이 이미 흐리게 그린다).
+ * 폴백 확인창 푸터 버튼의 시각 — 잠긴 모습은 Steam `DialogButton disabled` 기본에 맡긴다.
+ * 한때 비활성일 때 반투명 면을 우리가 그렸다: 미완 상태의 파괴 버튼이 흐린 글자만으로 렌더돼
+ *   "죽은 텍스트"로 읽힌다는 판단이었다. 2026-09-02 실기에서 그 면이 라벨 크기의 알약으로 보여
+ *   푸터 버튼 안에 또 다른 작은 버튼이 있는 것처럼 읽혔고, 사용자는 면이 없던 이전 모습
+ *   (`ClaudeWork/GfxProfileToolV2/shots/before-confirm-reset-0016.png`)을 정상으로 판정했다.
+ *   실기 증거는 `field-20260902-20260902-203630/evidence/f1b-reset-confirm.png`.
+ * 이 잠긴 모습은 `delete`를 입력하기 전에만 지나가는 자리라 화면 도달 빈도가 낮다 — 안 읽히는
+ *   쪽의 값보다 잘못 읽히는 쪽의 대가가 컸다.
+ * 중첩 렌더러의 OK 라벨도 같은 이유로 면을 그리지 않는다. 두 렌더러의 잠김 시각이 같아야
+ *   한다는 계약은 "둘 다 Steam 기본 dimming에 기댄다"로 지켜진다 — 우리가 값을 적어 맞추지
+ *   않으므로 한쪽만 갈릴 자리도 없다.
  */
-function overlayButtonStyle(disabled: boolean) {
-  return disabled
-    ? { minWidth: "120px", background: "rgba(255,255,255,0.25)" }
-    : { minWidth: "120px" };
-}
+const OVERLAY_BUTTON_STYLE = { minWidth: "120px" } as const;
 
 export function ConfirmOverlay({ spec, onClose }: { spec: ConfirmSpec; onClose: () => void }) {
   const gate = useSpecGate(spec, onClose);
@@ -620,7 +588,7 @@ export function ConfirmOverlay({ spec, onClose }: { spec: ConfirmSpec; onClose: 
         <DialogButton
           onClick={gate.onOK}
           disabled={gate.okDisabled}
-          style={overlayButtonStyle(gate.okDisabled)}
+          style={OVERLAY_BUTTON_STYLE}
         >
           {spec.okText}
         </DialogButton>
@@ -630,7 +598,7 @@ export function ConfirmOverlay({ spec, onClose }: { spec: ConfirmSpec; onClose: 
           <DialogButton
             onClick={gate.onCancel}
             disabled={gate.done}
-            style={overlayButtonStyle(gate.done)}
+            style={OVERLAY_BUTTON_STYLE}
           >
             {spec.cancelText ?? t("CANCEL")}
           </DialogButton>
