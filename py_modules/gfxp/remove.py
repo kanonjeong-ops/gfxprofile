@@ -11,9 +11,12 @@
     1. 대피(`store.make_backup`)  2. meta.json unlink ×2  3. profiles/<appid>/ rmtree
     4. registry 항목 제거
 `rmtree`가 본체만 지우고 meta.json을 남긴 채 중단되면, 「적용할 수 있는가」를 meta와 본체 둘 다로
-재는 소비자(`main._profile_ready`)와 meta의 기록만으로 재는 소비자(`engine.apply_all`의 already)가
-서로 다른 답을 낸다. 그래서 그 기록을 먼저 지운다 — 어느 지점에서 멈춰도 meta가 없으므로 적용
-계열의 두 판정이 함께 「없음」이고, "프로필 없는 등록 게임"과 동형이라 다시 삭제하면 완결된다.
+재는 소비자(`main._profile_ready`)가 그 중간 상태를 「있음→없음」으로 넘기는 창이 열린다. 그래서
+그 기록을 먼저 지운다 — 어느 지점에서 멈춰도 meta가 없으므로 적용 계열의 판정이 함께 「없음」이고,
+"프로필 없는 등록 게임"과 동형이라 다시 삭제하면 완결된다.
+(★ 19판(F4-8) — 예전엔 `engine.apply_all`의 already가 meta 기록만 봐 본체 없는 슬롯을 "이미
+적용됨"으로 오판해 `_profile_ready`와 어긋났다. F4-8이 그 already도 `store.slot_holds`(본체 실측)로
+옮겨 그 어긋남을 닫았다 — §15-D E18: meta-only 판정은 이제 `main._disk_matches` 배지 하나뿐이다.)
 
 이 순서가 「모든 소비자를 끈다」는 뜻은 아니다. 삭제 확인창(`delete_preview`)은 기록이 아니라
 본체로 판정하므로(`store.slot_body_exists`) meta unlink 뒤 rmtree 전의 중간 상태를 「프로필 있음」

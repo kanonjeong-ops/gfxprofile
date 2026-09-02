@@ -606,7 +606,12 @@ def apply_all(reg, profile):
                 state = disk_state(reg, appid)
             except Exception:
                 state = {}
-            if state.get("sha1") and state["sha1"] == meta.get("sha1"):
+            # 「이미 그 프로필」은 기록끼리(`state.sha1 == meta.sha1`) 맞대지 않고 본체 실측으로
+            #   판정한다(§5-G · F4-8): meta가 B라는데 본체가 C·없음인 슬롯을 "이미 적용됨"이라
+            #   말하면 손상을 고칠 자리를 침묵한다. `state.get`은 필수다 — `disk_state` 실패 시
+            #   `state`가 `{}`라 직접 첨자는 `KeyError`다. 판정이 거짓이면 아래 정상 실행으로
+            #   낙하하고, 대상 상태에 따라 PROFILE_CORRUPT·PROFILE_MISSING·error가 된다(새 outcome 없음).
+            if store.slot_holds(appid, profile, state.get("sha1")):
                 row["outcome"] = "already"
                 _record_already(entry, appid, profile, meta)
                 continue

@@ -115,7 +115,8 @@ def main_test():                                                # noqa: C901  (�
             print("개별 삭제 계약 — 순서 3단계 주입 · 중간 상태 소비자 전수 · 토큰 6종 · "
                   "가드 6종(경로 봉쇄 4) · last_appid 2종 · 손상 meta 대피  (데이터: %s)" % tmp)
             print("  음성 대조군: 「본체 없음·meta 잔존」 합성 주입 → hazardous 검출 + "
-                  "apply_all=already 확인 · 무변조 세계에서 삭제 토큰 통과(⑧-d-4)")
+                  "apply_all(정상 세계=already · 본체 없는 슬롯≠already, F4-8) 확인 · "
+                  "무변조 세계에서 삭제 토큰 통과(⑧-d-4)")
             print("  토큰 지문 축 4종(⑧-d): meta 파일 · 백업 개수 · 링 이름 순서 · 축출 대상")
             print("  로그 배선: decky.logger로 흘러간 줄 %d개" % len(LOG))
             print("  DELETE_FAILED 사실 필드(DEFECT-06): escape %d자리 — %s "
@@ -216,8 +217,14 @@ def main_test():                                                # noqa: C901  (�
 
         # ═══════════════════════════════════════════════════════════════════
         # ② 먼저 판정기가 항진식이 아님을 증명한다 (거짓 검사 방지).
-        #    "본체 없음 · meta 잔존"을 손으로 만들어, hazardous()가 잡고 apply_all이
-        #    실제로 already를 보고하는지 본다. 못 잡으면 아래 단언들은 전부 무의미하다.
+        #    "본체 없음 · meta 잔존"을 손으로 만들어, hazardous()가 그 상태를 실제로 잡는지
+        #    (음성 대조군에선 안 잡는지) 본다. 못 잡으면 아래 단언들은 전부 무의미하다.
+        #    ★ 19판(F4-8) — 예전엔 이 상태에서 `apply_all`이 already를 보고해(meta 기록만 봄)
+        #    meta+본체를 보는 `_profile_ready`(false)와 어긋났고, 그 어긋남이 위험의 증거였다.
+        #    F4-8이 `apply_all`의 already를 본체 실측(`store.slot_holds`)으로 옮겨 그 어긋남을
+        #    닫았다 — 이제 본체 없는 슬롯을 둘 다 「적용 불가」로 일치시킨다. 아래 뒤집힌 단언이
+        #    그 일치(=F4-8 수정)를 회귀 잠금한다. 판정기 비-항진 증명은 여전히 음성 대조군과
+        #    hazardous()==["dock"] 검출로 성립한다(그 둘은 apply_all=already에 안 기댄다).
         # ═══════════════════════════════════════════════════════════════════
         mkgame(tmp, engine, store, "600", "HazardControl")
         if hazardous("600"):
@@ -228,10 +235,11 @@ def main_test():                                                # noqa: C901  (�
         os.unlink(body)                                   # 본체만 지운다(meta는 남긴다)
         if hazardous("600") != ["dock"]:
             P("★판정기가 「본체 없음·meta 잔존」을 못 잡는다 — 이 파일의 ② 단언이 전부 항진식이다")
-        if bulk_outcome("600", "dock") != "already":
-            P("합성 위험 상태에서 apply_all이 already를 안 냈다 — 재려던 어긋남에 닿지 못했다")
+        if bulk_outcome("600", "dock") == "already":
+            P("★F4-8 후에도 본체 없는 슬롯을 apply_all이 already로 본다 — G-1(§5-G)이 닫으려던 "
+              "어긋남이 안 닫혔다(본체 실측 slot_holds로 안 옮겨졌다)")
         if main._profile_ready("600", "dock"):
-            P("합성 위험 상태인데 _profile_ready가 참이다 — 두 소비자의 어긋남이 재현되지 않았다")
+            P("합성 위험 상태인데 _profile_ready가 참이다 — 본체 없는 슬롯을 적용 가능으로 오판한다")
 
         # ═══════════════════════════════════════════════════════════════════
         # ① 실행 순서를 단계별 크래시 주입으로 잠근다 (게임 100)

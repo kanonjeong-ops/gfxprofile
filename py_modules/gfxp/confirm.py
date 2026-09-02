@@ -426,7 +426,10 @@ def _preview_one(reg, appid, profile, running):
         state = engine.disk_state(reg, appid)
     except Exception:                      # noqa: BLE001 — 엔진의 같은 자리(`engine.apply_all`의 `disk_state` try/except)와 동형
         state = {}
-    if state.get("sha1") and state["sha1"] == meta.get("sha1"):
+    # already는 본체 실측으로 판정한다(§5-G · F4-8) — 엔진 `apply_all`의 같은 자리와 같은 술어다.
+    #   `state.get`은 필수(조회 실패 시 `state={}`라 직접 첨자는 KeyError). 미리보기는 새 버킷이
+    #   없다: 거짓이면 아래로 낙하해 기존 `cannot_apply`(수 변화로 판정)로 간다.
+    if store.slot_holds(appid, profile, state.get("sha1")):
         return "already"
     # 손상된 등록 항목(비-dict · `config_path` 비-문자열)은 엔진이 `refused(REGISTRY_ENTRY_CORRUPT)`를
     #   낸다(★ 19판 — 그 전에는 `entry["config_path"]`의 `KeyError`가 게임별 외곽 try에 잡혀
