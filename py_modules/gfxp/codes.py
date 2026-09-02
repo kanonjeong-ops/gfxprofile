@@ -61,6 +61,13 @@ BACKUP_OUT_OF_ROOT = "BACKUP_OUT_OF_ROOT"            # 그 게임의 백업 폴�
 # 대피 실패는 `BACKUP_FAILED`이며, 그때 등록 정보와 프로필 데이터는 지우지 않는다.
 DELETE_FAILED = "DELETE_FAILED"
 
+# 전체 초기화(정상 갈래)의 부분완료 — 게임을 지운 **뒤** 마지막 registry 저장이 실패했다(§7-5′).
+# 그 시점에 지워진 양은 0에서 전부까지라 문구는 조건부다("일부 또는 전부 … 다시 초기화하면 이어서").
+# ⚠️ 프론트 폴백 키 `RESET_ACTION_FAILED`("초기화하지 못했습니다 ({code})")와 **다른 것**이다 —
+#   이쪽은 백엔드 코드이고 `i18n.tCode`가 `code in en`이면 이 값을 우선해 그대로 그린다(치환자 0,
+#   프론트 분기 불요). fresh 복구 갈래에서는 이 코드가 나가지 않는다(그 갈래는 아무 게임도 안 지운다).
+RESET_FAILED = "RESET_FAILED"
+
 # ── RPC 경계·응답 코드 ────────────────────────────────────────────────────────
 BACKUP_ID_INVALID = "BACKUP_ID_INVALID"
 BAD_IDENTIFIER = "BAD_IDENTIFIER"        # appid/profile/backup_id가 경로 조각으로 부적격

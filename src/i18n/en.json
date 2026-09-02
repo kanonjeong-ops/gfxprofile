@@ -149,6 +149,7 @@
   "RESET_OK_EXCLUDED": "Cleared {n} detection exclusion(s).",
   "RESET_FRESH_CONFIRM_WARN": "⚠ This plugin's game-list file is in an unusable state. Resetting starts the list over empty and keeps the current file under a different name. Saved profiles and backups are not deleted — register a game again to use the profiles and backups it already has.",
   "RESET_OK_FRESH": "The game list has been started over. Saved profiles and backups were not deleted — register a game again to use them as they are.",
+  "RESET_FAILED": "The reset could not be completed. Some or all profile data may already have been deleted. Run the reset again to continue with what remains.",
   "RESET_ACTION_FAILED": "Could not reset ({code})",
   "BACKUP_LIST_TITLE": "{name} — backups",
   "BACKUP_LIST_HINT": "Each row says where it goes back into — profile backups go into that profile, the rest go into the game's settings file.",

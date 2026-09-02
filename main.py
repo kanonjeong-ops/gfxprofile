@@ -1215,7 +1215,20 @@ class Plugin:
         decky.logger.info(
             "delete_game session=%s appid=%s name=%s evacuated=%s backups=%s excluded=True",
             SESSION, result["appid"], result["name"], result["evacuated"], result["backups"])
-        _save_registry(reg)
+        # ★ 19판(§7-5′) — 프로필 데이터는 이미 지워졌다(delete_game_data 성공). 여기서 registry
+        #   저장이 실패하면 봉투가 `UNEXPECTED`로 나가 "이미 지워졌다"를 아무도 말하지 않는다.
+        #   `OSError`만 좁게 잡아 `DELETE_FAILED`의 **단일 생성점**(`remove._delete_failed`)을 지난다
+        #   — 신설이 아니라 미도달 갈래를 도달시키는 것이고, `profile_delete_started=True`가
+        #   기존 프론트 분기를 그대로 켠다. **`RegistryError`는 그대로 올린다**: `REGISTRY_NEWER`를
+        #   `DELETE_FAILED`로 삼키면 U5 고지가 사라진다.
+        try:
+            _save_registry(reg)
+        except OSError as exc:
+            remove._delete_failed(
+                str(appid), "save_registry",
+                "거부: 프로필 데이터는 지웠으나 등록 정보 저장에 실패했습니다 — %s\n"
+                "  다시 삭제하면 남은 것부터 이어서 완결합니다." % exc,
+                profile_delete_started=True, cause=exc)
         return _ok(**result)
 
     @route
@@ -1327,7 +1340,17 @@ class Plugin:
         decky.logger.info(
             "reset_all session=%s counts=%s outcomes=%s problems=%s",
             SESSION, counts, {r["appid"]: r["outcome"] for r in results}, problems)
-        _save_registry(fresh)
+        # ★ 19판(§7-5′) — 게임을 지운 뒤 마지막 저장이 실패하면 봉투가 `UNEXPECTED`로 나가
+        #   "이미 지워졌다"를 아무도 말하지 않는다. `OSError`만 좁게 잡아 신설 `RESET_FAILED`로
+        #   접는다(문구는 조건부 — 지워진 양이 0~전부라 단정형 금지, 재시도가 실패분부터 이어
+        #   지운다). 치환자가 없어 프론트 분기 없이 `tCode`만으로 뜬다.
+        #   ⚠️ 이 갈래는 **정상(mode:"normal")** 저장 실패에만 성립한다 — fresh 복구 갈래는
+        #   `_reset_fresh`가 `store.save_fresh_registry`로 따로 처리하고 거기서는 `RESET_FAILED`가
+        #   나가지 않는다(그 갈래는 게임을 하나도 안 지운다 — §7-4′ 6-1). `RegistryError`는 그대로 올린다.
+        try:
+            _save_registry(fresh)
+        except OSError as exc:
+            return _fail(codes.RESET_FAILED, message=str(exc))
         return _ok(mode="normal", results=results, counts=counts, cleared=cleared)
 
     def _reset_fresh(self, exc, confirm_token, confirm_text):

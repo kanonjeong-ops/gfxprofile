@@ -508,10 +508,10 @@ export interface DeleteResult {
  *   되고 갱신된 params와 함께 CONFIRM_REQUIRED가 다시 온다(TOCTOU).
  * DELETE_FAILED는 삭제 실패를 params와 함께 신호한다(stage에 어디서 멈췄는지,
  *   profile_delete_started에 프로필 데이터 삭제가 시작됐는지가 실린다) — profile_delete_started가
- *   부분 삭제인지 아닌지를 가른다. 다시 삭제하면 남은 것부터 이어서 지운다. 단 부분완료를 남기는
- *   코드가 이것뿐은 아니다 — 프로필 데이터 삭제가 성공한 뒤 registry 저장이 실패하면 봉투는
- *   UNEXPECTED가 되고, 그때도 프로필 데이터는 지워졌는데 registry는 그대로인 부분완료가 남는다.
- *   UNEXPECTED를 「무변경」으로 다루지 마라.
+ *   부분 삭제인지 아닌지를 가른다. 다시 삭제하면 남은 것부터 이어서 지운다.
+ *   ★ 19판 — 프로필 데이터 삭제가 성공한 뒤 registry 저장이 실패하는 갈래도 이제
+ *   DELETE_FAILED(+profile_delete_started=true)로 온다(그 전에는 UNEXPECTED였다). 프로필 데이터
+ *   삭제가 시작된 뒤의 실패는 이 코드 하나로 수렴한다.
  *
  * ── DELETE_FAILED의 params 계약 ──
  * - stage: 진단용 단계 이름이다. 화면 분기의 근거로 쓰지 마라 — 같은 문자열 "escape"를 다른
