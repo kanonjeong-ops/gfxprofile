@@ -82,7 +82,8 @@ def main_test():                                                # noqa: C901  (�
             """사전 조건이 무너지면 여기로 빠져나온다. 그냥 진행하면 뒤 절이 traceback으로
             죽어 정작 무엇이 깨졌는지가 화면에서 사라진다(진단이 사라지는 실패)."""
             print("전체 초기화 계약 — challenge 바인딩 6종(★registry 불변 변경 포함) · "
-                  "실패 격리 · backups 불가침 · 0게임 · ★레지스트리 버전 가드(U5) · "
+                  "실패 격리 · backups 무삭제(비포화 세계 · 111·222 항진 · 333 1건 · prune 미검사) · "
+                  "0게임 · ★레지스트리 버전 가드(U5) · "
                   "★결과 봉투 cleared(DEFECT-05)  (데이터: %s)" % tmp)
             print("  결과: %s / registry 잔존=%s / cleared=%s"
                   % (state["by_id"], state["left"], state["cleared"]))

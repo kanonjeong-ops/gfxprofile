@@ -134,4 +134,4 @@ if fail:
     for f in fail:
         print("  -", f)
     sys.exit(1)
-print(f"PASS 식별자/표시명 분리 5종 — IDENT={IDENT!r} / 표시명={manifest_name!r}")
+print(f"PASS 식별자/표시명 분리 6절(1·2·3·4-a·4·5) — IDENT={IDENT!r} / 표시명={manifest_name!r}")

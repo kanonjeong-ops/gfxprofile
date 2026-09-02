@@ -199,7 +199,7 @@ def main_test():                                                # noqa: C901  (�
             P("④ 재포함했는데 registry에 제외 기록이 남았다 — %s" % excluded_now())
         env = rpc(main, "include_game", "111")                   # 두 번째 — 이미 제외가 풀린 항목도 성공하는지 확인
         if not env.get("ok"):
-            P("★④ 제외돼 있지 않은 appid의 재포함이 실패했다 — 멱등이 아니다 (%s)" % env)
+            P("★④ 제외돼 있지 않은 appid의 재포함이 실패했다 — 미제외 상태에서도 성공해야 한다 (%s)" % env)
         seen = {e["appid"] for e in (rpc(main, "discover_games").get("data") or {}).get("entries", [])}
         if "111" not in seen:
             P("★④ 제외를 풀었는데 탐지 목록에 다시 안 뜬다 — %s" % sorted(seen))
@@ -351,7 +351,7 @@ def main_test():                                                # noqa: C901  (�
 
 
 def finish(tmp, problems):
-    print("감지 제외 계약 — 삭제→제외 · 필터 2route · 재포함 멱등 · 등록 자동 해제 · "
+    print("감지 제외 계약 — 삭제→제외 · 필터 2route · 재포함 성공·재탐지 · 등록 자동 해제 · "
           "손상 폴백 · 초기화 소거 · 게임0/제외1  (데이터: %s)" % tmp)
     if problems:
         print("\nFAIL")

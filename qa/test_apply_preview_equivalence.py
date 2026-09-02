@@ -198,7 +198,7 @@ def main_test():                                                # noqa: C901
         except Exception as exc:                                # noqa: BLE001
             # 격리 계약이 깨지면 여기서 예외가 나온다. 그 사실 자체가 결함이므로 traceback으로
             #   죽지 말고 무슨 일인지 말하고 끝낸다 — 진단이 사라지는 실패를 만들지 않는다.
-            print("미리보기 동치성 — 적대 세계 %d게임" % len(EXPECTED))
+            print("미리보기 버킷 대응 — 적대 세계 %d게임" % len(EXPECTED))
             print("\nFAIL")
             print("  ★② 미리보기가 예외로 죽었다(%s: %s) — 손상 게임 1건이 미리보기를 전멸시키면 "
                   "CONFIRM_REQUIRED가 영영 안 나오고 **일괄 적용 버튼이 전면 불능**이 된다"
@@ -257,7 +257,7 @@ def main_test():                                                # noqa: C901
                 P("★① [%s] cannot_apply로 셌는데 실제로는 GAME_RUNNING이다 — running_refused여야 한다"
                   % appid)
 
-        print("미리보기 동치성 — 적대 세계 %d게임 / 버킷 %s" % (len(EXPECTED), counts))
+        print("미리보기 버킷 대응 — 적대 세계 %d게임 / 버킷 %s" % (len(EXPECTED), counts))
         print("  실제 outcome: %s" % {a: o for a, (o, _c) in sorted(outcomes.items())})
         if problems:
             print("\nFAIL")

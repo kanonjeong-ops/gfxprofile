@@ -64,12 +64,12 @@ def main():
         value, where = lang.steam_language(text)
         print(f"  (a) 실물 registry.vdf → {value!r} @ {where}")
         if not value:
-            problems.append("(a) 실물에서 언어를 못 읽었다 — 1판의 버그가 재현된 것이다")
+            problems.append("(a) 실물에서 언어 값을 못 읽었다 — 실물 경로 판정 실패(손상·스키마 변화·파서 회귀 포함)")
         elif not where.startswith("Registry/"):
             problems.append(f"(a) 실물 최상위 키가 Registry가 아니다: {where}")
         # 래퍼 없는 경로는 실물에서 None이어야 한다 — 값이 나오면 이 대조의 전제가 무너진다
         if lang._walk(text, ("HKCU", "Software", "Valve", "Steam", "language")):
-            problems.append("(a) 1판 경로가 실물에서 값을 냈다 — 이 테스트의 전제가 틀렸다")
+            problems.append("(a) 래퍼 없는 경로가 실물에서 값을 냈다 — 이 테스트의 전제가 틀렸다")
     else:
         print("  (a) 실물 registry.vdf 없음 — 건너뜀 (이 환경에서는 미검증)")
 
