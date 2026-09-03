@@ -11,6 +11,7 @@ import {
   getOverview, resetAll, setProfileName,
   type Overview, type Profile, type ResetConfirmParams,
 } from "./rpc";
+import { PLUGIN_VERSION } from "./version";
 
 /**
  * 팝업 S — 설정. 전역 전용이다: 프로필 표시 이름과 전체 초기화뿐이고, 게임별 동작은
@@ -276,6 +277,20 @@ export function SettingsPopup({
             {/* 들여쓰기는 이 줄에만 준다 — `HINT_STYLE`은 위 이름 바꾸기 줄(가로 행)도
                 쓰는데, 거기까지 밀면 세로 스택이 아닌 자리의 축이 어긋난다. */}
             <div style={{ ...HINT_STYLE, paddingLeft: STACKED_DESC_PAD }}>{t("RESET_HINT")}</div>
+          </div>
+
+          {/* ── 버전 ─────────────────────────────────────────────────────────
+              구획선만 긋고 제목 없이 한 줄이다. 초기화 절 안에 넣지 않는 이유: 그 절의
+                잔글씨는 `RESET_HINT` 하나가 백업의 운명을 전담한다 — 같은 스타일 줄을 바로
+                아래 더 두면 초기화 설명의 셋째 줄로 읽힌다.
+              값은 `version.ts` 상수 그대로다(백엔드 왕복도 데키 환경값 경유도 없다). 왕복을
+                두면 글자 하나가 로딩·실패 상태를 거느린다. package.json과의 동기는
+                `build.sh bump`가 검증한다.
+              들여쓰기를 주지 않는다 — `STACKED_DESC_PAD`는 스택 버튼이 거느리는 설명줄의
+                것이고(위 주석), 이 줄은 거느리는 버튼이 없어 좌축이 절 제목과 같다.
+              고를 것이 없으니 focusable도 아니다. */}
+          <div style={SECTION_STYLE}>
+            <div style={HINT_STYLE}>{t("SETTINGS_VERSION", { version: PLUGIN_VERSION })}</div>
           </div>
         </div>,
       )}

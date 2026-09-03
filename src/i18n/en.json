@@ -233,6 +233,7 @@
   "SETTINGS_TITLE": "Settings",
   "SETTINGS_NAMES_TITLE": "Profile display names",
   "SETTINGS_RESET_TITLE": "Full reset",
+  "SETTINGS_VERSION": "Version {version}",
   "RESET_ZONE_COUNT": "Current registrations: {n}",
   "RESET_ZONE_LOADING": "Checking the current registration count.",
   "RESET_ZONE_UNKNOWN": "The current registration count cannot be determined.",
